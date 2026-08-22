@@ -1164,6 +1164,35 @@
   color: #5c43b4;
   border-color: #d8caef;
 }
+.worker-manual {
+  display: grid;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid #ded5f0;
+  color: #6c637b;
+  font-size: 9px;
+}
+.worker-manual summary {
+  cursor: pointer;
+  color: #5c43b4;
+  font-weight: 700;
+}
+.worker-manual code {
+  display: block;
+  max-width: 100%;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  color: #49358e;
+  background: #fff;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.worker-manual button {
+  width: fit-content;
+  color: #5c43b4;
+  border-color: #d8caef;
+}
 .train-actions .primary {
   min-width: 155px;
 }

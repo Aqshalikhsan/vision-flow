@@ -6181,15 +6181,6 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                   membuat virtual environment, memasang dependensi, lalu
                   menjalankan worker. Token hanya ditampilkan sekali.
                 </small>
-                <code>{workerCommand}</code>
-                <button
-                  onClick={() => {
-                    void navigator.clipboard.writeText(workerCommand);
-                    notify("Perintah worker disalin");
-                  }}
-                >
-                  <Copy /> Copy command
-                </button>
                 <div className="worker-guide">
                   <b>Setup laptop langkah demi langkah</b>
                   <ol>
@@ -6231,6 +6222,18 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                     macOS dapat memakai <code>curl SERVER</code>.
                   </small>
                 </div>
+                <details className="worker-manual">
+                  <summary>Advanced: jalankan command manual</summary>
+                  <code>{workerCommand}</code>
+                  <button
+                    onClick={() => {
+                      void navigator.clipboard.writeText(workerCommand);
+                      notify("Perintah worker disalin");
+                    }}
+                  >
+                    <Copy /> Copy command
+                  </button>
+                </details>
               </div>
             )}
             {workers
