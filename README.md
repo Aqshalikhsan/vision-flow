@@ -81,15 +81,27 @@ VisionFlow can keep the website, SQLite metadata, dataset versions, and model ar
 
 1. Open a project, generate a dataset version, and go to **Train**.
 2. Under **Laptop workers**, choose **Add laptop**. Copy the one-time PowerShell command immediately; only its hash is saved on the NAS.
-3. On the laptop, clone/copy this repository and install the worker dependencies:
+3. On the laptop, the simplest option is to click **Download setup otomatis**
+   in the worker panel, move the downloaded `visionflow-worker-setup.ps1` to
+   the target laptop, and run it from PowerShell. It downloads only the worker
+   files, creates a private virtual environment under `%USERPROFILE%\VisionFlowWorker`,
+   installs the dependencies, and starts the worker. If the laptop has no
+   internet access, use the manual repository setup below instead.
+
+   Manual setup:
 
    ```powershell
-   py -m venv .venv
+   git clone -b feature/advanced-platform-suite https://github.com/Aqshalikhsan/vision-flow.git C:\VisionFlowWorker
+   cd C:\VisionFlowWorker
+   py -3 -m venv .venv
    .\.venv\Scripts\Activate.ps1
-   pip install -r worker\requirements.txt
+   python -m pip install -r worker\requirements.txt
    ```
 
-4. Run the copied command. The worker reports whether CUDA is available, securely claims a compatible queued job, downloads its immutable annotated dataset ZIP, runs real YOLO training, and uploads the validated `best.pt` to the NAS.
+4. Run the copied command, or let the downloaded setup script continue
+   automatically. The worker reports whether CUDA is available, securely claims
+   a compatible queued job, downloads its immutable annotated dataset ZIP, runs
+   real YOLO training, and uploads the validated `best.pt` to the NAS.
 5. In **Training location**, choose **Laptop · Automatic**, **Laptop · CUDA GPU**, or **Laptop · CPU**, then start training. Automatic prefers CUDA and falls back to CPU.
 
 The laptop and NAS must be able to reach each other over the selected VisionFlow address (normally `http://NAS-IP:8080` on the same LAN). Keep the terminal running while training. NVIDIA training requires a CUDA-capable PyTorch installation; verify it with `python -c "import torch; print(torch.cuda.is_available())"`. If the worker is compromised or retired, cancel its active job and revoke its token in the Train page. Use HTTPS when the worker connects across the internet.
