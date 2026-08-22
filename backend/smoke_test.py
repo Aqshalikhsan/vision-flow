@@ -64,6 +64,11 @@ def main() -> None:
     workflow_id = None
     try:
         project = requests.put(
+            f"{BASE}/api/projects/{project_id}",
+            json={"name": "Smoke Test Updated", "description": "Updated through project settings"}, timeout=10,
+        ).json()
+        assert project["name"] == "Smoke Test Updated" and project["description"] == "Updated through project settings"
+        project = requests.put(
             f"{BASE}/api/projects/{project_id}/classes",
             json={"classes": ["object"], "colors": {"object": "#ffcf4a"}}, timeout=10,
         ).json()
@@ -72,6 +77,12 @@ def main() -> None:
             json={"name": "secondary", "color": "#24c7bd"}, timeout=10,
         ).json()
         assert project["classes"] == ["object", "secondary"] and project["colors"]["secondary"] == "#24c7bd"
+        project = requests.post(
+            f"{BASE}/api/projects/{project_id}/classes",
+            json={"name": "unused", "color": "#4b9cff"}, timeout=10,
+        ).json()
+        project = requests.delete(f"{BASE}/api/projects/{project_id}/classes/unused", timeout=10).json()
+        assert "unused" not in project["classes"]
         image = Image.new("RGB", (320, 240), "#ddd9ff")
         ImageDraw.Draw(image).rectangle((80, 50, 230, 190), fill="#6c4ee7")
         data = io.BytesIO()
@@ -106,6 +117,22 @@ def main() -> None:
             ]}, timeout=10,
         ).json()
         assert project["assets"][0]["status"] == "annotated"
+        in_use_class = requests.delete(f"{BASE}/api/projects/{project_id}/classes/object", timeout=10)
+        assert in_use_class.status_code == 409
+        project = requests.post(
+            f"{BASE}/api/projects/{project_id}/assets/bulk",
+            json={"ids": [asset_id], "action": "split", "value": "valid"}, timeout=10,
+        ).json()
+        assert project["assets"][0]["split"] == "valid"
+        project = requests.post(
+            f"{BASE}/api/projects/{project_id}/assets/bulk",
+            json={"ids": [asset_id], "action": "review", "value": "approved"}, timeout=10,
+        ).json()
+        assert project["assets"][0]["reviewStatus"] == "approved"
+        project = requests.post(
+            f"{BASE}/api/projects/{project_id}/assets/bulk",
+            json={"ids": [asset_id], "action": "split", "value": "train"}, timeout=10,
+        ).json()
         project = requests.put(f"{BASE}/api/projects/{project_id}/assets/{asset_id}/review", json={"status": "approved"}, timeout=10).json()
         assert project["assets"][0]["reviewStatus"] == "approved"
         mask_response = requests.post(f"{BASE}/api/projects/{project_id}/assets/{asset_id}/smart-mask", json={"x": 50, "y": 50, "label": "object", "size": 85}, timeout=20)
@@ -196,9 +223,11 @@ def main() -> None:
         removed_version = requests.delete(f"{BASE}/api/projects/{project_id}/versions/{version_id}", timeout=10)
         assert removed_version.status_code == 204
         assert not requests.get(f"{BASE}/api/projects/{project_id}", timeout=10).json()["versions"]
-        deleted = requests.delete(f"{BASE}/api/projects/{project_id}/assets/{asset_id}", timeout=10)
-        assert deleted.status_code == 204
-        assert not requests.get(f"{BASE}/api/projects/{project_id}", timeout=10).json()["assets"]
+        deleted = requests.post(
+            f"{BASE}/api/projects/{project_id}/assets/bulk",
+            json={"ids": [asset_id], "action": "delete"}, timeout=10,
+        )
+        assert deleted.status_code == 200 and not deleted.json()["assets"]
         frame_files = [("files", (f"frame-{number}.png", io.BytesIO(image_bytes), "image/png")) for number in range(3)]
         project = requests.post(f"{BASE}/api/projects/{project_id}/assets", files=frame_files, timeout=20).json()
         frame_ids = [asset["id"] for asset in project["assets"]]

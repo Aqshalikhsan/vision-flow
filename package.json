@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "format": "prettier --write src tests package.json playwright.config.ts",
+    "format:check": "prettier --check src tests package.json playwright.config.ts",
     "preview": "vite preview",
     "test:e2e": "npm run build && playwright test"
   },
@@ -21,6 +23,7 @@
     "@types/node": "^26.2.0",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "prettier": "^3.9.6",
     "typescript": "latest"
   }
 }

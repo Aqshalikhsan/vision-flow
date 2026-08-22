@@ -172,6 +172,11 @@ class ProjectCreate(BaseModel):
         return {"Object Detection", "Instance Segmentation", "Semantic Segmentation", "Oriented Bounding Box", "Keypoint Detection", "Single-Label Classification", "Multi-Label Classification"}
 
 
+class ProjectUpdatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+
+
 class BoxPayload(BaseModel):
     id: str | None = None
     x: float
@@ -193,6 +198,12 @@ class SplitPayload(BaseModel):
 
 class ReviewPayload(BaseModel):
     status: str = Field(pattern=r"^(pending|approved|needs-fix)$")
+
+
+class BulkAssetPayload(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=5000)
+    action: str = Field(pattern=r"^(split|review|delete)$")
+    value: str | None = None
 
 
 class InterpolatePayload(BaseModel):
@@ -461,6 +472,21 @@ def get_project(project_id: str):
         return project_dict(con, row)
 
 
+@app.put("/api/projects/{project_id}")
+def update_project(project_id: str, payload: ProjectUpdatePayload):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Project name is required")
+    with db() as con:
+        result = con.execute(
+            "UPDATE projects SET name=?,description=? WHERE id=?",
+            (name, payload.description.strip(), project_id),
+        )
+        if not result.rowcount:
+            raise HTTPException(404, "Project not found")
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
 @app.delete("/api/projects/{project_id}", status_code=204)
 def delete_project(project_id: str):
     with db() as con:
@@ -703,6 +729,50 @@ def update_asset_split(project_id: str, asset_id: str, payload: SplitPayload):
         return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
 
 
+@app.post("/api/projects/{project_id}/assets/bulk")
+def bulk_update_assets(project_id: str, payload: BulkAssetPayload):
+    unique_ids = list(dict.fromkeys(payload.ids))
+    placeholders = ",".join("?" for _ in unique_ids)
+    files_to_remove: list[str] = []
+    with db() as con:
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise HTTPException(404, "Project not found")
+        rows = con.execute(
+            f"SELECT id,path FROM assets WHERE project_id=? AND id IN ({placeholders})",
+            (project_id, *unique_ids),
+        ).fetchall()
+        if len(rows) != len(unique_ids):
+            raise HTTPException(404, "One or more images were not found")
+        if payload.action == "split":
+            if payload.value not in {"train", "valid", "test"}:
+                raise HTTPException(400, "Bulk split must be train, valid, or test")
+            con.execute(
+                f"UPDATE assets SET split=?,split_locked=1 WHERE project_id=? AND id IN ({placeholders})",
+                (payload.value, project_id, *unique_ids),
+            )
+        elif payload.action == "review":
+            if payload.value not in {"pending", "approved", "needs-fix"}:
+                raise HTTPException(400, "Bulk review must be pending, approved, or needs-fix")
+            con.execute(
+                f"UPDATE assets SET review_status=? WHERE project_id=? AND id IN ({placeholders})",
+                (payload.value, project_id, *unique_ids),
+            )
+        else:
+            files_to_remove = [row["path"] for row in rows]
+            con.execute(
+                f"DELETE FROM assets WHERE project_id=? AND id IN ({placeholders})",
+                (project_id, *unique_ids),
+            )
+        updated = project_dict(con, project)
+    project_root = (UPLOADS / project_id).resolve()
+    for filename in files_to_remove:
+        target = Path(filename).resolve()
+        if target.parent == project_root and target.is_file():
+            target.unlink()
+    return updated
+
+
 @app.get("/files/{asset_id}")
 def asset_file(asset_id: str):
     with db() as con:
@@ -814,6 +884,29 @@ def rename_class(project_id: str, old_name: str, payload: ClassRenamePayload):
                     changed = True
             if changed:
                 con.execute("UPDATE assets SET boxes=? WHERE id=?", (json.dumps(boxes), asset["id"]))
+        con.execute("UPDATE projects SET classes=?,colors=? WHERE id=?", (json.dumps(classes), json.dumps(colors), project_id))
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
+@app.delete("/api/projects/{project_id}/classes/{class_name}")
+def delete_class(project_id: str, class_name: str):
+    with db() as con:
+        row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Project not found")
+        classes = json.loads(row["classes"])
+        if class_name not in classes:
+            raise HTTPException(404, "Class not found")
+        if len(classes) == 1:
+            raise HTTPException(409, "A project must keep at least one class")
+        usage = 0
+        for asset in con.execute("SELECT boxes FROM assets WHERE project_id=?", (project_id,)):
+            usage += sum(box.get("label") == class_name for box in json.loads(asset["boxes"]))
+        if usage:
+            raise HTTPException(409, f"Class is used by {usage} annotation(s); remove or relabel them first")
+        classes.remove(class_name)
+        colors = json.loads(row["colors"] or "{}")
+        colors.pop(class_name, None)
         con.execute("UPDATE projects SET classes=?,colors=? WHERE id=?", (json.dumps(classes), json.dumps(colors), project_id))
         return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
 
