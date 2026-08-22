@@ -1117,6 +1117,53 @@
   color: #5c43b4;
   border-color: #d8caef;
 }
+.worker-guide {
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid #ded5f0;
+  color: #625a70;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.worker-guide ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+.worker-guide li {
+  padding-left: 2px;
+}
+.worker-guide code {
+  display: inline-block;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #49358e;
+  background: #fff;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.worker-guide .worker-command {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.worker-guide > small {
+  color: var(--muted);
+  font-size: 9px;
+}
+.worker-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.worker-downloads button {
+  color: #5c43b4;
+  border-color: #d8caef;
+}
 .train-actions .primary {
   min-width: 155px;
 }

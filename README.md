@@ -83,7 +83,9 @@ VisionFlow can keep the website, SQLite metadata, dataset versions, and model ar
 2. Under **Laptop workers**, choose **Add laptop**. Copy the one-time PowerShell command immediately; only its hash is saved on the NAS.
 3. On the laptop, the simplest option is to click **Download setup otomatis**
    in the worker panel, move the downloaded `visionflow-worker-setup.ps1` to
-   the target laptop, and run it from PowerShell. It downloads only the worker
+   the target Windows laptop, and run it from PowerShell. For Linux/macOS,
+   download the .sh setup, make it executable with chmod, and run it from the
+   terminal. Both scripts download only the worker
    files, creates a private virtual environment under `%USERPROFILE%\VisionFlowWorker`,
    installs the dependencies, and starts the worker. If the laptop has no
    internet access, use the manual repository setup below instead.

@@ -5792,6 +5792,38 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
       "Setup worker diunduh. Jalankan di laptop target dengan PowerShell.",
     );
   };
+  const downloadUnixWorkerSetup = () => {
+    if (!workerToken) return;
+    const quote = (value: string) => value.replace(/'/g, "'\"'\"'");
+    const script = [
+      "#!/usr/bin/env bash",
+      "# VisionFlow laptop worker setup - keep this file private.",
+      "set -euo pipefail",
+      "server='" + quote(workerServer) + "'",
+      "token='" + quote(workerToken) + "'",
+      'worker_root="$HOME/VisionFlowWorker"',
+      'raw_base="https://raw.githubusercontent.com/Aqshalikhsan/vision-flow/feature/advanced-platform-suite/worker"',
+      'mkdir -p "$worker_root/worker"',
+      'curl -fsSL "$raw_base/visionflow_worker.py" -o "$worker_root/worker/visionflow_worker.py"',
+      'curl -fsSL "$raw_base/requirements.txt" -o "$worker_root/worker/requirements.txt"',
+      'command -v python3 >/dev/null 2>&1 || { echo "Python 3.10+ tidak ditemukan."; exit 1; }',
+      'if [ ! -x "$worker_root/.venv/bin/python" ]; then python3 -m venv "$worker_root/.venv"; fi',
+      '"$worker_root/.venv/bin/python" -m pip install --upgrade pip',
+      '"$worker_root/.venv/bin/python" -m pip install -r "$worker_root/worker/requirements.txt"',
+      'echo "Worker siap. Menghubungkan ke $server ..."',
+      'exec "$worker_root/.venv/bin/python" "$worker_root/worker/visionflow_worker.py" --server "$server" --token "$token"',
+      "",
+    ].join("\n");
+    const url = URL.createObjectURL(
+      new Blob([script], { type: "text/plain;charset=utf-8" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "visionflow-worker-setup.sh";
+    anchor.click();
+    URL.revokeObjectURL(url);
+    notify("Setup Linux/macOS diunduh");
+  };
   const start = async () => {
     if (!versionId) {
       notify("Buat dan pilih dataset version terlebih dahulu");
@@ -6143,7 +6175,7 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
             </header>
             {workerToken && (
               <div className="worker-token">
-                <b>Jalankan sekali di PowerShell laptop</b>
+                <b>Hubungkan laptop training</b>
                 <small>
                   Untuk laptop baru, unduh setup otomatis di bawah. Script akan
                   membuat virtual environment, memasang dependensi, lalu
@@ -6158,9 +6190,47 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                 >
                   <Copy /> Copy command
                 </button>
-                <button onClick={downloadWorkerSetup}>
-                  <Download /> Download setup otomatis
-                </button>
+                <div className="worker-guide">
+                  <b>Setup laptop langkah demi langkah</b>
+                  <ol>
+                    <li>
+                      Buka web dari alamat LAN server, misalnya{" "}
+                      <code>{workerServer}</code>, bukan localhost.
+                    </li>
+                    <li>
+                      Download setup sesuai sistem operasi. Python 3.10+ dan
+                      internet diperlukan pada proses pertama.
+                      <span className="worker-downloads">
+                        <button onClick={() => downloadWorkerSetup()}>
+                          <Download /> Windows (.ps1)
+                        </button>
+                        <button onClick={downloadUnixWorkerSetup}>
+                          <Download /> Linux / macOS (.sh)
+                        </button>
+                      </span>
+                    </li>
+                    <li>
+                      Jalankan file di laptop target:
+                      <code className="worker-command">
+                        Windows: powershell -ExecutionPolicy Bypass -File
+                        .\visionflow-worker-setup.ps1
+                        <br />
+                        Linux/macOS: chmod +x visionflow-worker-setup.sh &&{" "}
+                        ./visionflow-worker-setup.sh
+                      </code>
+                    </li>
+                    <li>
+                      Tunggu status worker berubah menjadi <b>online</b>, lalu
+                      pilih lokasi training dan klik <b>Start training</b>.
+                    </li>
+                  </ol>
+                  <small>
+                    Jangan tutup terminal worker selama training. Untuk cek
+                    jaringan Windows gunakan{" "}
+                    <code>Test-NetConnection SERVER -Port 5173</code>; Linux dan
+                    macOS dapat memakai <code>curl SERVER</code>.
+                  </small>
+                </div>
               </div>
             )}
             {workers
