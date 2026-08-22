@@ -5759,7 +5759,7 @@ $ErrorActionPreference = "Stop"
 $server = '${quote(workerServer)}'
 $token = '${quote(workerToken)}'
 $workerRoot = Join-Path $env:USERPROFILE "VisionFlowWorker"
-$rawBase = "https://raw.githubusercontent.com/Aqshalikhsan/vision-flow/feature/advanced-platform-suite/worker"
+$rawBase = "${workerServer}/api/training-workers/setup"
 
 New-Item -ItemType Directory -Force -Path (Join-Path $workerRoot "worker") | Out-Null
 Invoke-WebRequest -UseBasicParsing "$rawBase/visionflow_worker.py" -OutFile (Join-Path $workerRoot "worker/visionflow_worker.py")
@@ -5802,7 +5802,7 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
       "server='" + quote(workerServer) + "'",
       "token='" + quote(workerToken) + "'",
       'worker_root="$HOME/VisionFlowWorker"',
-      'raw_base="https://raw.githubusercontent.com/Aqshalikhsan/vision-flow/feature/advanced-platform-suite/worker"',
+      'raw_base="' + workerServer + '/api/training-workers/setup"',
       'mkdir -p "$worker_root/worker"',
       'curl -fsSL "$raw_base/visionflow_worker.py" -o "$worker_root/worker/visionflow_worker.py"',
       'curl -fsSL "$raw_base/requirements.txt" -o "$worker_root/worker/requirements.txt"',

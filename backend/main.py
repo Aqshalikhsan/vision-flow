@@ -521,7 +521,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 async def enforce_workspace_role(request: Request, call_next):
     """Authenticate production sessions and enforce workspace role boundaries."""
     member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
-    if request.url.path.startswith("/api/training-workers/agent/"):
+    if request.url.path.startswith("/api/training-workers/agent/") or request.url.path.startswith("/api/training-workers/setup/"):
         return await call_next(request)
     if AUTH_REQUIRED and not member and request.url.path not in AUTH_PUBLIC_PATHS and not request.url.path.startswith("/assets/"):
         return JSONResponse(status_code=401, content={"detail": "Login required"})
@@ -2204,6 +2204,18 @@ def list_training_workers():
     with db() as con:
         rows = con.execute("SELECT * FROM training_workers ORDER BY created_at DESC").fetchall()
     return [worker_json(row) for row in rows]
+
+
+@app.get("/api/training-workers/setup/{filename}")
+def training_worker_setup_file(filename: str):
+    allowed = {
+        "visionflow_worker.py": ROOT / "worker" / "visionflow_worker.py",
+        "requirements.txt": ROOT / "worker" / "requirements.txt",
+    }
+    path = allowed.get(filename)
+    if not path:
+        raise HTTPException(404, "Worker setup file not found")
+    return FileResponse(path)
 
 
 @app.post("/api/training-workers", status_code=201)
