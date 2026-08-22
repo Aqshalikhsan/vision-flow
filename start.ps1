@@ -13,10 +13,12 @@ $env:npm_config_cache = Join-Path $root '.npm-cache'
 $api = Start-Process -FilePath "$root\.venv313\Scripts\python.exe" -ArgumentList '-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8000' -WorkingDirectory $root -WindowStyle Hidden -PassThru
 Write-Host "VisionFlow API started (PID $($api.Id)) at http://127.0.0.1:8000"
 Write-Host "API documentation: http://127.0.0.1:8000/docs"
-Write-Host "Starting frontend at http://127.0.0.1:5173"
+Write-Host "Starting frontend on all network interfaces (port 5173)"
+Write-Host "On this PC: http://127.0.0.1:5173"
+Write-Host "From another device: http://<THIS-PC-IP>:5173"
 
 try {
-    npm run dev -- --host 127.0.0.1
+    npm run dev -- --host 0.0.0.0
 } finally {
     Stop-Process -Id $api.Id -ErrorAction SilentlyContinue
 }

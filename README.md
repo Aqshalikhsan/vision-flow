@@ -16,6 +16,12 @@ cd F:\scrap-web
 - Production build (after `npm run build`): http://127.0.0.1:8000
 - Interactive API docs: http://127.0.0.1:8000/docs
 
+To open the development web app from another device on the same LAN, run
+`.\start.ps1`, find this computer's IPv4 address with `ipconfig`, and open
+`http://<THIS-PC-IP>:5173`. The Vite proxy keeps the API on this computer's
+localhost interface. If Windows Firewall prompts for Node.js, allow it on the
+Private network only.
+
 ## Data
 
 All persistent data stays in `F:\scrap-web\local_data`:
