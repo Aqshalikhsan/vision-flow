@@ -258,10 +258,10 @@ export const api = {
     request<void>(`/api/projects/${projectId}/assets/${assetId}`, {
       method: "DELETE",
     }),
-  importYolo: (projectId: string, file: File) => {
+  importAnnotatedDataset: (projectId: string, file: File) => {
     const body = new FormData();
     body.append("file", file);
-    return request<Project>(`/api/projects/${projectId}/import/yolo`, {
+    return request<Project>(`/api/projects/${projectId}/import/annotated`, {
       method: "POST",
       body,
     });

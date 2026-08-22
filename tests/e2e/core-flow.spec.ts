@@ -4,6 +4,16 @@ const API = "http://127.0.0.1:8000";
 let projectId = "";
 
 test.beforeAll(async ({ request }) => {
+  const existing = await request.get(`${API}/api/projects`);
+  if (existing.ok()) {
+    for (const project of (await existing.json()) as Array<{
+      id: string;
+      name: string;
+    }>) {
+      if (project.name.startsWith("Browser E2E"))
+        await request.delete(`${API}/api/projects/${project.id}`);
+    }
+  }
   const created = await request.post(`${API}/api/projects`, {
     data: {
       name: `Browser E2E ${Date.now()}`,
@@ -45,6 +55,7 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   page,
 }) => {
   await page.goto("/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await expect(page.getByRole("button", { name: /^Active/ })).toBeVisible();
   await page.keyboard.press("Control+K");
   const globalSearch = page.getByPlaceholder("Search projects and navigate…");
   await expect(globalSearch).toBeVisible();
@@ -58,6 +69,19 @@ test("dashboard to annotation, versions, training, and deployment", async ({
     page.getByRole("heading", { name: /Browser E2E/ }),
   ).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/project$`));
+  await page.getByRole("button", { name: "Back" }).click();
+  const projectCard = page
+    .locator(".project-card")
+    .filter({ hasText: "Browser E2E" });
+  await projectCard.getByRole("button", { name: /Actions for/ }).click();
+  await expect(
+    projectCard.getByRole("button", { name: "Duplicate" }),
+  ).toBeVisible();
+  await expect(
+    projectCard.getByRole("button", { name: "Archive" }),
+  ).toBeVisible();
+  await projectCard.getByRole("button", { name: /Actions for/ }).click();
+  await projectCard.locator(".project-card-main").click();
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await page.getByLabel("Description").fill("Updated by browser coverage");
@@ -67,6 +91,24 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   const projectTabs = page.getByTestId("project-tabs");
   await projectTabs
     .getByRole("button", { name: "Dataset", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Import annotated dataset" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Import existing annotations" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /COCO JSON/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Pascal VOC/ })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const importModalFits = await page
+    .locator(".annotated-import-modal")
+    .evaluate((modal) => {
+      const bounds = modal.getBoundingClientRect();
+      return bounds.left >= 0 && bounds.right <= window.innerWidth;
+    });
+  expect(importModalFits).toBeTruthy();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page
+    .getByRole("button", { name: "Close annotated dataset import" })
     .click();
   await page.getByRole("button", { name: "Select e2e.bmp" }).click();
   await expect(page.getByText("1 selected")).toBeVisible();
@@ -88,6 +130,15 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   await expect(
     page.getByRole("button", { name: /^carton\s+0$/ }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/project$`));
+  await expect(
+    page.getByText("Project progress", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByTestId("project-tabs")
+    .getByRole("button", { name: "Annotate", exact: true })
+    .click();
   const generateVersion = page.getByRole("button", {
     name: /Saved · Generate Version/,
   });
@@ -131,4 +182,22 @@ test("dashboard to annotation, versions, training, and deployment", async ({
     .getByRole("button", { name: "Deploy", exact: true })
     .click();
   await expect(page.getByText("No trained model available")).toBeVisible();
+
+  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await expect(page.locator(".connection-item").first()).toBeVisible();
+  const connectionContained = await page
+    .locator(".connection-item")
+    .evaluateAll((items) =>
+      items.every((item) => {
+        const container = item.getBoundingClientRect();
+        const remove = item.querySelector("button")!.getBoundingClientRect();
+        return (
+          remove.left >= container.left &&
+          remove.right <= container.right &&
+          remove.top >= container.top &&
+          remove.bottom <= container.bottom
+        );
+      }),
+    );
+  expect(connectionContained).toBeTruthy();
 });

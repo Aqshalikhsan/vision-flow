@@ -616,10 +616,19 @@ function App() {
   );
   const [toast, setToast] = useState("");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
-  useEffect(
-    () => localStorage.setItem("vf-projects", JSON.stringify(projects)),
-    [projects],
-  );
+  useEffect(() => {
+    try {
+      const snapshot = JSON.stringify(projects);
+      if (snapshot.length <= 2_000_000)
+        localStorage.setItem("vf-projects", snapshot);
+      else localStorage.removeItem("vf-projects");
+    } catch {
+      // Large annotated workspaces can exceed the browser storage quota.
+      // SQLite remains authoritative, so a failed convenience cache is safe
+      // to discard and must never take down the application shell.
+      localStorage.removeItem("vf-projects");
+    }
+  }, [projects]);
   useEffect(() => {
     api
       .authStatus()
@@ -701,7 +710,7 @@ function App() {
         <Topbar
           project={PROJECT_PAGES.includes(page) ? project : undefined}
           backend={backend}
-          onBack={() => go("dashboard")}
+          onBack={() => go(page === "project" ? "dashboard" : "project")}
           onSearch={() => setPalette(true)}
           onHelp={() => setHelp(true)}
           onProfile={() => setProfile((value) => !value)}
@@ -1069,7 +1078,7 @@ function Topbar({
       <div className="crumb">
         {project ? (
           <>
-            <button className="icon ghost" onClick={onBack}>
+            <button className="icon ghost" onClick={onBack} aria-label="Back">
               <ArrowLeft size={18} />
             </button>
             <span>Projects</span>
@@ -1539,15 +1548,22 @@ function Dashboard({
             <p>Manage datasets and model experiments.</p>
           </div>
           <div className="dashboard-tools">
-            <button
-              className={showArchived ? "active" : ""}
-              onClick={() => setShowArchived((value) => !value)}
-            >
-              <Archive />
-              {showArchived
-                ? "Active projects"
-                : `Archived (${projects.filter((item) => item.archived).length})`}
-            </button>
+            <div className="project-view-toggle" aria-label="Project status">
+              <button
+                className={!showArchived ? "active" : ""}
+                onClick={() => setShowArchived(false)}
+              >
+                Active
+                <span>{projects.filter((item) => !item.archived).length}</span>
+              </button>
+              <button
+                className={showArchived ? "active" : ""}
+                onClick={() => setShowArchived(true)}
+              >
+                <Archive /> Archived
+                <span>{projects.filter((item) => item.archived).length}</span>
+              </button>
+            </div>
             <div className="search">
               <Search size={16} />
               <input
@@ -1567,7 +1583,12 @@ function Dashboard({
               >
                 <div className={"project-cover cover-" + (i % 4)}>
                   <Boxes />
-                  <span>{p.type}</span>
+                  <span className="project-type-pill">{p.type}</span>
+                  {p.archived && (
+                    <span className="project-archive-pill">
+                      <Archive /> Archived
+                    </span>
+                  )}
                 </div>
                 <div className="project-info">
                   <div>
@@ -1598,6 +1619,7 @@ function Dashboard({
               <button
                 className="project-card-menu"
                 aria-label={`Actions for ${p.name}`}
+                aria-expanded={menu === p.id}
                 onClick={() => setMenu(menu === p.id ? "" : p.id)}
               >
                 <MoreHorizontal />
@@ -1613,6 +1635,7 @@ function Dashboard({
                     <Copy /> Duplicate
                   </button>
                   <button
+                    className="archive-action"
                     onClick={() => {
                       setMenu("");
                       archive(p.id, !p.archived);
@@ -1846,7 +1869,7 @@ function ProjectHome({
                 <h2>Dataset</h2>
                 <p>Your latest uploaded images.</p>
               </div>
-              <button className="secondary" onClick={() => go("annotate")}>
+              <button className="secondary" onClick={() => go("dataset")}>
                 View dataset <ChevronRight size={15} />
               </button>
             </div>
@@ -4397,26 +4420,40 @@ function Workflows({
             <button onClick={addEdge} disabled={!edgeFrom || !edgeTo}>
               Add connection
             </button>
-            {edges.map((edge, index) => (
-              <span key={`${edge.from}-${edge.to}-${index}`}>
-                <small>
-                  {nodes.find((node) => node.id === edge.from)?.title ||
-                    edge.from}{" "}
-                  →{" "}
-                  {nodes.find((node) => node.id === edge.to)?.title || edge.to}
-                  {edge.condition ? ` [${edge.condition}]` : ""}
-                </small>
-                <button
-                  onClick={() =>
-                    setEdges((current) =>
-                      current.filter((_, itemIndex) => itemIndex !== index),
-                    )
-                  }
-                >
-                  <X />
-                </button>
-              </span>
-            ))}
+            {!!edges.length && (
+              <div className="connection-list">
+                {edges.map((edge, index) => (
+                  <div
+                    className="connection-item"
+                    key={`${edge.from}-${edge.to}-${index}`}
+                  >
+                    <div>
+                      <span>
+                        {nodes.find((node) => node.id === edge.from)?.title ||
+                          edge.from}
+                      </span>
+                      <ChevronRight />
+                      <span>
+                        {nodes.find((node) => node.id === edge.to)?.title ||
+                          edge.to}
+                      </span>
+                    </div>
+                    {edge.condition && <small>Branch: {edge.condition}</small>}
+                    <button
+                      aria-label="Remove connection"
+                      title="Remove connection"
+                      onClick={() =>
+                        setEdges((current) =>
+                          current.filter((_, itemIndex) => itemIndex !== index),
+                        )
+                      }
+                    >
+                      <X />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           {!!validationErrors.length && (
             <div className="workflow-validation">
@@ -7232,8 +7269,17 @@ function DatasetManager({
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importFormat, setImportFormat] = useState("yolo");
   const [labeling, setLabeling] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const annotatedFormats = [
+    { id: "yolo", name: "YOLO", hint: "data.yaml + images/labels" },
+    { id: "coco", name: "COCO JSON", hint: "images + annotations JSON" },
+    { id: "voc", name: "Pascal VOC", hint: "images + XML annotations" },
+    { id: "labelme", name: "LabelMe", hint: "images + shape JSON files" },
+    { id: "cvat", name: "CVAT", hint: "images + CVAT XML export" },
+  ];
   const filtered = project.assets.filter(
     (asset) =>
       `${asset.name} ${(asset.tags || []).join(" ")} ${Object.values(asset.metadata || {}).join(" ")}`
@@ -7268,10 +7314,11 @@ function DatasetManager({
     if (!file) return;
     setImporting(true);
     try {
-      const saved = await api.importYolo(project.id, file);
+      const saved = await api.importAnnotatedDataset(project.id, file);
       update(() => saved);
+      setShowImport(false);
       notify(
-        `${saved.assets.length - project.assets.length} images imported from YOLO ZIP`,
+        `${saved.assets.length - project.assets.length} annotated images imported`,
       );
     } catch (e) {
       notify(e instanceof Error ? e.message : "Dataset import gagal");
@@ -7381,17 +7428,10 @@ function DatasetManager({
             <WandSparkles />
             {labeling ? "Auto-labeling…" : "Auto-label unannotated"}
           </button>
-          <button className="secondary" onClick={() => input.current?.click()}>
+          <button className="secondary" onClick={() => setShowImport(true)}>
             <Upload />
-            {importing ? "Importing…" : "Import Dataset ZIP"}
+            {importing ? "Importing…" : "Import annotated dataset"}
           </button>
-          <input
-            hidden
-            ref={input}
-            type="file"
-            accept=".zip,application/zip"
-            onChange={(e) => importZip(e.target.files?.[0])}
-          />
           <button className="primary" onClick={() => go("annotate")}>
             <PenTool />
             Open annotator
@@ -7653,6 +7693,86 @@ function DatasetManager({
             }
           }}
         />
+      )}
+      {showImport && (
+        <div
+          className="modal-bg"
+          onMouseDown={() => !importing && setShowImport(false)}
+        >
+          <section
+            className="annotated-import-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">ANNOTATED DATASET</span>
+                <h2>Import existing annotations</h2>
+                <p>
+                  Upload one ZIP containing images and annotation files. The
+                  imported images are immediately ready for review, versioning,
+                  and training.
+                </p>
+              </div>
+              <button
+                className="icon ghost"
+                aria-label="Close annotated dataset import"
+                disabled={importing}
+                onClick={() => setShowImport(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <div className="annotated-format-grid">
+              {annotatedFormats.map((format) => (
+                <button
+                  className={importFormat === format.id ? "active" : ""}
+                  onClick={() => setImportFormat(format.id)}
+                  key={format.id}
+                >
+                  <span>{format.name}</span>
+                  <small>{format.hint}</small>
+                  {importFormat === format.id && <Check />}
+                </button>
+              ))}
+            </div>
+            <div className="annotated-import-note">
+              <Boxes />
+              <span>
+                <b>Annotations are preserved</b>
+                <small>
+                  Classes, boxes, polygons, and train/valid/test folders are
+                  detected automatically.
+                </small>
+              </span>
+            </div>
+            <footer>
+              <button
+                className="secondary"
+                disabled={importing}
+                onClick={() => setShowImport(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={importing}
+                onClick={() => input.current?.click()}
+              >
+                <Upload />
+                {importing
+                  ? "Importing…"
+                  : `Choose ${annotatedFormats.find((item) => item.id === importFormat)?.name} ZIP`}
+              </button>
+              <input
+                hidden
+                ref={input}
+                type="file"
+                accept=".zip,application/zip"
+                onChange={(event) => importZip(event.target.files?.[0])}
+              />
+            </footer>
+          </section>
+        </div>
       )}
     </div>
   );

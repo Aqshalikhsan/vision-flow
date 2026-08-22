@@ -318,7 +318,7 @@ def main() -> None:
             archive.writestr("images/train/imported.png", image_bytes)
             archive.writestr("labels/train/imported.txt", "0 0.1 0.1 0.3 0.1 0.3 0.3 0.1 0.3\n")
         dataset_zip.seek(0)
-        project = requests.post(f"{BASE}/api/projects/{project_id}/import/yolo", files={"file": ("dataset.zip", dataset_zip, "application/zip")}, timeout=30).json()
+        project = requests.post(f"{BASE}/api/projects/{project_id}/import/annotated", files={"file": ("dataset.zip", dataset_zip, "application/zip")}, timeout=30).json()
         assert len(project["assets"]) == 1 and project["assets"][0]["boxes"][0]["type"] == "polygon"
         imported_id = project["assets"][0]["id"]
         project = requests.put(f"{BASE}/api/projects/{project_id}/assets/{imported_id}/split", json={"split": "test"}, timeout=10).json()
@@ -340,6 +340,22 @@ def main() -> None:
         project = requests.post(f"{BASE}/api/projects/{project_id}/import/yolo", files={"file": ("voc.zip", voc_zip, "application/zip")}, timeout=30).json()
         assert project["assets"][0]["boxes"][0]["label"] == "fault"
         requests.delete(f"{BASE}/api/projects/{project_id}/assets/{project['assets'][0]['id']}", timeout=10)
+        labelme_zip = io.BytesIO()
+        with zipfile.ZipFile(labelme_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("images/labelme.png", image_bytes)
+            archive.writestr("annotations/labelme.json", json.dumps({"shapes": [{"label": "scratch", "shape_type": "rectangle", "points": [[20, 30], [120, 130]]}]}))
+        labelme_zip.seek(0)
+        project = requests.post(f"{BASE}/api/projects/{project_id}/import/annotated", files={"file": ("labelme.zip", labelme_zip, "application/zip")}, timeout=30).json()
+        assert project["assets"][0]["boxes"][0]["label"] == "scratch"
+        requests.delete(f"{BASE}/api/projects/{project_id}/assets/{project['assets'][0]['id']}", timeout=10)
+        cvat_zip = io.BytesIO()
+        with zipfile.ZipFile(cvat_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("images/cvat.png", image_bytes)
+            archive.writestr("annotations.xml", '<annotations><image id="0" name="cvat.png" width="320" height="240"><box label="dent" xtl="20" ytl="30" xbr="120" ybr="130"/></image></annotations>')
+        cvat_zip.seek(0)
+        project = requests.post(f"{BASE}/api/projects/{project_id}/import/annotated", files={"file": ("cvat.zip", cvat_zip, "application/zip")}, timeout=30).json()
+        assert project["assets"][0]["boxes"][0]["label"] == "dent"
+        requests.delete(f"{BASE}/api/projects/{project_id}/assets/{project['assets'][0]['id']}", timeout=10)
         classification = requests.post(f"{BASE}/api/projects", json={"name": "Smoke Classification", "type": "Single-Label Classification", "classes": ["good", "bad"]}, timeout=10).json()
         classification_id = classification["id"]
         try:
@@ -354,7 +370,7 @@ def main() -> None:
                 assert "classification.json" in archive.namelist()
         finally:
             requests.delete(f"{BASE}/api/projects/{classification_id}", timeout=10)
-        print("SMOKE TEST PASSED: dataset health, jobs, collaboration history, images, video interpolation, detection/segmentation/classification annotations, smart mask, review roles, API-key security, YOLO/COCO/VOC imports, augmentation, five-format exports, version diff/rollback, workflow validation/scheduling, version cleanup" + (", training, selected version, workflow" if "--train" in sys.argv else ""))
+        print("SMOKE TEST PASSED: dataset health, jobs, collaboration history, images, video interpolation, detection/segmentation/classification annotations, smart mask, review roles, API-key security, YOLO/COCO/VOC/LabelMe/CVAT imports, augmentation, five-format exports, version diff/rollback, workflow validation/scheduling, version cleanup" + (", training, selected version, workflow" if "--train" in sys.argv else ""))
     finally:
         if workflow_id:
             requests.delete(f"{BASE}/api/workflows/{workflow_id}", timeout=10)

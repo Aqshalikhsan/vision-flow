@@ -1150,7 +1150,8 @@ async def upload_assets(project_id: str, files: list[UploadFile] = File(...)):
 
 
 @app.post("/api/projects/{project_id}/import/yolo", status_code=201)
-async def import_yolo_dataset(project_id: str, file: UploadFile = File(...)):
+@app.post("/api/projects/{project_id}/import/annotated", status_code=201)
+async def import_annotated_dataset(project_id: str, file: UploadFile = File(...)):
     content = await file.read()
     if len(content) > 2 * 1024 * 1024 * 1024:
         raise HTTPException(413, "Dataset archive exceeds 2 GB")
@@ -1211,6 +1212,7 @@ async def import_yolo_dataset(project_id: str, file: UploadFile = File(...)):
         raise HTTPException(400, "No supported images found in archive")
     project_dir = UPLOADS / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
+    imported_count = 0
     with db() as con:
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if not project:
@@ -1300,6 +1302,10 @@ async def import_yolo_dataset(project_id: str, file: UploadFile = File(...)):
                         xs, ys = [point["x"] for point in points], [point["y"] for point in points]
                         boxes.append({"id": uid(), "type": "polygon", "label": classes[class_id], "points": points, "x": min(xs), "y": min(ys), "w": max(xs)-min(xs), "h": max(ys)-min(ys)})
             con.execute("INSERT INTO assets (id,project_id,name,path,split,status,boxes,split_locked) VALUES (?,?,?,?,?,?,?,1)", (asset_id, project_id, path.name, str(target), split, "annotated" if boxes else "unannotated", json.dumps(boxes)))
+            imported_count += 1
+        if not imported_count:
+            raise HTTPException(400, "No readable images found in archive")
+        log_activity(con, "dataset.annotated-imported", f"{imported_count} image(s) imported from annotated ZIP", project_id)
         return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
 
 
