@@ -5698,10 +5698,9 @@ function DatasetTrain({
   const [workers, setWorkers] = useState<TrainingWorker[]>([]);
   const [workerToken, setWorkerToken] = useState("");
   const [starting, setStarting] = useState(false);
-  const workerServer =
-    window.location.port === "5173"
-      ? `${window.location.protocol}//${window.location.hostname}:8000`
-      : window.location.origin;
+  // Use the browser origin so laptop workers go through the same Vite/NAS
+  // proxy as the UI. The API itself remains private on localhost in dev mode.
+  const workerServer = window.location.origin;
   const workerCommand = workerToken
     ? `$env:VISIONFLOW_WORKER_TOKEN="${workerToken}"; python worker/visionflow_worker.py --server "${workerServer}"`
     : "";
