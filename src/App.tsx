@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type {
+  CSSProperties,
+  FormEvent,
+  PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
+} from "react";
 import {
   Activity,
   Archive,
@@ -27,6 +32,7 @@ import {
   Keyboard,
   Layers3,
   LayoutDashboard,
+  LoaderCircle,
   LogOut,
   Menu,
   MoreHorizontal,
@@ -322,6 +328,34 @@ const defaultAugmentations = (): AugmentationRecipe =>
       },
     ]),
   );
+
+const augmentationPreviewStyle = (
+  key: string,
+  amount: number,
+): CSSProperties => {
+  const styles: CSSProperties = {};
+  if (key === "horizontalFlip") styles.transform = "scaleX(-1)";
+  if (key === "verticalFlip") styles.transform = "scaleY(-1)";
+  if (key === "rotate") styles.transform = `scale(0.82) rotate(${amount}deg)`;
+  if (key === "translate")
+    styles.transform = `scale(0.82) translate(${amount / 2}%, ${amount / 3}%)`;
+  if (key === "shear")
+    styles.transform = `scale(0.82) skew(${amount}deg, ${amount / 2}deg)`;
+  if (key === "crop") styles.transform = `scale(${1 + amount / 55})`;
+  if (key === "brightness") styles.filter = `brightness(${1 + amount / 100})`;
+  if (key === "contrast") styles.filter = `contrast(${1 + amount / 100})`;
+  if (key === "saturation") styles.filter = `saturate(${1 + amount / 50})`;
+  if (key === "hue") styles.filter = `hue-rotate(${amount}deg)`;
+  if (key === "grayscale") styles.filter = "grayscale(1)";
+  if (key === "blur") styles.filter = `blur(${amount}px)`;
+  if (key === "sharpen")
+    styles.filter = `contrast(${1 + amount / 8}) saturate(${1 + amount / 12})`;
+  if (key === "jpeg") {
+    styles.filter = `contrast(${1 + (100 - amount) / 180}) saturate(${Math.max(0.55, amount / 80)})`;
+    styles.imageRendering = "pixelated";
+  }
+  return styles;
+};
 const YOLO_MODELS = [
   ...["n", "s", "m", "l", "x"].flatMap((size, index) => [
     {
@@ -3301,9 +3335,17 @@ function Train({
 
 function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   const ready = project.models.filter((m) => m.status === "ready");
+  const deployedModel =
+    ready.find((model) => model.stage === "production") || ready.at(-1);
   const [tab, setTab] = useState("image");
   const [preview, setPreview] = useState("");
+  const [previewSize, setPreviewSize] = useState({ width: 1, height: 1 });
+  const [viewerZoom, setViewerZoom] = useState(1);
+  const [viewerPan, setViewerPan] = useState({ x: 0, y: 0 });
+  const [viewerDragging, setViewerDragging] = useState(false);
   const [threshold, setThreshold] = useState(50);
+  const [appliedThreshold, setAppliedThreshold] = useState(50);
+  const [thresholdUpdating, setThresholdUpdating] = useState(false);
   const [result, setResult] = useState<{
     predictions: Array<{
       x1: number;
@@ -3357,10 +3399,52 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   const stream = useRef<MediaStream | null>(null);
   const timer = useRef<number | null>(null);
   const busy = useRef(false);
+  const selectedImageFile = useRef<File | null>(null);
+  const thresholdTimer = useRef<number | null>(null);
+  const thresholdRequest = useRef(0);
+  const viewerDragOrigin = useRef({ x: 0, y: 0 });
+  const resetViewer = () => {
+    setViewerZoom(1);
+    setViewerPan({ x: 0, y: 0 });
+  };
+  const startViewerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    viewerDragOrigin.current = {
+      x: event.clientX - viewerPan.x,
+      y: event.clientY - viewerPan.y,
+    };
+    setViewerDragging(true);
+  };
+  const moveViewer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!viewerDragging) return;
+    setViewerPan({
+      x: event.clientX - viewerDragOrigin.current.x,
+      y: event.clientY - viewerDragOrigin.current.y,
+    });
+  };
+  const stopViewerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    setViewerDragging(false);
+  };
+  const zoomViewer = (next: number) =>
+    setViewerZoom(Math.max(0.5, Math.min(4, next)));
+  const wheelViewer = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    zoomViewer(viewerZoom + (event.deltaY < 0 ? 0.15 : -0.15));
+  };
   const test = async (file?: File) => {
     if (!file) return;
+    if (thresholdTimer.current) window.clearTimeout(thresholdTimer.current);
+    setThresholdUpdating(false);
+    selectedImageFile.current = file;
+    const requestId = ++thresholdRequest.current;
     const reader = new FileReader();
-    reader.onload = () => setPreview(String(reader.result));
+    reader.onload = () => {
+      setPreview(String(reader.result));
+      resetViewer();
+    };
     reader.readAsDataURL(file);
     setRunning(true);
     setTransferProgress(0);
@@ -3368,21 +3452,59 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     setError("");
     setResult(null);
     try {
-      setResult(
-        await api.infer(
+      const nextResult = await api.infer(
           project.id,
           file,
           threshold / 100,
           setTransferProgress,
           () => setTransferStage("processing"),
-        ),
-      );
+        );
+      if (requestId === thresholdRequest.current) {
+        setResult(nextResult);
+        setAppliedThreshold(threshold);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Inference gagal");
     } finally {
-      setRunning(false);
-      setTransferProgress(null);
+      if (requestId === thresholdRequest.current) {
+        setRunning(false);
+        setTransferProgress(null);
+      }
     }
+  };
+  const changeImageThreshold = (value: number) => {
+    setThreshold(value);
+    if (tab !== "image" || !selectedImageFile.current) return;
+    const requestId = ++thresholdRequest.current;
+    if (thresholdTimer.current) window.clearTimeout(thresholdTimer.current);
+    setThresholdUpdating(true);
+    setTransferProgress(null);
+    thresholdTimer.current = window.setTimeout(async () => {
+      setRunning(true);
+      setError("");
+      try {
+        const nextResult = await api.infer(
+          project.id,
+          selectedImageFile.current!,
+          value / 100,
+        );
+        if (requestId !== thresholdRequest.current) return;
+        setResult(nextResult);
+        setAppliedThreshold(value);
+      } catch (thresholdError) {
+        if (requestId !== thresholdRequest.current) return;
+        setError(
+          thresholdError instanceof Error
+            ? thresholdError.message
+            : "Gagal memperbarui threshold",
+        );
+      } finally {
+        if (requestId === thresholdRequest.current) {
+          setRunning(false);
+          setThresholdUpdating(false);
+        }
+      }
+    }, 450);
   };
   const testBatch = async (files?: FileList | null) => {
     if (!files?.length) return;
@@ -3475,9 +3597,11 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             }
       }
     >
-      <span>
-        {p.class} {Math.round(p.confidence * 100)}%
-      </span>
+      {i < 12 && (
+        <span>
+          {p.class} {Math.round(p.confidence * 100)}%
+        </span>
+      )}
     </div>
   ));
   const capture = async () => {
@@ -3531,7 +3655,13 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
       setError(e instanceof Error ? e.message : "Kamera tidak dapat dibuka");
     }
   };
-  useEffect(() => () => stopCamera(), []);
+  useEffect(
+    () => () => {
+      stopCamera();
+      if (thresholdTimer.current) window.clearTimeout(thresholdTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
     api
       .deploymentKeys(project.id)
@@ -3563,12 +3693,28 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   };
   const changeTab = (next: string) => {
     if (next !== "webcam") stopCamera();
+    thresholdRequest.current += 1;
+    if (thresholdTimer.current) window.clearTimeout(thresholdTimer.current);
+    setThresholdUpdating(false);
+    setRunning(false);
+    setTransferProgress(null);
     setTab(next);
     setError("");
     setResult(null);
+    resetViewer();
   };
+  const viewerSize = result?.image || previewSize;
+  const viewerRatio = viewerSize.width / Math.max(1, viewerSize.height);
+  const predictionGroups = result
+    ? Object.entries(
+        result.predictions.reduce<Record<string, number>>((groups, prediction) => {
+          groups[prediction.class] = (groups[prediction.class] || 0) + 1;
+          return groups;
+        }, {}),
+      ).sort((a, b) => b[1] - a[1])
+    : [];
   return (
-    <div className="content">
+    <div className="content deploy-page">
       <ProjectTabs active="deploy" go={go} />
       <div className="project-title">
         <div>
@@ -3579,6 +3725,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
         <span className="online">
           <i />
           Local endpoint ready
+          {deployedModel && ` · ${deployedModel.alias || deployedModel.name}`}
         </span>
       </div>
       {ready.length ? (
@@ -3612,17 +3759,75 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             </div>
             {tab === "image" ? (
               preview ? (
-                <div className="preview">
-                  <img src={preview} />
-                  {boxes}
-                  {running && (
+                <div
+                  className={
+                    "preview inference-viewer " +
+                    (viewerDragging ? "dragging" : "")
+                  }
+                  onPointerDown={startViewerDrag}
+                  onPointerMove={moveViewer}
+                  onPointerUp={stopViewerDrag}
+                  onPointerCancel={stopViewerDrag}
+                  onDoubleClick={resetViewer}
+                  onWheel={wheelViewer}
+                >
+                  <div
+                    className="inference-canvas"
+                    style={{
+                      aspectRatio: `${viewerSize.width} / ${viewerSize.height}`,
+                      width: `min(100%, calc(380px * ${viewerRatio}))`,
+                      transform: `translate(${viewerPan.x}px, ${viewerPan.y}px) scale(${viewerZoom})`,
+                    }}
+                  >
+                    <img
+                      src={preview}
+                      alt="Inference preview"
+                      draggable={false}
+                      onLoad={(event) =>
+                        setPreviewSize({
+                          width: event.currentTarget.naturalWidth || 1,
+                          height: event.currentTarget.naturalHeight || 1,
+                        })
+                      }
+                    />
+                    {boxes}
+                  </div>
+                  {(running || thresholdUpdating) && (
                     <div className="infer-loading">Running model…</div>
                   )}
+                  <div className="inference-viewer-tools">
+                    <button
+                      title="Zoom out"
+                      onClick={() => zoomViewer(viewerZoom - 0.25)}
+                    >
+                      <ZoomOut />
+                    </button>
+                    <span>{Math.round(viewerZoom * 100)}%</span>
+                    <button
+                      title="Zoom in"
+                      onClick={() => zoomViewer(viewerZoom + 0.25)}
+                    >
+                      <ZoomIn />
+                    </button>
+                    <button onClick={resetViewer}>Fit</button>
+                  </div>
+                  <small className="inference-viewer-hint">
+                    Drag untuk menggeser · scroll untuk zoom · klik dua kali untuk reset
+                  </small>
                   <button
+                    className="inference-preview-close"
+                    title="Remove image"
                     onClick={() => {
                       setPreview("");
                       setResult(null);
                       setError("");
+                      selectedImageFile.current = null;
+                      thresholdRequest.current += 1;
+                      if (thresholdTimer.current)
+                        window.clearTimeout(thresholdTimer.current);
+                      setThresholdUpdating(false);
+                      setRunning(false);
+                      resetViewer();
                     }}
                   >
                     <X />
@@ -3750,10 +3955,20 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             )}
             {error && <p className="infer-error">{error}</p>}
             {result && (
-              <p className="infer-result">
-                {result.predictions.length} prediction
-                {result.predictions.length === 1 ? "" : "s"} found
-              </p>
+              <div className="inference-result-summary">
+                <span>
+                  <b>{result.predictions.length}</b>
+                  <small>predictions found</small>
+                </span>
+                <div>
+                  {predictionGroups.slice(0, 5).map(([name, count]) => (
+                    <span key={name}>
+                      <b>{name}</b>
+                      <small>{count}</small>
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
             <div className="threshold">
               <span>
@@ -3762,8 +3977,13 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
               <input
                 type="range"
                 value={threshold}
-                onChange={(e) => setThreshold(+e.target.value)}
+                onChange={(e) => changeImageThreshold(+e.target.value)}
               />
+              <small className={thresholdUpdating ? "updating" : ""}>
+                {thresholdUpdating
+                  ? "Memperbarui prediksi…"
+                  : `Hasil menggunakan threshold ${appliedThreshold}%`}
+              </small>
             </div>
           </section>
           <section className="panel api">
@@ -5103,6 +5323,12 @@ function DatasetVersions({
   const [recipe, setRecipe] =
     useState<AugmentationRecipe>(defaultAugmentations);
   const [generating, setGenerating] = useState(false);
+  const [generationSeconds, setGenerationSeconds] = useState(0);
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [generationStage, setGenerationStage] = useState("Menyiapkan dataset");
+  const [generationProcessed, setGenerationProcessed] = useState(0);
+  const [generationTotal, setGenerationTotal] = useState(0);
+  const [generationError, setGenerationError] = useState("");
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [versionDiffs, setVersionDiffs] = useState<
     Record<
@@ -5122,6 +5348,63 @@ function DatasetVersions({
   const estimatedTrain = Math.round((project.assets.length * splits[0]) / 100);
   const estimatedTotal =
     project.assets.length + (augment ? estimatedTrain * copies : 0);
+  useEffect(() => {
+    let active = true;
+    api
+      .versionProgress(project.id)
+      .then((status) => {
+        if (!active || status.status !== "running") return;
+        setGenerationProgress(status.progress);
+        setGenerationStage(status.stage);
+        setGenerationProcessed(status.processed || 0);
+        setGenerationTotal(status.total || estimatedTotal);
+        setGenerationError("");
+        setGenerating(true);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [estimatedTotal, project.id]);
+  useEffect(() => {
+    if (!generating) return;
+    setGenerationSeconds(0);
+    const timer = window.setInterval(
+      () => setGenerationSeconds((seconds) => seconds + 1),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [generating]);
+  useEffect(() => {
+    if (!generating) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const status = await api.versionProgress(project.id);
+        if (!active) return;
+        setGenerationProgress(status.progress);
+        setGenerationStage(status.stage);
+        setGenerationProcessed(status.processed || 0);
+        setGenerationTotal(status.total || estimatedTotal);
+        if (status.status === "completed") {
+          const fresh = await api.project(project.id);
+          if (!active) return;
+          update(() => fresh);
+          setGenerating(false);
+          notify("Immutable dataset version selesai");
+        } else if (status.status === "failed") {
+          setGenerationError(status.error || "Generate version gagal");
+          setGenerating(false);
+        }
+      } catch {}
+    };
+    void poll();
+    const timer = window.setInterval(poll, 700);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [estimatedTotal, generating, project.id]);
   const changeSetting = (
     key: string,
     patch: Partial<AugmentationRecipe[string]>,
@@ -5164,6 +5447,11 @@ function DatasetVersions({
       notify("Aktifkan minimal satu transformasi atau matikan augmentasi");
       return;
     }
+    setGenerationError("");
+    setGenerationProgress(1);
+    setGenerationStage("Menyiapkan dataset");
+    setGenerationProcessed(0);
+    setGenerationTotal(estimatedTotal);
     setGenerating(true);
     try {
       const saved = await api.version(project.id, {
@@ -5173,10 +5461,16 @@ function DatasetVersions({
         augmentations: recipe,
         augmentation_copies: copies,
       });
+      setGenerationProgress(100);
+      setGenerationStage("Immutable version selesai");
+      setGenerationProcessed(generationTotal || estimatedTotal);
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
       update(() => saved);
       notify(`Dataset version dibuat: sekitar ${estimatedTotal} gambar`);
     } catch (e) {
-      notify(e instanceof Error ? e.message : "Gagal membuat version");
+      const message = e instanceof Error ? e.message : "Gagal membuat version";
+      setGenerationError(message);
+      notify(message);
     } finally {
       setGenerating(false);
     }
@@ -5465,6 +5759,58 @@ function DatasetVersions({
                             <b>{option.name}</b>
                             <small>{option.description}</small>
                           </div>
+                          <figure className="augment-preview">
+                            {previewAsset ? (
+                              <div>
+                                <img
+                                  src={previewAsset.src}
+                                  alt={`Preview ${option.name}`}
+                                  style={augmentationPreviewStyle(
+                                    option.key,
+                                    setting.amount,
+                                  )}
+                                />
+                                {option.key === "noise" && (
+                                  <i
+                                    className="augment-noise"
+                                    style={{
+                                      opacity: Math.min(
+                                        0.72,
+                                        setting.amount / option.max,
+                                      ),
+                                    }}
+                                  />
+                                )}
+                                {option.key === "cutout" && (
+                                  <i
+                                    className="augment-cutout"
+                                    style={{
+                                      width: `${setting.amount}%`,
+                                      height: `${setting.amount}%`,
+                                    }}
+                                  />
+                                )}
+                                {option.key === "jpeg" && (
+                                  <i
+                                    className="augment-jpeg"
+                                    style={{
+                                      opacity: Math.max(
+                                        0.08,
+                                        (100 - setting.amount) / 130,
+                                      ),
+                                    }}
+                                  />
+                                )}
+                              </div>
+                            ) : (
+                              <div className="augment-preview-empty">
+                                <ImageIcon />
+                              </div>
+                            )}
+                            <figcaption>
+                              Preview · {Math.round(setting.probability * 100)}%
+                            </figcaption>
+                          </figure>
                           <label className="augment-control">
                             <span>
                               Probability{" "}
@@ -5527,6 +5873,12 @@ function DatasetVersions({
               {enabledCount} transforms · ~{estimatedTotal} outputs
             </span>
           </button>
+          {generationError && (
+            <div className="version-generation-error" role="alert">
+              <b>Version gagal dibuat</b>
+              <span>{generationError}</span>
+            </div>
+          )}
         </div>
         <aside className="version-side">
           <section className="panel">
@@ -5651,6 +6003,37 @@ function DatasetVersions({
           </section>
         </aside>
       </div>
+      {generating && (
+        <div
+          className="version-generation-overlay"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="version-generation-progress">
+            <LoaderCircle />
+            <div>
+              <b>Membuat immutable dataset version</b>
+              <span>
+                {generationStage} · {generationSeconds}s
+              </span>
+            </div>
+            <strong>{generationProgress}%</strong>
+            <div className="version-generation-count">
+              <b>
+                {generationProcessed.toLocaleString("id-ID")} /{" "}
+                {(generationTotal || estimatedTotal).toLocaleString("id-ID")}
+              </b>
+              <span>gambar dataset sudah terbentuk</span>
+            </div>
+            <i>
+              <em style={{ width: `${generationProgress}%` }} />
+            </i>
+            <small>
+              Proses tetap berjalan di server. Jangan tutup halaman ini.
+            </small>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5703,6 +6086,9 @@ function DatasetTrain({
   const workerServer = window.location.origin;
   const workerCommand = workerToken
     ? `$env:VISIONFLOW_WORKER_TOKEN="${workerToken}"; python worker/visionflow_worker.py --server "${workerServer}"`
+    : "";
+  const workerUnixCommand = workerToken
+    ? `VISIONFLOW_WORKER_TOKEN="${workerToken}" python3 worker/visionflow_worker.py --server "${workerServer}"`
     : "";
   const active = project.models.some(
     (model) => model.status === "training" || model.status === "queued",
@@ -6201,14 +6587,44 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                       </span>
                     </li>
                     <li>
-                      Jalankan file di laptop target:
-                      <code className="worker-command">
-                        Windows: powershell -ExecutionPolicy Bypass -File
-                        .\visionflow-worker-setup.ps1
-                        <br />
-                        Linux/macOS: chmod +x visionflow-worker-setup.sh &&{" "}
-                        ./visionflow-worker-setup.sh
-                      </code>
+                      Jalankan file di laptop target sesuai sistem operasi:
+                      <div className="worker-platforms">
+                        <div className="worker-platform">
+                          <b>Windows (PowerShell)</b>
+                          <small>1. Masuk ke folder Downloads:</small>
+                          <code className="worker-command">
+                            cd "$env:USERPROFILE\Downloads"
+                          </code>
+                          <small>2. Buka blokir file hasil download:</small>
+                          <code className="worker-command">
+                            Unblock-File '.\visionflow-worker-setup.ps1'
+                          </code>
+                          <small>3. Jalankan setup:</small>
+                          <code className="worker-command">
+                            powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                            '.\visionflow-worker-setup.ps1'
+                          </code>
+                          <small>
+                            Jika nama file memiliki akhiran, misalnya <code>(2)</code>,
+                            gunakan nama tersebut pada kedua perintah file.
+                          </small>
+                        </div>
+                        <div className="worker-platform">
+                          <b>Linux / macOS (Terminal)</b>
+                          <small>1. Masuk ke folder Downloads:</small>
+                          <code className="worker-command">
+                            cd ~/Downloads
+                          </code>
+                          <small>2. Berikan izin eksekusi:</small>
+                          <code className="worker-command">
+                            chmod +x visionflow-worker-setup.sh
+                          </code>
+                          <small>3. Jalankan setup:</small>
+                          <code className="worker-command">
+                            ./visionflow-worker-setup.sh
+                          </code>
+                        </div>
+                      </div>
                     </li>
                     <li>
                       Tunggu status worker berubah menjadi <b>online</b>, lalu
@@ -6224,15 +6640,27 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                 </div>
                 <details className="worker-manual">
                   <summary>Advanced: jalankan command manual</summary>
-                  <code>{workerCommand}</code>
-                  <button
-                    onClick={() => {
-                      void navigator.clipboard.writeText(workerCommand);
-                      notify("Perintah worker disalin");
-                    }}
-                  >
-                    <Copy /> Copy command
-                  </button>
+                  <small>
+                    Gunakan bagian ini hanya jika ingin menjalankan worker secara
+                    manual. Pastikan terminal sudah berada di folder
+                    <code>VisionFlowWorker</code>.
+                  </small>
+                  <div className="worker-platforms">
+                    <div className="worker-platform">
+                      <b>Windows (PowerShell)</b>
+                      <code>{workerCommand}</code>
+                      <button onClick={() => { void navigator.clipboard.writeText(workerCommand); notify("Perintah Windows disalin"); }}>
+                        <Copy /> Copy Windows command
+                      </button>
+                    </div>
+                    <div className="worker-platform">
+                      <b>Linux / macOS (Terminal)</b>
+                      <code>{workerUnixCommand}</code>
+                      <button onClick={() => { void navigator.clipboard.writeText(workerUnixCommand); notify("Perintah Linux/macOS disalin"); }}>
+                        <Copy /> Copy Linux/macOS command
+                      </button>
+                    </div>
+                  </div>
                 </details>
               </div>
             )}
@@ -7126,6 +7554,12 @@ function MetricSparkline({ model }: { model: Model }) {
   );
 }
 
+const cleanTerminalError = (message: string) =>
+  message
+    .replace(/(?:\u001b|\u241b)\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\s+See https?:\/\/\S+\s*$/i, "")
+    .trim();
+
 function ModelRegistry({
   project,
   go,
@@ -7322,13 +7756,6 @@ function ModelRegistry({
         {[...project.models].reverse().map((model) => (
           <article className="registry-card" key={model.id}>
             <div className="registry-head">
-              <label className="model-select" title="Select for comparison">
-                <input
-                  type="checkbox"
-                  checked={selectedModels.includes(model.id)}
-                  onChange={() => toggleModel(model.id)}
-                />
-              </label>
               <span className={model.status}>
                 <BrainCircuit />
               </span>
@@ -7345,6 +7772,31 @@ function ModelRegistry({
               <em>{model.status}</em>
             </div>
             {model.status === "ready" && (
+              <div className="registry-model-controls">
+                <label title="Pilih maksimal dua model untuk dibandingkan">
+                  <input
+                    type="checkbox"
+                    checked={selectedModels.includes(model.id)}
+                    onChange={() => toggleModel(model.id)}
+                  />
+                  <span>Compare</span>
+                </label>
+                {model.stage === "production" ? (
+                  <span className="active-deployment">
+                    <Check /> Active deployment
+                  </span>
+                ) : (
+                  <button
+                    onClick={() =>
+                      updateLifecycle(model.id, "production", model.alias)
+                    }
+                  >
+                    <Rocket /> Use for deploy
+                  </button>
+                )}
+              </div>
+            )}
+            {model.status === "ready" && (
               <div className="registry-metrics">
                 <span>
                   <b>{model.map}%</b>
@@ -7358,6 +7810,14 @@ function ModelRegistry({
                   <b>{model.recall}%</b>
                   <small>Recall</small>
                 </span>
+              </div>
+            )}
+            {model.status === "training" && (
+              <div className="registry-training-progress">
+                <span>
+                  Training progress <b>{model.progress}%</b>
+                </span>
+                <progress max="100" value={model.progress} />
               </div>
             )}
             <MetricSparkline model={model} />
@@ -7473,7 +7933,19 @@ function ModelRegistry({
                 Delete
               </button>
             </div>
-            {model.error && <p className="run-error">{model.error}</p>}
+            {model.error && (
+              <div className="registry-error" role="alert">
+                <b>Training gagal</b>
+                <p>{cleanTerminalError(model.error)}</p>
+                <a
+                  href="https://docs.ultralytics.com/datasets/"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Buka panduan format dataset
+                </a>
+              </div>
+            )}
           </article>
         ))}
         {!project.models.length && (
