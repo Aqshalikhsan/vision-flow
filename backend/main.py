@@ -26,7 +26,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +45,8 @@ DB_PATH = DATA / "visionflow.db"
 LOGGER = logging.getLogger("visionflow")
 TRAIN_CANCEL: dict[str, threading.Event] = {}
 TRAIN_SCHEDULER_LOCK = threading.Lock()
+VERSION_GENERATION_PROGRESS: dict[str, dict[str, Any]] = {}
+VERSION_GENERATION_LOCK = threading.Lock()
 ACTIVE_LEARNING_SCANS: set[str] = set()
 WORKFLOW_SCHEDULER_STARTED = False
 DEPLOY_RATE_LIMIT = max(1, int(os.getenv("VISIONFLOW_RATE_LIMIT", "120")))
@@ -59,6 +61,35 @@ def now() -> str:
 
 def uid() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def set_version_generation_progress(
+    project_id: str,
+    progress: int,
+    stage: str,
+    status: str = "running",
+    error: str | None = None,
+    processed: int | None = None,
+    total: int | None = None,
+) -> None:
+    with VERSION_GENERATION_LOCK:
+        current = VERSION_GENERATION_PROGRESS.get(project_id, {})
+        resolved_total = max(0, int(total if total is not None else current.get("total", 0)))
+        resolved_processed = max(
+            0,
+            int(processed if processed is not None else current.get("processed", 0)),
+        )
+        if status == "completed" and resolved_total:
+            resolved_processed = resolved_total
+        VERSION_GENERATION_PROGRESS[project_id] = {
+            "status": status,
+            "progress": max(0, min(100, int(progress))),
+            "stage": stage,
+            "error": error,
+            "processed": min(resolved_processed, resolved_total) if resolved_total else resolved_processed,
+            "total": resolved_total,
+            "updatedAt": now(),
+        }
 
 
 def db() -> sqlite3.Connection:
@@ -1696,7 +1727,13 @@ def assign_asset_splits(assets: list[sqlite3.Row], splits: tuple[int, int, int],
     return assigned
 
 
-def make_yolo_version(con: sqlite3.Connection, project_id: str, version_no: int, payload: VersionPayload) -> tuple[Path, int]:
+def make_yolo_version(
+    con: sqlite3.Connection,
+    project_id: str,
+    version_no: int,
+    payload: VersionPayload,
+    progress_callback: Callable[[int, str, int, int], None] | None = None,
+) -> tuple[Path, int]:
     project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     assets = list(con.execute("SELECT * FROM assets WHERE project_id=?", (project_id,)))
     classes = validate_class_names(json.loads(project["classes"]))
@@ -1710,6 +1747,15 @@ def make_yolo_version(con: sqlite3.Connection, project_id: str, version_no: int,
         (target / "labels" / split).mkdir(parents=True, exist_ok=True)
     assigned_splits = assign_asset_splits(assets, payload.splits, version_no)
     written: dict[str, list[tuple[Path, Path]]] = {"train": [], "valid": [], "test": []}
+    augmentation_count = payload.augmentation_copies if payload.augmentations else 2
+    total_work = len(assets) + sum(
+        augmentation_count
+        for asset in assets
+        if payload.augment and assigned_splits[asset["id"]] == "train"
+    )
+    processed_work = 0
+    if progress_callback:
+        progress_callback(2, "Menyiapkan file dataset", 0, total_work)
 
     def label_lines(boxes: list[dict[str, Any]]) -> str:
         lines = []
@@ -1737,11 +1783,20 @@ def make_yolo_version(con: sqlite3.Connection, project_id: str, version_no: int,
         return "\n".join(lines)
 
     def save_example(image: Image.Image, boxes: list[dict[str, Any]], split: str, stem: str) -> None:
+        nonlocal processed_work
         image_path = target / "images" / split / f"{stem}.jpg"
         label_path = target / "labels" / split / f"{stem}.txt"
         image.save(image_path, "JPEG", quality=92)
         label_path.write_text(label_lines(boxes), encoding="utf-8")
         written[split].append((image_path, label_path))
+        processed_work += 1
+        if progress_callback:
+            progress_callback(
+                min(95, 5 + round((processed_work / max(1, total_work)) * 90)),
+                "Membentuk file dataset",
+                processed_work,
+                total_work,
+            )
 
     for asset in assets:
         split = assigned_splits[asset["id"]]
@@ -1772,7 +1827,13 @@ def make_yolo_version(con: sqlite3.Connection, project_id: str, version_no: int,
     return target, sum(len(items) for items in written.values())
 
 
-def make_classification_version(con: sqlite3.Connection, project_id: str, version_no: int, payload: VersionPayload) -> tuple[Path, int]:
+def make_classification_version(
+    con: sqlite3.Connection,
+    project_id: str,
+    version_no: int,
+    payload: VersionPayload,
+    progress_callback: Callable[[int, str, int, int], None] | None = None,
+) -> tuple[Path, int]:
     """Build the folder-per-class layout consumed by Ultralytics classifiers."""
     project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     assets = list(con.execute("SELECT * FROM assets WHERE project_id=?", (project_id,)))
@@ -1785,7 +1846,9 @@ def make_classification_version(con: sqlite3.Connection, project_id: str, versio
             (target / split / class_name).mkdir(parents=True, exist_ok=True)
     assigned_splits = assign_asset_splits(assets, payload.splits, version_no)
     written = 0
-    for asset in assets:
+    if progress_callback:
+        progress_callback(2, "Menyiapkan file dataset", 0, len(assets))
+    for asset_index, asset in enumerate(assets):
         labels = list(dict.fromkeys(box.get("label") for box in json.loads(asset["boxes"]) if box.get("label") in classes))
         if not labels:
             continue
@@ -1803,12 +1866,65 @@ def make_classification_version(con: sqlite3.Connection, project_id: str, versio
                         augmented, _ = apply_augmentation(image, [], payload.augmentations, random.Random(f"{version_no}:{asset['id']}:{label}:{copy_index}")) if payload.augmentations else (ImageOps.mirror(image), [])
                         augmented.save(target / split / label / f"{asset['id']}{suffix}-aug-{copy_index + 1:02d}.jpg", "JPEG", quality=92)
                         written += 1
+        if progress_callback:
+            progress_callback(
+                min(95, 5 + round(((asset_index + 1) / max(1, len(assets))) * 90)),
+                "Membentuk file dataset",
+                asset_index + 1,
+                len(assets),
+            )
     (target / "classification.json").write_text(json.dumps({"task": project["type"], "classes": classes, "splits": payload.splits}, indent=2), encoding="utf-8")
     return target, written
 
 
+@app.get("/api/projects/{project_id}/versions/progress")
+def version_generation_progress(project_id: str):
+    with VERSION_GENERATION_LOCK:
+        return VERSION_GENERATION_PROGRESS.get(
+            project_id,
+            {
+                "status": "idle",
+                "progress": 0,
+                "stage": "Belum ada proses generate",
+                "error": None,
+                "processed": 0,
+                "total": 0,
+                "updatedAt": now(),
+            },
+        ).copy()
+
+
 @app.post("/api/projects/{project_id}/versions", status_code=201)
 def generate_version(project_id: str, payload: VersionPayload):
+    with VERSION_GENERATION_LOCK:
+        current = VERSION_GENERATION_PROGRESS.get(project_id)
+        if current and current.get("status") == "running":
+            raise HTTPException(409, "Immutable dataset version is already being generated")
+        VERSION_GENERATION_PROGRESS[project_id] = {
+            "status": "running",
+            "progress": 1,
+            "stage": "Menyiapkan dataset",
+            "error": None,
+            "processed": 0,
+            "total": 0,
+            "updatedAt": now(),
+        }
+    try:
+        return build_version(project_id, payload)
+    except Exception as error:
+        detail = error.detail if isinstance(error, HTTPException) else str(error)
+        set_version_generation_progress(
+            project_id,
+            0,
+            "Generate gagal",
+            status="failed",
+            error=str(detail),
+        )
+        raise
+
+
+def build_version(project_id: str, payload: VersionPayload):
+    set_version_generation_progress(project_id, 1, "Menyiapkan dataset")
     with db() as con:
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if not project:
@@ -1816,11 +1932,26 @@ def generate_version(project_id: str, payload: VersionPayload):
         count = con.execute("SELECT COUNT(*) n FROM assets WHERE project_id=?", (project_id,)).fetchone()["n"]
         if not count:
             raise HTTPException(400, "Upload at least one image first")
+        set_version_generation_progress(
+            project_id,
+            1,
+            "Menyiapkan dataset",
+            processed=0,
+            total=count,
+        )
         version_no = con.execute("SELECT COALESCE(MAX(number),0)+1 n FROM versions WHERE project_id=?", (project_id,)).fetchone()["n"]
+        update_progress = lambda progress, stage, processed, total: set_version_generation_progress(
+            project_id,
+            progress,
+            stage,
+            processed=processed,
+            total=total,
+        )
         if project["type"] in {"Single-Label Classification", "Multi-Label Classification"}:
-            target, generated_images = make_classification_version(con, project_id, version_no, payload)
+            target, generated_images = make_classification_version(con, project_id, version_no, payload, update_progress)
         else:
-            target, generated_images = make_yolo_version(con, project_id, version_no, payload)
+            target, generated_images = make_yolo_version(con, project_id, version_no, payload, update_progress)
+        set_version_generation_progress(project_id, 97, "Menyimpan immutable snapshot")
         snapshot_assets = [
             {
                 "id": asset["id"],
@@ -1839,7 +1970,9 @@ def generate_version(project_id: str, payload: VersionPayload):
         version_id = uid()
         con.execute("INSERT INTO versions (id,project_id,number,created_at,images,resize,augment,splits,path,augmentations,generated_images) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (version_id, project_id, version_no, now()[:10], count, payload.resize, int(payload.augment), json.dumps(payload.splits), str(target), json.dumps({"copies": payload.augmentation_copies, "transforms": payload.augmentations}), generated_images))
         log_activity(con, "version.generated", f"Version {version_no} · {generated_images} generated images", project_id)
-        return project_dict(con, project)
+        saved = project_dict(con, project)
+        set_version_generation_progress(project_id, 100, "Immutable version selesai", "completed")
+        return saved
 
 
 @app.put("/api/projects/{project_id}/versions/{version_id}")

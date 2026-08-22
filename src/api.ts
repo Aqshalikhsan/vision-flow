@@ -491,6 +491,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  versionProgress: (id: string) =>
+    request<{
+      status: "idle" | "running" | "completed" | "failed";
+      progress: number;
+      stage: string;
+      processed: number;
+      total: number;
+      error?: string | null;
+      updatedAt: string;
+    }>(`/api/projects/${id}/versions/progress`),
   train: (
     id: string,
     data: {
