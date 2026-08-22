@@ -1711,6 +1711,43 @@ function ProjectTabs({ active, go }: { active: Page; go: (p: Page) => void }) {
   );
 }
 
+type TransferStage = "uploading" | "processing";
+
+function TransferProgress({
+  percent,
+  stage,
+  label,
+  processingLabel = "Upload complete · Processing",
+}: {
+  percent: number;
+  stage: TransferStage;
+  label: string;
+  processingLabel?: string;
+}) {
+  const safePercent = Math.max(0, Math.min(100, percent));
+  return (
+    <div
+      className={`upload-progress ${stage}`}
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={safePercent}
+    >
+      <span>
+        <span>{stage === "processing" ? processingLabel : label}</span>
+        <b>{safePercent}%</b>
+      </span>
+      <i>
+        <em style={{ width: `${safePercent}%` }} />
+      </i>
+      {stage === "processing" && (
+        <small>Please keep this page open while the server validates it.</small>
+      )}
+    </div>
+  );
+}
+
 function ProjectHome({
   project,
   go,
@@ -1729,14 +1766,17 @@ function ProjectHome({
   const input = useRef<HTMLInputElement>(null);
   const [draggingUpload, setDraggingUpload] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadStage, setUploadStage] = useState<TransferStage>("uploading");
   const upload = async (files: FileList | null) => {
     if (!files) return;
     try {
       setUploadProgress(0);
+      setUploadStage("uploading");
       const saved = await api.uploadWithProgress(
         project.id,
         files,
         setUploadProgress,
+        () => setUploadStage("processing"),
       );
       update(() => saved);
       notify(`${files.length} file disimpan ke dataset lokal`);
@@ -1874,13 +1914,11 @@ function ProjectHome({
               </button>
             </div>
             {uploadProgress !== null && (
-              <div className="upload-progress">
-                <span>Uploading files…</span>
-                <b>{uploadProgress}%</b>
-                <i>
-                  <em style={{ width: `${uploadProgress}%` }} />
-                </i>
-              </div>
+              <TransferProgress
+                percent={uploadProgress}
+                stage={uploadStage}
+                label="Uploading dataset files"
+              />
             )}
             {project.assets.length ? (
               <div className="thumb-grid">
@@ -3280,6 +3318,9 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   } | null>(null);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
+  const [transferProgress, setTransferProgress] = useState<number | null>(null);
+  const [transferStage, setTransferStage] =
+    useState<TransferStage>("uploading");
   const [batchProgress, setBatchProgress] = useState(0);
   const [batchResults, setBatchResults] = useState<
     Array<{ file: string; predictions: number; error?: string }>
@@ -3322,14 +3363,25 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     reader.onload = () => setPreview(String(reader.result));
     reader.readAsDataURL(file);
     setRunning(true);
+    setTransferProgress(0);
+    setTransferStage("uploading");
     setError("");
     setResult(null);
     try {
-      setResult(await api.infer(project.id, file, threshold / 100));
+      setResult(
+        await api.infer(
+          project.id,
+          file,
+          threshold / 100,
+          setTransferProgress,
+          () => setTransferStage("processing"),
+        ),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Inference gagal");
     } finally {
       setRunning(false);
+      setTransferProgress(null);
     }
   };
   const testBatch = async (files?: FileList | null) => {
@@ -3379,10 +3431,20 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   const testVideo = async (file?: File) => {
     if (!file) return;
     setRunning(true);
+    setTransferProgress(0);
+    setTransferStage("uploading");
     setVideoResult(null);
     setError("");
     try {
-      setVideoResult(await api.inferVideo(project.id, file, threshold / 100));
+      setVideoResult(
+        await api.inferVideo(
+          project.id,
+          file,
+          threshold / 100,
+          setTransferProgress,
+          () => setTransferStage("processing"),
+        ),
+      );
     } catch (videoError) {
       setError(
         videoError instanceof Error
@@ -3391,6 +3453,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
       );
     } finally {
       setRunning(false);
+      setTransferProgress(null);
     }
   };
   const endpoint = `http://localhost:8000/api/projects/${project.id}/infer`;
@@ -3613,7 +3676,14 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                     onChange={(event) => testBatch(event.target.files)}
                   />
                 </label>
-                {running && <progress max="100" value={batchProgress} />}
+                {running && (
+                  <TransferProgress
+                    percent={batchProgress}
+                    stage="processing"
+                    label="Processing batch"
+                    processingLabel="Processing image batch"
+                  />
+                )}
                 {!!batchResults.length && (
                   <div className="batch-results">
                     <header>
@@ -3645,7 +3715,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                     onChange={(event) => testVideo(event.target.files?.[0])}
                   />
                 </label>
-                {running && (
+                {running && transferProgress === null && (
                   <p className="infer-result">Processing video frames…</p>
                 )}
                 {videoResult && (
@@ -3663,6 +3733,20 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   </div>
                 )}
               </div>
+            )}
+            {transferProgress !== null && (
+              <TransferProgress
+                percent={transferProgress}
+                stage={transferStage}
+                label={
+                  tab === "video" ? "Uploading video" : "Uploading test image"
+                }
+                processingLabel={
+                  tab === "video"
+                    ? "Upload complete · Analyzing video frames"
+                    : "Upload complete · Running model"
+                }
+              />
             )}
             {error && <p className="infer-error">{error}</p>}
             {result && (
@@ -3885,6 +3969,8 @@ function Workflows({
     counts: Record<string, number>;
   } | null>(null);
   const [running, setRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState(0);
+  const [runStage, setRunStage] = useState<TransferStage>("uploading");
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [edgeFrom, setEdgeFrom] = useState("");
   const [edgeTo, setEdgeTo] = useState("");
@@ -4110,10 +4196,18 @@ function Workflows({
   const run = async (file?: File) => {
     if (!file) return;
     setRunning(true);
+    setRunProgress(0);
+    setRunStage("uploading");
     setResult(null);
     try {
       const saved = await save();
-      const output = await api.runWorkflow(saved.id, file);
+      const output = await api.runWorkflow(
+        saved.id,
+        file,
+        0.5,
+        setRunProgress,
+        () => setRunStage("processing"),
+      );
       setResult({ status: output.status, counts: output.counts });
       api
         .workflowRuns(saved.id)
@@ -4305,6 +4399,14 @@ function Workflows({
           />
         </div>
       </div>
+      {running && (
+        <TransferProgress
+          percent={runProgress}
+          stage={runStage}
+          label="Uploading workflow input"
+          processingLabel="Upload complete · Running workflow"
+        />
+      )}
       <div className="workflow-body">
         <aside>
           <div className="search">
@@ -6919,6 +7021,8 @@ function ModelRegistry({
 }) {
   const [exporting, setExporting] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [importProgress, setImportProgress] = useState<number | null>(null);
+  const [importStage, setImportStage] = useState<TransferStage>("uploading");
   const importWeightsInput = useRef<HTMLInputElement>(null);
   const importWeights = async (file?: File) => {
     if (!file) return;
@@ -6930,15 +7034,24 @@ function ModelRegistry({
       return;
     }
     try {
-      const saved = await api.importModel(project.id, file, {
-        name,
-        version_id: versionId,
-      });
+      setImportProgress(0);
+      setImportStage("uploading");
+      const saved = await api.importModel(
+        project.id,
+        file,
+        {
+          name,
+          version_id: versionId,
+        },
+        setImportProgress,
+        () => setImportStage("processing"),
+      );
       update(() => saved);
       notify("best.pt tervalidasi dan dimasukkan ke Model Registry");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Import model gagal");
     } finally {
+      setImportProgress(null);
       if (importWeightsInput.current) importWeightsInput.current.value = "";
     }
   };
@@ -7037,9 +7150,11 @@ function ModelRegistry({
         </div>
         <button
           className="secondary"
+          disabled={importProgress !== null}
           onClick={() => importWeightsInput.current?.click()}
         >
-          <Upload /> Import best.pt
+          <Upload />
+          {importProgress !== null ? "Importing best.pt…" : "Import best.pt"}
         </button>
         <input
           ref={importWeightsInput}
@@ -7049,6 +7164,13 @@ function ModelRegistry({
           onChange={(event) => importWeights(event.target.files?.[0])}
         />
       </div>
+      {importProgress !== null && (
+        <TransferProgress
+          percent={importProgress}
+          stage={importStage}
+          label="Uploading model weights"
+        />
+      )}
       {comparedModels.length === 2 && (
         <section className="panel model-comparison">
           <div className="panel-head">
@@ -7269,6 +7391,9 @@ function DatasetManager({
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+  const [importStage, setImportStage] = useState<TransferStage>("uploading");
+  const [importFileName, setImportFileName] = useState("");
   const [showImport, setShowImport] = useState(false);
   const [importFormat, setImportFormat] = useState("yolo");
   const [labeling, setLabeling] = useState(false);
@@ -7313,8 +7438,16 @@ function DatasetManager({
   const importZip = async (file?: File) => {
     if (!file) return;
     setImporting(true);
+    setImportProgress(0);
+    setImportStage("uploading");
+    setImportFileName(file.name);
     try {
-      const saved = await api.importAnnotatedDataset(project.id, file);
+      const saved = await api.importAnnotatedDataset(
+        project.id,
+        file,
+        setImportProgress,
+        () => setImportStage("processing"),
+      );
       update(() => saved);
       setShowImport(false);
       notify(
@@ -7745,6 +7878,13 @@ function DatasetManager({
                 </small>
               </span>
             </div>
+            {importing && (
+              <TransferProgress
+                percent={importProgress}
+                stage={importStage}
+                label={`Uploading ${importFileName || "annotated dataset"}`}
+              />
+            )}
             <footer>
               <button
                 className="secondary"
@@ -7998,6 +8138,8 @@ function LocalSettings({
     () => localStorage.getItem("vf-active-member") || "",
   );
   const [restoring, setRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState(0);
+  const [restoreStage, setRestoreStage] = useState<TransferStage>("uploading");
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     api
@@ -8025,8 +8167,12 @@ function LocalSettings({
     )
       return;
     setRestoring(true);
+    setRestoreProgress(0);
+    setRestoreStage("uploading");
     try {
-      const result = await api.restore(file);
+      const result = await api.restore(file, setRestoreProgress, () =>
+        setRestoreStage("processing"),
+      );
       notify(
         `Restore selesai · ${result.projects} projects · safety copy dibuat`,
       );
@@ -8144,6 +8290,13 @@ function LocalSettings({
               Validates the backup and creates a safety database copy before
               replacement.
             </p>
+            {restoring && (
+              <TransferProgress
+                percent={restoreProgress}
+                stage={restoreStage}
+                label="Uploading backup ZIP"
+              />
+            )}
           </div>
           <button
             className="secondary"

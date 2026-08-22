@@ -107,9 +107,32 @@ test("dashboard to annotation, versions, training, and deployment", async ({
     });
   expect(importModalFits).toBeTruthy();
   await page.setViewportSize({ width: 1280, height: 720 });
+  const projectSnapshot = await (
+    await page.request.get(`${API}/api/projects/${projectId}`)
+  ).json();
+  await page.route(
+    `**/api/projects/${projectId}/import/annotated`,
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      await route.fulfill({ json: projectSnapshot });
+    },
+  );
   await page
-    .getByRole("button", { name: "Close annotated dataset import" })
-    .click();
+    .locator('.annotated-import-modal input[type="file"]')
+    .setInputFiles({
+      name: "annotated-e2e.zip",
+      mimeType: "application/zip",
+      buffer: Buffer.alloc(1024 * 1024, 1),
+    });
+  const importProgress = page.getByRole("progressbar", {
+    name: /Uploading annotated-e2e\.zip/,
+  });
+  await expect(importProgress).toBeVisible();
+  await expect(importProgress).toHaveAttribute("aria-valuemin", "0");
+  await expect(importProgress).toHaveAttribute("aria-valuemax", "100");
+  await expect(importProgress).toHaveAttribute("aria-valuenow", /\d+/);
+  await expect(page.locator(".annotated-import-modal")).toBeHidden();
+  await page.unroute(`**/api/projects/${projectId}/import/annotated`);
   await page.getByRole("button", { name: "Select e2e.bmp" }).click();
   await expect(page.getByText("1 selected")).toBeVisible();
   await page.getByRole("button", { name: "Approve", exact: true }).click();

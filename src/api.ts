@@ -114,6 +114,53 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+function uploadRequest<T>(
+  path: string,
+  body: FormData,
+  onProgress?: (percent: number) => void,
+  onProcessing?: () => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const role =
+      typeof localStorage === "undefined"
+        ? "owner"
+        : localStorage.getItem("vf-active-role") || "owner";
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.setRequestHeader("X-Workspace-Role", role);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable)
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.upload.onload = () => {
+      onProgress?.(100);
+      onProcessing?.();
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (xhr.status === 204) resolve(undefined as T);
+        else {
+          try {
+            resolve(JSON.parse(xhr.responseText) as T);
+          } catch {
+            reject(new Error("Server returned an invalid response"));
+          }
+        }
+        return;
+      }
+      try {
+        const response = JSON.parse(xhr.responseText) as { detail?: string };
+        reject(new Error(response.detail || `Upload failed (${xhr.status})`));
+      } catch {
+        reject(new Error(`Upload failed (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload connection failed"));
+    xhr.onabort = () => reject(new Error("Upload dibatalkan"));
+    xhr.send(body);
+  });
+}
+
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   bootstrapAuth: (data: { name: string; email: string; password: string }) =>
@@ -226,45 +273,35 @@ export const api = {
     id: string,
     files: FileList,
     onProgress: (percent: number) => void,
-  ) =>
-    new Promise<Project>((resolve, reject) => {
-      const body = new FormData();
-      Array.from(files).forEach((file) => body.append("files", file));
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/api/projects/${id}/assets`);
-      xhr.upload.onprogress = (event) =>
-        event.lengthComputable &&
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300)
-          resolve(JSON.parse(xhr.responseText));
-        else {
-          try {
-            reject(
-              new Error(
-                JSON.parse(xhr.responseText).detail ||
-                  `Upload failed (${xhr.status})`,
-              ),
-            );
-          } catch {
-            reject(new Error(`Upload failed (${xhr.status})`));
-          }
-        }
-      };
-      xhr.onerror = () => reject(new Error("Upload connection failed"));
-      xhr.send(body);
-    }),
+    onProcessing?: () => void,
+  ) => {
+    const body = new FormData();
+    Array.from(files).forEach((file) => body.append("files", file));
+    return uploadRequest<Project>(
+      `/api/projects/${id}/assets`,
+      body,
+      onProgress,
+      onProcessing,
+    );
+  },
   deleteAsset: (projectId: string, assetId: string) =>
     request<void>(`/api/projects/${projectId}/assets/${assetId}`, {
       method: "DELETE",
     }),
-  importAnnotatedDataset: (projectId: string, file: File) => {
+  importAnnotatedDataset: (
+    projectId: string,
+    file: File,
+    onProgress?: (percent: number) => void,
+    onProcessing?: () => void,
+  ) => {
     const body = new FormData();
     body.append("file", file);
-    return request<Project>(`/api/projects/${projectId}/import/annotated`, {
-      method: "POST",
+    return uploadRequest<Project>(
+      `/api/projects/${projectId}/import/annotated`,
       body,
-    });
+      onProgress,
+      onProcessing,
+    );
   },
   setAssetSplit: (
     projectId: string,
@@ -557,16 +594,20 @@ export const api = {
       precision?: number;
       recall?: number;
     },
+    onProgress?: (percent: number) => void,
+    onProcessing?: () => void,
   ) => {
     const body = new FormData();
     body.append("file", file);
     Object.entries(data).forEach(([key, value]) => {
       if (value !== undefined) body.append(key, String(value));
     });
-    return request<Project>(`/api/projects/${projectId}/models/import`, {
-      method: "POST",
+    return uploadRequest<Project>(
+      `/api/projects/${projectId}/models/import`,
       body,
-    });
+      onProgress,
+      onProcessing,
+    );
   },
   deploymentKeys: (projectId: string) =>
     request<
@@ -638,18 +679,29 @@ export const api = {
   deleteMember: (id: string) =>
     request<void>(`/api/members/${id}`, { method: "DELETE" }),
   backupUrl: "/api/backup",
-  restore: (file: File) => {
+  restore: (
+    file: File,
+    onProgress?: (percent: number) => void,
+    onProcessing?: () => void,
+  ) => {
     const body = new FormData();
     body.append("file", file);
-    return request<{ status: string; safetyCopy: string; projects: number }>(
-      "/api/restore",
-      { method: "POST", body },
-    );
+    return uploadRequest<{
+      status: string;
+      safetyCopy: string;
+      projects: number;
+    }>("/api/restore", body, onProgress, onProcessing);
   },
-  infer: (id: string, file: File, confidence = 0.5) => {
+  infer: (
+    id: string,
+    file: File,
+    confidence = 0.5,
+    onProgress?: (percent: number) => void,
+    onProcessing?: () => void,
+  ) => {
     const body = new FormData();
     body.append("file", file);
-    return request<{
+    return uploadRequest<{
       predictions: Array<{
         x1: number;
         y1: number;
@@ -660,24 +712,34 @@ export const api = {
         points?: Array<{ x: number; y: number }>;
       }>;
       image: { width: number; height: number };
-    }>(`/api/projects/${id}/infer?confidence=${confidence}`, {
-      method: "POST",
+    }>(
+      `/api/projects/${id}/infer?confidence=${confidence}`,
       body,
-    });
+      onProgress,
+      onProcessing,
+    );
   },
-  inferVideo: (id: string, file: File, confidence = 0.5) => {
+  inferVideo: (
+    id: string,
+    file: File,
+    confidence = 0.5,
+    onProgress?: (percent: number) => void,
+    onProcessing?: () => void,
+  ) => {
     const body = new FormData();
     body.append("file", file);
-    return request<{
+    return uploadRequest<{
       sampledFrames: number;
       durationSeconds: number;
       frameInterval: number;
       totals: Record<string, number>;
       timeline: Array<{ second: number; counts: Record<string, number> }>;
-    }>(`/api/projects/${id}/infer/video?confidence=${confidence}`, {
-      method: "POST",
+    }>(
+      `/api/projects/${id}/infer/video?confidence=${confidence}`,
       body,
-    });
+      onProgress,
+      onProcessing,
+    );
   },
   workflows: () => request<WorkflowData[]>("/api/workflows"),
   saveWorkflow: (data: WorkflowData) =>
@@ -715,17 +777,25 @@ export const api = {
     request<void>(`/api/workflows/${id}/schedule`, { method: "DELETE" }),
   deleteWorkflow: (id: string) =>
     request<void>(`/api/workflows/${id}`, { method: "DELETE" }),
-  runWorkflow: (id: string, file: File, confidence = 0.5) => {
+  runWorkflow: (
+    id: string,
+    file: File,
+    confidence = 0.5,
+    onProgress?: (percent: number) => void,
+    onProcessing?: () => void,
+  ) => {
     const body = new FormData();
     body.append("file", file);
-    return request<{
+    return uploadRequest<{
       workflowId: string;
       status: string;
       predictions: Array<{ class: string; confidence: number }>;
       counts: Record<string, number>;
-    }>(`/api/workflows/${id}/run?confidence=${confidence}`, {
-      method: "POST",
+    }>(
+      `/api/workflows/${id}/run?confidence=${confidence}`,
       body,
-    });
+      onProgress,
+      onProcessing,
+    );
   },
 };
