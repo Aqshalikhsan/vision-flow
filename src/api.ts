@@ -81,6 +81,22 @@ export type ActiveLearningItem = {
   status: string;
   createdAt: string;
 };
+export type TrainingWorker = {
+  id: string;
+  name: string;
+  prefix: string;
+  capabilities: {
+    cuda?: boolean;
+    gpuName?: string;
+    cpu?: string;
+    platform?: string;
+  };
+  status: "online" | "busy" | "offline" | "revoked";
+  currentModelId?: string;
+  lastSeen?: string;
+  createdAt: string;
+  revoked: boolean;
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const role =
@@ -450,6 +466,8 @@ export const api = {
       learning_rate?: number;
       patience?: number;
       device?: string;
+      execution_target?: "server" | "remote-auto" | "remote-gpu" | "remote-cpu";
+      worker_id?: string;
     },
   ) =>
     request<Project>(`/api/projects/${id}/train`, {
@@ -470,6 +488,9 @@ export const api = {
         learning_rate?: number;
         patience?: number;
         device?: string;
+        execution_target?:
+          "server" | "remote-auto" | "remote-gpu" | "remote-cpu";
+        worker_id?: string;
       };
       learning_rates: number[];
       optimizers: string[];
@@ -509,6 +530,15 @@ export const api = {
     request<void>(`/api/projects/${projectId}/models/${modelId}`, {
       method: "DELETE",
     }),
+  trainingWorkers: () => request<TrainingWorker[]>("/api/training-workers"),
+  createTrainingWorker: (name: string) =>
+    request<TrainingWorker & { token: string }>("/api/training-workers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  revokeTrainingWorker: (workerId: string) =>
+    request<void>(`/api/training-workers/${workerId}`, { method: "DELETE" }),
   exportModel: (projectId: string, modelId: string, format: string) =>
     fetch(`/api/projects/${projectId}/models/${modelId}/export`, {
       method: "POST",

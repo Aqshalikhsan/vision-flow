@@ -108,6 +108,23 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   await expect(
     page.getByRole("button", { name: /Start training/ }),
   ).toBeDisabled();
+  await expect(page.getByText("Laptop workers", { exact: true })).toBeVisible();
+  const trainingLocation = page.getByLabel("Training location");
+  await expect(trainingLocation).toBeVisible();
+  await trainingLocation.selectOption("remote-auto");
+  await expect(page.getByLabel("Laptop worker")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy();
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   await page
     .getByTestId("project-tabs")

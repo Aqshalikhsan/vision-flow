@@ -1018,6 +1018,105 @@
   align-items: center;
   margin-top: 18px;
 }
+.laptop-workers {
+  display: grid;
+  gap: 9px;
+  margin: 16px 0 20px;
+  padding: 14px;
+  border: 1px solid #e5e0eb;
+  border-radius: 10px;
+  background: #faf9fc;
+}
+.laptop-workers > header,
+.worker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.laptop-workers > header {
+  justify-content: space-between;
+}
+.laptop-workers > header div,
+.worker-row span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.laptop-workers small {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.laptop-workers .secondary {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.worker-row {
+  padding: 9px 0;
+  border-top: 1px solid #ece8f0;
+}
+.worker-row > i {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #a8a3ae;
+}
+.worker-row > i.online {
+  background: #20a979;
+  box-shadow: 0 0 0 4px #20a9791c;
+}
+.worker-row > i.busy {
+  background: #7757e5;
+  box-shadow: 0 0 0 4px #7757e51c;
+}
+.worker-row span {
+  flex: 1;
+}
+.worker-row > button,
+.worker-token button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #ead8dc;
+  border-radius: 6px;
+  color: #b04455;
+  background: #fff;
+  padding: 6px 8px;
+  font-size: 10px;
+}
+.worker-row > button svg,
+.worker-token button svg {
+  width: 13px;
+}
+.worker-token {
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid #d8caef;
+  border-radius: 8px;
+  background: #f4f0ff;
+}
+.worker-token code {
+  display: block;
+  max-width: 100%;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  color: #49358e;
+  background: #fff;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.worker-token button {
+  width: fit-content;
+  color: #5c43b4;
+  border-color: #d8caef;
+}
 .train-actions .primary {
   min-width: 155px;
 }
@@ -2523,9 +2622,21 @@
   }
   .global-search {
     width: 38px;
+    min-width: 38px;
     height: 36px;
     justify-content: center;
     padding: 0;
+  }
+  .crumb {
+    min-width: 0;
+  }
+  .crumb b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .top-actions {
+    flex: 0 0 auto;
   }
   .content {
     width: 100%;

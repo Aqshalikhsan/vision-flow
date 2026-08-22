@@ -55,6 +55,7 @@ export type Model = {
   metricsHistory?: Array<Record<string, number>>;
   alias?: string;
   stage?: "development" | "staging" | "production" | "archived";
+  workerId?: string;
 };
 export type Project = {
   id: string;

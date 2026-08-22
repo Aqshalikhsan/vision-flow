@@ -9,6 +9,7 @@ import io
 import importlib.util
 import ipaddress
 import json
+import logging
 import os
 import random
 import re
@@ -41,6 +42,7 @@ VERSIONS = DATA / "versions"
 RUNS = DATA / "runs"
 EXPORTS = DATA / "exports"
 DB_PATH = DATA / "visionflow.db"
+LOGGER = logging.getLogger("visionflow")
 TRAIN_CANCEL: dict[str, threading.Event] = {}
 TRAIN_SCHEDULER_LOCK = threading.Lock()
 ACTIVE_LEARNING_SCANS: set[str] = set()
@@ -163,6 +165,12 @@ def init_db() -> None:
               member_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
               actor TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS training_workers (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+              prefix TEXT NOT NULL, capabilities TEXT NOT NULL DEFAULT '{}',
+              status TEXT NOT NULL DEFAULT 'offline', current_model_id TEXT,
+              last_seen TEXT, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
         columns = {row["name"] for row in con.execute("PRAGMA table_info(projects)")}
@@ -203,6 +211,17 @@ def init_db() -> None:
             con.execute("ALTER TABLE models ADD COLUMN alias TEXT")
         if "stage" not in model_columns:
             con.execute("ALTER TABLE models ADD COLUMN stage TEXT NOT NULL DEFAULT 'development'")
+        if "worker_id" not in model_columns:
+            con.execute("ALTER TABLE models ADD COLUMN worker_id TEXT")
+        worker_columns = {row["name"] for row in con.execute("PRAGMA table_info(training_workers)")}
+        # Early development builds created the worker registry before token
+        # authentication was added. Keep those databases upgradeable in place.
+        if "token_hash" not in worker_columns:
+            con.execute("ALTER TABLE training_workers ADD COLUMN token_hash TEXT")
+        if "prefix" not in worker_columns:
+            con.execute("ALTER TABLE training_workers ADD COLUMN prefix TEXT")
+        if "revoked" not in worker_columns:
+            con.execute("ALTER TABLE training_workers ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
         member_columns = {row["name"] for row in con.execute("PRAGMA table_info(workspace_members)")}
         if "password_hash" not in member_columns:
             con.execute("ALTER TABLE workspace_members ADD COLUMN password_hash TEXT")
@@ -210,7 +229,10 @@ def init_db() -> None:
             con.execute("ALTER TABLE workspace_members ADD COLUMN password_salt TEXT")
         # Jobs survive an application restart. The scheduler resumes from last.pt
         # when Ultralytics has already written a checkpoint for the run.
-        con.execute("UPDATE models SET status='queued', error='Queued for automatic resume after server restart' WHERE status='training'")
+        for training in con.execute("SELECT id,config FROM models WHERE status='training'").fetchall():
+            config = json.loads(training["config"] or "{}")
+            if config.get("execution_target", "server") == "server":
+                con.execute("UPDATE models SET status='queued', error='Queued for automatic resume after server restart' WHERE id=?", (training["id"],))
         if not con.execute("SELECT 1 FROM workspace_members LIMIT 1").fetchone():
             con.execute("INSERT INTO workspace_members (id,name,email,role,created_at) VALUES (?,?,?,?,?)", (uid(), "Local Owner", "owner@visionflow.local", "owner", now()))
 
@@ -242,7 +264,7 @@ def project_dict(con: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
             "status": m["status"], "progress": m["progress"], "map": m["map"],
             "precision": m["precision"], "recall": m["recall"], "error": m["error"]
             , "config": json.loads(m["config"] or "{}"), "createdAt": m["created_at"], "metricsHistory": json.loads(m["metrics_history"] or "[]"),
-            "alias": m["alias"], "stage": m["stage"] or "development"
+            "alias": m["alias"], "stage": m["stage"] or "development", "workerId": m["worker_id"]
         } for m in models]
     }
 
@@ -346,12 +368,32 @@ class TrainPayload(BaseModel):
     learning_rate: float = Field(default=0.01, gt=0, le=1)
     patience: int = Field(default=50, ge=0, le=300)
     device: str = Field(default="auto", pattern=r"^(auto|cpu|0)$")
+    execution_target: str = Field(default="server", pattern=r"^(server|remote-auto|remote-gpu|remote-cpu)$")
+    worker_id: str | None = None
 
 
 class TrainingSweepPayload(BaseModel):
     base: TrainPayload
     learning_rates: list[float] = Field(default_factory=lambda: [0.01], min_length=1, max_length=4)
     optimizers: list[str] = Field(default_factory=lambda: ["auto"], min_length=1, max_length=4)
+
+
+class TrainingWorkerPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class WorkerHeartbeatPayload(BaseModel):
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkerProgressPayload(BaseModel):
+    progress: int = Field(ge=1, le=99)
+    epoch: int | None = Field(default=None, ge=0)
+    metrics: dict[str, float] = Field(default_factory=dict)
+
+
+class WorkerFailurePayload(BaseModel):
+    error: str = Field(min_length=1, max_length=2000)
 
 
 class ModelRenamePayload(BaseModel):
@@ -479,6 +521,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 async def enforce_workspace_role(request: Request, call_next):
     """Authenticate production sessions and enforce workspace role boundaries."""
     member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
+    if request.url.path.startswith("/api/training-workers/agent/"):
+        return await call_next(request)
     if AUTH_REQUIRED and not member and request.url.path not in AUTH_PUBLIC_PATHS and not request.url.path.startswith("/assets/"):
         return JSONResponse(status_code=401, content={"detail": "Login required"})
     if member:
@@ -2093,6 +2137,282 @@ def delete_version(project_id: str, version_id: str):
             archive.unlink()
 
 
+def worker_from_request(request: Request) -> sqlite3.Row:
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Worker token required")
+    token = authorization.split(" ", 1)[1].strip()
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with db() as con:
+        worker = con.execute(
+            "SELECT * FROM training_workers WHERE token_hash=? AND revoked=0",
+            (token_hash,),
+        ).fetchone()
+    if not worker:
+        raise HTTPException(401, "Invalid or revoked worker token")
+    return worker
+
+
+def worker_json(row: sqlite3.Row) -> dict[str, Any]:
+    last_seen = row["last_seen"]
+    online = False
+    if last_seen:
+        try:
+            online = datetime.fromisoformat(last_seen) > datetime.now(timezone.utc) - timedelta(seconds=90)
+        except ValueError:
+            pass
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "prefix": row["prefix"] or "legacy",
+        "capabilities": json.loads(row["capabilities"] or "{}"),
+        "status": "revoked" if row["revoked"] else (row["status"] if online else "offline"),
+        "currentModelId": row["current_model_id"],
+        "lastSeen": last_seen,
+        "createdAt": row["created_at"],
+        "revoked": bool(row["revoked"]),
+    }
+
+
+def remote_job_json(con: sqlite3.Connection, model: sqlite3.Row) -> dict[str, Any]:
+    project = con.execute("SELECT name,type FROM projects WHERE id=?", (model["project_id"],)).fetchone()
+    version = con.execute(
+        "SELECT id,number FROM versions WHERE project_id=? AND number=?",
+        (model["project_id"], model["version"]),
+    ).fetchone()
+    if not project or not version:
+        raise HTTPException(409, "Training job dataset is unavailable")
+    return {
+        "id": model["id"],
+        "projectId": model["project_id"],
+        "projectName": project["name"],
+        "projectType": project["type"],
+        "version": version["number"],
+        "config": json.loads(model["config"] or "{}"),
+        "datasetUrl": f"/api/training-workers/agent/jobs/{model['id']}/dataset",
+    }
+
+
+@app.get("/api/training-workers")
+def list_training_workers():
+    with db() as con:
+        rows = con.execute("SELECT * FROM training_workers ORDER BY created_at DESC").fetchall()
+    return [worker_json(row) for row in rows]
+
+
+@app.post("/api/training-workers", status_code=201)
+def create_training_worker(payload: TrainingWorkerPayload):
+    worker_name = payload.name.strip()
+    if not worker_name:
+        raise HTTPException(400, "Worker name is required")
+    raw_token = "vfw_" + secrets.token_urlsafe(36)
+    worker_id = uid()
+    prefix = raw_token[:12]
+    with db() as con:
+        con.execute(
+            "INSERT INTO training_workers (id,name,token_hash,prefix,capabilities,status,last_seen,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                worker_id,
+                worker_name,
+                hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+                prefix,
+                "{}",
+                "offline",
+                now(),
+                now(),
+            ),
+        )
+        row = con.execute("SELECT * FROM training_workers WHERE id=?", (worker_id,)).fetchone()
+        log_activity(con, "training-worker.created", worker_name)
+    return {**worker_json(row), "token": raw_token}
+
+
+@app.delete("/api/training-workers/{worker_id}", status_code=204)
+def revoke_training_worker(worker_id: str):
+    with db() as con:
+        worker = con.execute("SELECT * FROM training_workers WHERE id=?", (worker_id,)).fetchone()
+        if not worker:
+            raise HTTPException(404, "Training worker not found")
+        if worker["current_model_id"]:
+            active = con.execute("SELECT status FROM models WHERE id=?", (worker["current_model_id"],)).fetchone()
+            if active and active["status"] == "training":
+                raise HTTPException(409, "Cancel the worker's active training job first")
+        for queued in con.execute("SELECT id,config FROM models WHERE status='queued'").fetchall():
+            config = json.loads(queued["config"] or "{}")
+            if config.get("worker_id") == worker_id:
+                config["worker_id"] = None
+                con.execute("UPDATE models SET config=? WHERE id=?", (json.dumps(config), queued["id"]))
+        con.execute("UPDATE training_workers SET revoked=1,status='offline',current_model_id=NULL WHERE id=?", (worker_id,))
+
+
+@app.post("/api/training-workers/agent/heartbeat")
+def training_worker_heartbeat(payload: WorkerHeartbeatPayload, request: Request):
+    worker = worker_from_request(request)
+    capabilities = {
+        "cuda": bool(payload.capabilities.get("cuda")),
+        "gpuName": str(payload.capabilities.get("gpuName", ""))[:160],
+        "cpu": str(payload.capabilities.get("cpu", ""))[:160],
+        "platform": str(payload.capabilities.get("platform", ""))[:160],
+    }
+    with db() as con:
+        con.execute(
+            "UPDATE training_workers SET capabilities=?,last_seen=?,status=CASE WHEN current_model_id IS NULL THEN 'online' ELSE 'busy' END WHERE id=?",
+            (json.dumps(capabilities), now(), worker["id"]),
+        )
+    return {"id": worker["id"], "status": "ok"}
+
+
+@app.post("/api/training-workers/agent/claim")
+def claim_training_job(request: Request):
+    worker = worker_from_request(request)
+    stale_before = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+    with db() as con:
+        stale_workers = con.execute(
+            "SELECT * FROM training_workers WHERE current_model_id IS NOT NULL AND (revoked=1 OR last_seen IS NULL OR last_seen<?)",
+            (stale_before,),
+        ).fetchall()
+        for stale in stale_workers:
+            model = con.execute("SELECT status,config FROM models WHERE id=?", (stale["current_model_id"],)).fetchone()
+            if model and model["status"] == "training" and json.loads(model["config"] or "{}").get("execution_target", "server") != "server":
+                con.execute("UPDATE models SET status='queued',worker_id=NULL,error='Remote worker disconnected; queued for retry' WHERE id=?", (stale["current_model_id"],))
+            con.execute("UPDATE training_workers SET current_model_id=NULL,status='offline' WHERE id=?", (stale["id"],))
+        current = con.execute("SELECT * FROM models WHERE id=? AND worker_id=?", (worker["current_model_id"], worker["id"])).fetchone() if worker["current_model_id"] else None
+        if current and current["status"] == "training":
+            con.execute("UPDATE training_workers SET last_seen=?,status='busy' WHERE id=?", (now(), worker["id"]))
+            return remote_job_json(con, current)
+        if worker["current_model_id"]:
+            con.execute("UPDATE training_workers SET current_model_id=NULL,status='online' WHERE id=?", (worker["id"],))
+        capabilities = json.loads(worker["capabilities"] or "{}")
+        selected = None
+        for candidate in con.execute("SELECT * FROM models WHERE status='queued' ORDER BY rowid").fetchall():
+            config = json.loads(candidate["config"] or "{}")
+            target = config.get("execution_target", "server")
+            if not str(target).startswith("remote-"):
+                continue
+            if config.get("worker_id") and config["worker_id"] != worker["id"]:
+                continue
+            if target == "remote-gpu" and not capabilities.get("cuda"):
+                continue
+            selected = candidate
+            break
+        if not selected:
+            con.execute("UPDATE training_workers SET last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
+            return Response(status_code=204)
+        updated = con.execute(
+            "UPDATE models SET status='training',progress=2,error=NULL,worker_id=? WHERE id=? AND status='queued'",
+            (worker["id"], selected["id"]),
+        )
+        if not updated.rowcount:
+            return Response(status_code=204)
+        con.execute("UPDATE training_workers SET current_model_id=?,last_seen=?,status='busy' WHERE id=?", (selected["id"], now(), worker["id"]))
+        selected = con.execute("SELECT * FROM models WHERE id=?", (selected["id"],)).fetchone()
+        return remote_job_json(con, selected)
+
+
+def assigned_remote_model(con: sqlite3.Connection, worker_id: str, model_id: str) -> sqlite3.Row:
+    model = con.execute("SELECT * FROM models WHERE id=? AND worker_id=?", (model_id, worker_id)).fetchone()
+    if not model:
+        raise HTTPException(404, "Assigned training job not found")
+    return model
+
+
+@app.get("/api/training-workers/agent/jobs/{model_id}")
+def remote_training_status(model_id: str, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+    return {"id": model_id, "status": model["status"], "progress": model["progress"], "cancelled": model["status"] == "cancelled"}
+
+
+@app.get("/api/training-workers/agent/jobs/{model_id}/dataset")
+def remote_training_dataset(model_id: str, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        version = con.execute("SELECT id FROM versions WHERE project_id=? AND number=?", (model["project_id"], model["version"])).fetchone()
+    if model["status"] != "training" or not version:
+        raise HTTPException(409, "Training dataset is no longer available for this job")
+    return export_version(model["project_id"], version["id"], "yolo")
+
+
+@app.post("/api/training-workers/agent/jobs/{model_id}/progress")
+def remote_training_progress(model_id: str, payload: WorkerProgressPayload, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        if model["status"] != "training":
+            raise HTTPException(409, f"Training job is {model['status']}")
+        history = json.loads(model["metrics_history"] or "[]")
+        history.append({"epoch": payload.epoch or len(history) + 1, **{key: round(float(value), 6) for key, value in payload.metrics.items()}})
+        con.execute("UPDATE models SET progress=?,metrics_history=? WHERE id=?", (payload.progress, json.dumps(history[-500:]), model_id))
+        con.execute("UPDATE training_workers SET last_seen=?,status='busy' WHERE id=?", (now(), worker["id"]))
+    return {"status": "ok"}
+
+
+def metric_percent(metrics: dict[str, Any], *keys: str) -> float:
+    value = next((float(metrics[key]) for key in keys if key in metrics), 0.0)
+    return round(value * 100 if abs(value) <= 1 else value, 1)
+
+
+@app.post("/api/training-workers/agent/jobs/{model_id}/complete")
+async def complete_remote_training(model_id: str, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        if model["status"] != "training":
+            raise HTTPException(409, f"Training job is {model['status']}")
+    target = RUNS / model_id / "weights" / "best.pt"
+    partial = target.with_name("best.upload.pt")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with partial.open("wb") as output:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > 2 * 1024 * 1024 * 1024:
+                    raise HTTPException(413, "Checkpoint exceeds 2 GB")
+                output.write(chunk)
+        if size < 1024:
+            raise HTTPException(400, "Checkpoint is empty or invalid")
+        from ultralytics import YOLO
+        YOLO(str(partial))
+        parsed_metrics = json.loads(request.headers.get("X-VisionFlow-Metrics", "{}"))
+        if not isinstance(parsed_metrics, dict):
+            raise ValueError("metrics must be a JSON object")
+    except Exception as exc:
+        partial.unlink(missing_ok=True)
+        if isinstance(exc, HTTPException):
+            raise
+        LOGGER.exception("Remote checkpoint validation failed for model %s", model_id)
+        raise HTTPException(400, "Uploaded checkpoint could not be validated") from exc
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        if model["status"] != "training":
+            partial.unlink(missing_ok=True)
+            raise HTTPException(409, f"Training job is {model['status']}")
+        partial.replace(target)
+        con.execute(
+            "UPDATE models SET status='ready',progress=100,map=?,precision=?,recall=?,weights_path=?,error=NULL WHERE id=?",
+            (metric_percent(parsed_metrics, "metrics/accuracy_top1", "metrics/mAP50(B)", "metrics/mAP50(M)", "map50"), metric_percent(parsed_metrics, "metrics/precision(B)", "metrics/precision(M)", "precision"), metric_percent(parsed_metrics, "metrics/recall(B)", "metrics/recall(M)", "recall"), str(target), model_id),
+        )
+        con.execute("UPDATE training_workers SET current_model_id=NULL,last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
+        log_activity(con, "training.remote-completed", f"{model['name']} by worker {worker['name']} · {size} bytes", model["project_id"], worker["name"])
+    return {"status": "ready", "modelId": model_id, "bytes": size}
+
+
+@app.post("/api/training-workers/agent/jobs/{model_id}/failed")
+def fail_remote_training(model_id: str, payload: WorkerFailurePayload, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        if model["status"] == "training":
+            con.execute("UPDATE models SET status='failed',error=? WHERE id=?", (payload.error[:1000], model_id))
+        con.execute("UPDATE training_workers SET current_model_id=NULL,last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
+    return {"status": "failed", "modelId": model_id}
+
+
 def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
     try:
         from ultralytics import YOLO
@@ -2147,12 +2467,12 @@ def schedule_training_jobs() -> None:
         return
     try:
         with db() as con:
-            active = con.execute("SELECT 1 FROM models WHERE status='training' LIMIT 1").fetchone()
-            if active:
+            active_rows = con.execute("SELECT config FROM models WHERE status='training'").fetchall()
+            if any(json.loads(row["config"] or "{}").get("execution_target", "server") == "server" for row in active_rows):
                 return
-            queued = con.execute(
-                "SELECT m.*,v.path version_path FROM models m JOIN versions v ON v.project_id=m.project_id AND v.number=m.version WHERE m.status='queued' ORDER BY m.rowid LIMIT 1"
-            ).fetchone()
+            queued = next((row for row in con.execute(
+                "SELECT m.*,v.path version_path FROM models m JOIN versions v ON v.project_id=m.project_id AND v.number=m.version WHERE m.status='queued' ORDER BY m.rowid"
+            ).fetchall() if json.loads(row["config"] or "{}").get("execution_target", "server") == "server"), None)
             if not queued:
                 return
             try:
@@ -2206,15 +2526,26 @@ def start_training(project_id: str, payload: TrainPayload):
             raise HTTPException(400, "Selected model task does not match the project type")
         if not re.match(r"^(yolo(26|12|11)[nslmx](-(seg|pose|obb|cls))?|yolov(10[nsmblx]|9[tsmce](-seg)?|8[nslmx](-(seg|pose|obb|cls))?|5[nslmx]u|3u|3-tinyu))\.pt$", payload.architecture):
             raise HTTPException(400, "Unsupported or unsafe model checkpoint name")
+        if payload.execution_target == "server" and payload.worker_id:
+            raise HTTPException(400, "A laptop worker can only be selected for remote training")
+        if payload.worker_id:
+            worker = con.execute("SELECT * FROM training_workers WHERE id=? AND revoked=0", (payload.worker_id,)).fetchone()
+            if not worker:
+                raise HTTPException(404, "Selected laptop worker was not found")
+            capabilities = json.loads(worker["capabilities"] or "{}")
+            if payload.execution_target == "remote-gpu" and worker["last_seen"] and not capabilities.get("cuda"):
+                raise HTTPException(400, "Selected laptop worker does not report a CUDA GPU")
         annotated = con.execute("SELECT boxes FROM assets WHERE project_id=?", (project_id,)).fetchall()
         if not any(json.loads(row["boxes"]) for row in annotated):
             raise HTTPException(400, "Annotate at least one object before training")
         model_id = uid()
         display = payload.architecture.replace(".pt", "")
         con.execute("INSERT INTO models (id,project_id,name,version,status,progress,config,created_at,metrics_history) VALUES (?,?,?,?,?,?,?,?,?)", (model_id, project_id, display, version["number"], "queued", 0, payload.model_dump_json(), now(), "[]"))
-        log_activity(con, "training.started", f"{display} on version {version['number']}", project_id)
+        destination = "NAS/server" if payload.execution_target == "server" else payload.execution_target.replace("remote-", "laptop ")
+        log_activity(con, "training.started", f"{display} on version {version['number']} · {destination}", project_id)
         result = project_dict(con, project)
-    schedule_training_jobs()
+    if payload.execution_target == "server":
+        schedule_training_jobs()
     return result
 
 
@@ -2247,10 +2578,12 @@ def start_training_sweep(project_id: str, payload: TrainingSweepPayload):
 def cancel_training(project_id: str, model_id: str):
     event = TRAIN_CANCEL.get(model_id)
     with db() as con:
-        model = con.execute("SELECT status FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
+        model = con.execute("SELECT status,config FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
         if not model or model["status"] not in {"queued", "training"}:
             raise HTTPException(404, "Active training job not found")
         if model["status"] == "queued":
+            con.execute("UPDATE models SET status='cancelled',error='Cancelled by user' WHERE id=?", (model_id,))
+        elif json.loads(model["config"] or "{}").get("execution_target", "server") != "server":
             con.execute("UPDATE models SET status='cancelled',error='Cancelled by user' WHERE id=?", (model_id,))
         elif event:
             event.set()
@@ -2301,11 +2634,12 @@ def retry_training(project_id: str, model_id: str):
             raise HTTPException(400, "Saved training configuration is invalid") from exc
         if not con.execute("SELECT 1 FROM versions WHERE project_id=? AND number=?", (project_id, model["version"])).fetchone():
             raise HTTPException(409, "The dataset version used by this model no longer exists")
-        con.execute("UPDATE models SET status='queued',progress=MIN(progress,95),error=NULL WHERE id=?", (model_id,))
+        con.execute("UPDATE models SET status='queued',progress=MIN(progress,95),error=NULL,worker_id=NULL WHERE id=?", (model_id,))
         log_activity(con, "training.resumed", f"{model['name']} from saved checkpoint", project_id)
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         result = project_dict(con, project)
-    schedule_training_jobs()
+    if payload.execution_target == "server":
+        schedule_training_jobs()
     return result
 
 

@@ -69,6 +69,27 @@ Open `http://NAS-IP:8080`, create the first owner account, and keep the generate
 
 The DXP2800 can host the application and CPU inference through Docker. CPU training works but will be substantially slower than a CUDA-capable laptop or workstation, especially beyond nano/small checkpoints. Persistent datasets and `best.pt` artifacts remain on the mounted NAS volume.
 
+### Train on a laptop while the NAS hosts VisionFlow
+
+VisionFlow can keep the website, SQLite metadata, dataset versions, and model artifacts on the NAS while a Windows/Linux laptop performs the actual Ultralytics training. The transfer uses the VisionFlow HTTP API, so the laptop does not need the NAS data folder mounted through SMB.
+
+1. Open a project, generate a dataset version, and go to **Train**.
+2. Under **Laptop workers**, choose **Add laptop**. Copy the one-time PowerShell command immediately; only its hash is saved on the NAS.
+3. On the laptop, clone/copy this repository and install the worker dependencies:
+
+   ```powershell
+   py -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r worker\requirements.txt
+   ```
+
+4. Run the copied command. The worker reports whether CUDA is available, securely claims a compatible queued job, downloads its immutable annotated dataset ZIP, runs real YOLO training, and uploads the validated `best.pt` to the NAS.
+5. In **Training location**, choose **Laptop · Automatic**, **Laptop · CUDA GPU**, or **Laptop · CPU**, then start training. Automatic prefers CUDA and falls back to CPU.
+
+The laptop and NAS must be able to reach each other over the selected VisionFlow address (normally `http://NAS-IP:8080` on the same LAN). Keep the terminal running while training. NVIDIA training requires a CUDA-capable PyTorch installation; verify it with `python -c "import torch; print(torch.cuda.is_available())"`. If the worker is compromised or retired, cancel its active job and revoke its token in the Train page. Use HTTPS when the worker connects across the internet.
+
+When training succeeds, the laptop uploads the real Ultralytics checkpoint. It appears in the Model Registry and can be downloaded using **Download best.pt**. Annotated dataset versions remain separately downloadable as YOLO, COCO, Pascal VOC, LabelMe, or mask ZIP files.
+
 Annotation shortcuts:
 
 - `Ctrl+Z` / `Ctrl+Y`: undo / redo

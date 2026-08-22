@@ -64,6 +64,7 @@ import type {
   AnnotationJob,
   AuthStatus,
   DatasetHealth,
+  TrainingWorker,
   WorkflowNode,
   WorkflowRun,
   WorkspaceMember,
@@ -5551,7 +5552,20 @@ function DatasetTrain({
   const [learningRate, setLearningRate] = useState(0.01);
   const [patience, setPatience] = useState(50);
   const [device, setDevice] = useState("auto");
+  const [executionTarget, setExecutionTarget] = useState<
+    "server" | "remote-auto" | "remote-gpu" | "remote-cpu"
+  >("server");
+  const [workerId, setWorkerId] = useState("");
+  const [workers, setWorkers] = useState<TrainingWorker[]>([]);
+  const [workerToken, setWorkerToken] = useState("");
   const [starting, setStarting] = useState(false);
+  const workerServer =
+    window.location.port === "5173"
+      ? `${window.location.protocol}//${window.location.hostname}:8000`
+      : window.location.origin;
+  const workerCommand = workerToken
+    ? `$env:VISIONFLOW_WORKER_TOKEN="${workerToken}"; python worker/visionflow_worker.py --server "${workerServer}"`
+    : "";
   const active = project.models.some(
     (model) => model.status === "training" || model.status === "queued",
   );
@@ -5572,9 +5586,42 @@ function DatasetTrain({
     )
       setVersionId(project.versions.at(-1)?.id || "");
   }, [project.versions, versionId]);
+  useEffect(() => {
+    const refresh = () =>
+      api
+        .trainingWorkers()
+        .then(setWorkers)
+        .catch(() => {});
+    refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const createWorker = async () => {
+    const name = prompt("Nama laptop worker", "Training Laptop")?.trim();
+    if (!name) return;
+    try {
+      const worker = await api.createTrainingWorker(name);
+      setWorkers((current) => [worker, ...current]);
+      setWorkerId(worker.id);
+      setWorkerToken(worker.token);
+      await navigator.clipboard.writeText(worker.token).catch(() => {});
+      notify(
+        "Token worker dibuat dan disalin. Token hanya ditampilkan sekali.",
+      );
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Gagal membuat worker");
+    }
+  };
   const start = async () => {
     if (!versionId) {
       notify("Buat dan pilih dataset version terlebih dahulu");
+      return;
+    }
+    if (
+      executionTarget !== "server" &&
+      !workers.some((worker) => !worker.revoked)
+    ) {
+      notify("Buat token laptop worker terlebih dahulu");
       return;
     }
     setStarting(true);
@@ -5589,6 +5636,8 @@ function DatasetTrain({
         learning_rate: learningRate,
         patience,
         device,
+        execution_target: executionTarget,
+        worker_id: workerId || undefined,
       });
       update(() => saved);
       notify("Training dimulai menggunakan dataset version yang dipilih");
@@ -5600,6 +5649,11 @@ function DatasetTrain({
   };
   const startSweep = async () => {
     if (!versionId) return notify("Pilih dataset version terlebih dahulu");
+    if (
+      executionTarget !== "server" &&
+      !workers.some((worker) => !worker.revoked)
+    )
+      return notify("Buat token laptop worker terlebih dahulu");
     const rates = (
       prompt("Learning rates (pisahkan koma, maksimum 4)", "0.01, 0.001") || ""
     )
@@ -5635,6 +5689,8 @@ function DatasetTrain({
           learning_rate: learningRate,
           patience,
           device,
+          execution_target: executionTarget,
+          worker_id: workerId || undefined,
         },
         learning_rates: rates,
         optimizers,
@@ -5810,16 +5866,52 @@ function DatasetTrain({
               />
             </label>
             <label>
-              Device
+              Training location
               <select
-                value={device}
-                onChange={(e) => setDevice(e.target.value)}
+                value={executionTarget}
+                onChange={(event) =>
+                  setExecutionTarget(
+                    event.target.value as typeof executionTarget,
+                  )
+                }
               >
-                <option value="auto">Auto</option>
-                <option value="cpu">CPU</option>
-                <option value="0">GPU 0</option>
+                <option value="server">NAS / web server</option>
+                <option value="remote-auto">Laptop · Automatic</option>
+                <option value="remote-gpu">Laptop · CUDA GPU</option>
+                <option value="remote-cpu">Laptop · CPU</option>
               </select>
             </label>
+            {executionTarget === "server" ? (
+              <label>
+                Server device
+                <select
+                  value={device}
+                  onChange={(e) => setDevice(e.target.value)}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="cpu">CPU</option>
+                  <option value="0">GPU 0</option>
+                </select>
+              </label>
+            ) : (
+              <label>
+                Laptop worker
+                <select
+                  value={workerId}
+                  onChange={(event) => setWorkerId(event.target.value)}
+                >
+                  <option value="">Any compatible worker</option>
+                  {workers
+                    .filter((worker) => !worker.revoked)
+                    .map((worker) => (
+                      <option value={worker.id} key={worker.id}>
+                        {worker.name} · {worker.status}
+                        {worker.capabilities.cuda ? " · CUDA" : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
           </div>
           <div className="train-actions">
             <button
@@ -5859,6 +5951,73 @@ function DatasetTrain({
             </div>
             <Activity />
           </div>
+          <div className="laptop-workers">
+            <header>
+              <div>
+                <b>Laptop workers</b>
+                <small>Run jobs outside the NAS and return best.pt.</small>
+              </div>
+              <button className="secondary" onClick={createWorker}>
+                <Plus /> Add laptop
+              </button>
+            </header>
+            {workerToken && (
+              <div className="worker-token">
+                <b>Jalankan sekali di PowerShell laptop</b>
+                <small>
+                  Setelah memasang dependensi dari worker/requirements.txt,
+                  salin perintah ini. Token hanya ditampilkan sekali.
+                </small>
+                <code>{workerCommand}</code>
+                <button
+                  onClick={() => {
+                    void navigator.clipboard.writeText(workerCommand);
+                    notify("Perintah worker disalin");
+                  }}
+                >
+                  <Copy /> Copy command
+                </button>
+              </div>
+            )}
+            {workers
+              .filter((worker) => !worker.revoked)
+              .map((worker) => (
+                <div className="worker-row" key={worker.id}>
+                  <i className={worker.status} />
+                  <span>
+                    <b>{worker.name}</b>
+                    <small>
+                      {worker.status} ·{" "}
+                      {worker.capabilities.gpuName ||
+                        worker.capabilities.cpu ||
+                        "Not connected yet"}
+                    </small>
+                  </span>
+                  <button
+                    title="Revoke worker"
+                    onClick={async () => {
+                      if (!confirm(`Cabut akses ${worker.name}?`)) return;
+                      try {
+                        await api.revokeTrainingWorker(worker.id);
+                        setWorkers(await api.trainingWorkers());
+                        if (workerId === worker.id) setWorkerId("");
+                      } catch (error) {
+                        notify(
+                          error instanceof Error
+                            ? error.message
+                            : "Gagal mencabut worker",
+                        );
+                      }
+                    }}
+                  >
+                    <Trash2 />
+                  </button>
+                </div>
+              ))}
+            {!workers.some((worker) => !worker.revoked) && (
+              <p className="muted">No laptop worker tokens yet.</p>
+            )}
+          </div>
           {[...project.models].reverse().map((model) => (
             <div className="run detailed-run" key={model.id}>
               <div className="run-head">
@@ -5889,8 +6048,16 @@ function DatasetTrain({
                   <div className="run-progress">
                     <span>
                       {model.status === "queued"
-                        ? "Waiting for local compute"
-                        : "Processing locally"}
+                        ? String(
+                            model.config?.execution_target || "server",
+                          ).startsWith("remote-")
+                          ? "Waiting for laptop worker"
+                          : "Waiting for server compute"
+                        : String(
+                              model.config?.execution_target || "server",
+                            ).startsWith("remote-")
+                          ? `Training on ${workers.find((worker) => worker.id === model.workerId)?.name || "laptop"}`
+                          : "Training on server"}
                     </span>
                     <b>{model.progress}%</b>
                   </div>
