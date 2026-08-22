@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import {
   Activity,
   Archive,
@@ -26,6 +27,7 @@ import {
   Keyboard,
   Layers3,
   LayoutDashboard,
+  LogOut,
   Menu,
   MoreHorizontal,
   Network,
@@ -58,6 +60,10 @@ import type { Asset, AugmentationRecipe, Box, Model, Project } from "./types";
 import { api } from "./api";
 import type {
   ActivityEntry,
+  ActiveLearningItem,
+  AnnotationJob,
+  AuthStatus,
+  DatasetHealth,
   WorkflowNode,
   WorkflowRun,
   WorkspaceMember,
@@ -68,6 +74,7 @@ type Page =
   | "project"
   | "dataset"
   | "annotate"
+  | "insights"
   | "versions"
   | "train"
   | "registry"
@@ -80,6 +87,7 @@ const PROJECT_PAGES: Page[] = [
   "project",
   "dataset",
   "annotate",
+  "insights",
   "versions",
   "train",
   "registry",
@@ -504,6 +512,83 @@ const PROJECT_TEMPLATES = [
   },
 ];
 
+function AuthGate({
+  setup,
+  onAuthenticated,
+}: {
+  setup: boolean;
+  onAuthenticated: () => Promise<void>;
+}) {
+  const [name, setName] = useState("Local Owner");
+  const [email, setEmail] = useState("owner@visionflow.local");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      if (setup) await api.bootstrapAuth({ name, email, password });
+      await api.login(email, password);
+      await onAuthenticated();
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Login gagal");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="auth-page">
+      <form className="auth-card" onSubmit={submit}>
+        <span className="brand-mark">
+          <Boxes />
+        </span>
+        <span className="eyebrow">VISIONFLOW SECURE WORKSPACE</span>
+        <h1>{setup ? "Configure workspace owner" : "Welcome back"}</h1>
+        <p>
+          {setup
+            ? "Create the first protected owner account."
+            : "Sign in to datasets, models, and deployments."}
+        </p>
+        {setup && (
+          <label>
+            Name
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </label>
+        )}
+        <label>
+          Email
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Password
+          <input
+            type="password"
+            minLength={8}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+          />
+        </label>
+        {error && <p className="auth-error">{error}</p>}
+        <button className="primary" disabled={busy}>
+          {busy ? "Please wait…" : setup ? "Secure workspace" : "Sign in"}
+        </button>
+      </form>
+    </main>
+  );
+}
+
 function App() {
   const [projects, setProjects] = useState<Project[]>(() => {
     try {
@@ -529,11 +614,19 @@ function App() {
     "checking",
   );
   const [toast, setToast] = useState("");
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
   useEffect(
     () => localStorage.setItem("vf-projects", JSON.stringify(projects)),
     [projects],
   );
   useEffect(() => {
+    api
+      .authStatus()
+      .then(setAuth)
+      .catch(() => setAuth({ required: false, setupRequired: false }));
+  }, []);
+  useEffect(() => {
+    if (!auth || (auth.required && !auth.member)) return;
     api
       .projects()
       .then((remote) => {
@@ -546,7 +639,7 @@ function App() {
         );
       })
       .catch(() => setBackend("offline"));
-  }, []);
+  }, [auth?.required, auth?.member?.id]);
   useEffect(() => {
     const sync = () => {
       const route = parseRoute();
@@ -590,6 +683,14 @@ function App() {
     setToast(s);
     setTimeout(() => setToast(""), 2600);
   };
+  if (!auth) return <div className="auth-loading">Loading VisionFlow…</div>;
+  if (auth.required && !auth.member)
+    return (
+      <AuthGate
+        setup={auth.setupRequired}
+        onAuthenticated={() => api.authStatus().then(setAuth)}
+      />
+    );
   return (
     <div className="app">
       <Sidebar page={page} go={go} onHelp={() => setHelp(true)} />
@@ -673,6 +774,9 @@ function App() {
             update={update}
             notify={notify}
           />
+        )}
+        {page === "insights" && project && (
+          <ProjectInsights project={project} go={go} notify={notify} />
         )}
         {page === "annotate" &&
           project &&
@@ -827,10 +931,21 @@ function App() {
         <ProfileMenu
           backend={backend}
           projects={projects.length}
+          member={auth.member}
           settings={() => {
             setProfile(false);
             go("settings");
           }}
+          logout={
+            auth.required
+              ? async () => {
+                  await api.logout();
+                  setProfile(false);
+                  setProjects([]);
+                  setAuth(await api.authStatus());
+                }
+              : undefined
+          }
           close={() => setProfile(false)}
         />
       )}
@@ -1225,12 +1340,16 @@ function HelpCenter({ close }: { close: () => void }) {
 function ProfileMenu({
   backend,
   projects,
+  member,
   settings,
+  logout,
   close,
 }: {
   backend: "checking" | "online" | "offline";
   projects: number;
+  member?: AuthStatus["member"];
   settings: () => void;
+  logout?: () => Promise<void>;
   close: () => void;
 }) {
   return (
@@ -1239,10 +1358,21 @@ function ProfileMenu({
         <X />
       </button>
       <div className="profile-identity">
-        <span>AK</span>
+        <span>
+          {(member?.name || "Arunika Labs")
+            .split(/\s+/)
+            .slice(0, 2)
+            .map((part) => part[0])
+            .join("")
+            .toUpperCase()}
+        </span>
         <div>
-          <b>Arunika Labs</b>
-          <small>Local workspace owner</small>
+          <b>{member?.name || "Arunika Labs"}</b>
+          <small>
+            {member
+              ? `${member.role} · ${member.email}`
+              : "Local workspace owner"}
+          </small>
         </div>
       </div>
       <div className={"profile-backend " + backend}>
@@ -1257,6 +1387,12 @@ function ProfileMenu({
         Workspace settings
         <ChevronRight />
       </button>
+      {logout && (
+        <button className="profile-logout" onClick={() => void logout()}>
+          <LogOut />
+          Sign out
+        </button>
+      )}
     </div>
   );
 }
@@ -1530,6 +1666,7 @@ function ProjectTabs({ active, go }: { active: Page; go: (p: Page) => void }) {
           ["project", "Overview"],
           ["dataset", "Dataset"],
           ["annotate", "Annotate"],
+          ["insights", "Health & Jobs"],
           ["versions", "Versions"],
           ["train", "Train"],
           ["registry", "Models"],
@@ -3121,6 +3258,11 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   const [batchResults, setBatchResults] = useState<
     Array<{ file: string; predictions: number; error?: string }>
   >([]);
+  const [videoResult, setVideoResult] = useState<{
+    sampledFrames: number;
+    durationSeconds: number;
+    totals: Record<string, number>;
+  } | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [keys, setKeys] = useState<
     Array<{
@@ -3207,6 +3349,23 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     anchor.download = "visionflow-batch-results.json";
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+  const testVideo = async (file?: File) => {
+    if (!file) return;
+    setRunning(true);
+    setVideoResult(null);
+    setError("");
+    try {
+      setVideoResult(await api.inferVideo(project.id, file, threshold / 100));
+    } catch (videoError) {
+      setError(
+        videoError instanceof Error
+          ? videoError.message
+          : "Video inference gagal",
+      );
+    } finally {
+      setRunning(false);
+    }
   };
   const endpoint = `http://localhost:8000/api/projects/${project.id}/infer`;
   const pythonSnippet = `import requests\n\nresponse = requests.post(\n  "${endpoint}",\n  files={"file": open("image.jpg", "rb")},\n  params={"confidence": 0.5}\n)\n\nprint(response.json())`;
@@ -3355,6 +3514,12 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
               >
                 Batch
               </button>
+              <button
+                className={tab === "video" ? "active" : ""}
+                onClick={() => changeTab("video")}
+              >
+                Video
+              </button>
             </div>
             {tab === "image" ? (
               preview ? (
@@ -3407,7 +3572,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   {cameraOn ? "Stop camera" : "Start camera"}
                 </button>
               </div>
-            ) : (
+            ) : tab === "batch" ? (
               <div className="batch-inference">
                 <label className="test-drop">
                   <GalleryHorizontalEnd />
@@ -3437,6 +3602,36 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                         <small>
                           {item.error || `${item.predictions} predictions`}
                         </small>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="video-inference">
+                <label className="test-drop">
+                  <Play />
+                  <b>Analyze a video</b>
+                  <span>Samples one frame per second, up to 300 frames.</span>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/quicktime,video/webm,video/x-msvideo"
+                    onChange={(event) => testVideo(event.target.files?.[0])}
+                  />
+                </label>
+                {running && (
+                  <p className="infer-result">Processing video frames…</p>
+                )}
+                {videoResult && (
+                  <div className="video-results">
+                    <header>
+                      <b>{videoResult.sampledFrames} frames analyzed</b>
+                      <span>{videoResult.durationSeconds}s video</span>
+                    </header>
+                    {Object.entries(videoResult.totals).map(([name, count]) => (
+                      <span key={name}>
+                        <b>{name}</b>
+                        <strong>{count}</strong>
                       </span>
                     ))}
                   </div>
@@ -3645,7 +3840,9 @@ function Workflows({
     },
   ];
   const [nodes, setNodes] = useState<WorkflowNode[]>(initial);
-  const [edges, setEdges] = useState([
+  const [edges, setEdges] = useState<
+    Array<{ from: string; to: string; condition?: "true" | "false" }>
+  >([
     { from: "input", to: "model" },
     { from: "model", to: "count" },
     { from: "count", to: "output" },
@@ -3665,7 +3862,14 @@ function Workflows({
   const [selectedNodeId, setSelectedNodeId] = useState("");
   const [edgeFrom, setEdgeFrom] = useState("");
   const [edgeTo, setEdgeTo] = useState("");
+  const [edgeCondition, setEdgeCondition] = useState<"" | "true" | "false">("");
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [workflowSchedule, setWorkflowSchedule] = useState<{
+    enabled: boolean;
+    intervalMinutes: number;
+    nextRun: string;
+    lastRun?: string;
+  } | null>(null);
   const board = useRef<HTMLDivElement>(null);
   const runInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
@@ -3687,9 +3891,14 @@ function Workflows({
       setRuns([]);
       return;
     }
-    api
-      .workflowRuns(workflowId)
-      .then(setRuns)
+    Promise.all([
+      api.workflowRuns(workflowId),
+      api.workflowSchedule(workflowId),
+    ])
+      .then(([runItems, schedule]) => {
+        setRuns(runItems);
+        setWorkflowSchedule(schedule);
+      })
       .catch(() => setRuns([]));
   }, [workflowId]);
   const validationErrors = useMemo(() => {
@@ -3702,6 +3911,14 @@ function Workflows({
       errors.push("Add an output block.");
     if (edges.some((edge) => edge.from === edge.to))
       errors.push("A block cannot connect to itself.");
+    if (
+      edges.some(
+        (edge) =>
+          !nodes.some((node) => node.id === edge.from) ||
+          !nodes.some((node) => node.id === edge.to),
+      )
+    )
+      errors.push("Remove connections to missing blocks.");
     const seen = new Set<string>();
     if (
       edges.some((edge) => {
@@ -3712,6 +3929,28 @@ function Workflows({
       })
     )
       errors.push("Remove duplicate connections.");
+    const degrees = new Map(nodes.map((node) => [node.id, 0]));
+    const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
+    edges.forEach((edge) => {
+      if (!degrees.has(edge.to) || !outgoing.has(edge.from)) return;
+      degrees.set(edge.to, (degrees.get(edge.to) || 0) + 1);
+      outgoing.get(edge.from)!.push(edge.to);
+    });
+    const queue = [...degrees]
+      .filter(([, degree]) => degree === 0)
+      .map(([id]) => id);
+    let visited = 0;
+    while (queue.length) {
+      const id = queue.shift()!;
+      visited += 1;
+      outgoing.get(id)?.forEach((target) => {
+        const degree = (degrees.get(target) || 0) - 1;
+        degrees.set(target, degree);
+        if (degree === 0) queue.push(target);
+      });
+    }
+    if (visited !== nodes.length)
+      errors.push("Workflow graph cannot contain cycles.");
     return errors;
   }, [edges, nodes]);
   const save = async () => {
@@ -3815,7 +4054,11 @@ function Workflows({
       const parsed = JSON.parse(await file.text()) as {
         name?: string;
         nodes?: WorkflowNode[];
-        edges?: Array<{ from: string; to: string }>;
+        edges?: Array<{
+          from: string;
+          to: string;
+          condition?: "true" | "false";
+        }>;
       };
       if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges))
         throw new Error("Workflow JSON tidak valid");
@@ -3849,13 +4092,43 @@ function Workflows({
       notify(error instanceof Error ? error.message : "Duplikasi gagal");
     }
   };
+  const configureSchedule = async () => {
+    try {
+      const saved = workflowId ? { id: workflowId } : await save();
+      if (workflowSchedule) {
+        if (!confirm("Remove this workflow schedule?")) return;
+        await api.deleteWorkflowSchedule(saved.id);
+        setWorkflowSchedule(null);
+        notify("Workflow schedule removed");
+        return;
+      }
+      const interval = Number(prompt("Run every N minutes", "60"));
+      if (!Number.isInteger(interval) || interval < 1 || interval > 10080)
+        return;
+      const schedule = await api.setWorkflowSchedule(saved.id, true, interval);
+      setWorkflowSchedule(schedule);
+      notify(`Workflow dijadwalkan setiap ${interval} menit`);
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Schedule gagal disimpan",
+      );
+    }
+  };
   const addEdge = () => {
     if (!edgeFrom || !edgeTo || edgeFrom === edgeTo) return;
     if (edges.some((edge) => edge.from === edgeFrom && edge.to === edgeTo))
       return;
-    setEdges((current) => [...current, { from: edgeFrom, to: edgeTo }]);
+    setEdges((current) => [
+      ...current,
+      {
+        from: edgeFrom,
+        to: edgeTo,
+        ...(edgeCondition ? { condition: edgeCondition } : {}),
+      },
+    ]);
     setEdgeFrom("");
     setEdgeTo("");
+    setEdgeCondition("");
   };
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const icon = (type: string) =>
@@ -3902,6 +4175,15 @@ function Workflows({
           </button>
           <button className="secondary" onClick={duplicateCurrent}>
             <Copy /> Duplicate
+          </button>
+          <button
+            className={workflowSchedule ? "secondary scheduled" : "secondary"}
+            onClick={configureSchedule}
+          >
+            <History />
+            {workflowSchedule
+              ? `Every ${workflowSchedule.intervalMinutes}m`
+              : "Schedule"}
           </button>
           <input
             ref={importInput}
@@ -4029,6 +4311,16 @@ function Workflows({
                 </option>
               ))}
             </select>
+            <select
+              value={edgeCondition}
+              onChange={(event) =>
+                setEdgeCondition(event.target.value as "" | "true" | "false")
+              }
+            >
+              <option value="">Always</option>
+              <option value="true">When branch is true</option>
+              <option value="false">When branch is false</option>
+            </select>
             <button onClick={addEdge} disabled={!edgeFrom || !edgeTo}>
               Add connection
             </button>
@@ -4039,6 +4331,7 @@ function Workflows({
                     edge.from}{" "}
                   →{" "}
                   {nodes.find((node) => node.id === edge.to)?.title || edge.to}
+                  {edge.condition ? ` [${edge.condition}]` : ""}
                 </small>
                 <button
                   onClick={() =>
@@ -4316,6 +4609,270 @@ function CreateProject({
   );
 }
 
+function ProjectInsights({
+  project,
+  go,
+  notify,
+}: {
+  project: Project;
+  go: (page: Page) => void;
+  notify: (message: string) => void;
+}) {
+  const [health, setHealth] = useState<DatasetHealth | null>(null);
+  const [jobs, setJobs] = useState<AnnotationJob[]>([]);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [queue, setQueue] = useState<ActiveLearningItem[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+  const load = async () => {
+    const [jobItems, memberItems, active] = await Promise.all([
+      api.annotationJobs(project.id),
+      api.members(),
+      api.activeLearning(project.id),
+    ]);
+    setJobs(jobItems);
+    setMembers(memberItems);
+    setQueue(active.items);
+    setScanning(active.scanning);
+  };
+  const scanHealth = async () => {
+    setLoadingHealth(true);
+    try {
+      setHealth(await api.datasetHealth(project.id));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Dataset scan gagal");
+    } finally {
+      setLoadingHealth(false);
+    }
+  };
+  useEffect(() => {
+    load().catch(() => {});
+    scanHealth();
+  }, [project.id]);
+  useEffect(() => {
+    if (!scanning) return;
+    const timer = window.setInterval(() => load().catch(() => {}), 2500);
+    return () => window.clearInterval(timer);
+  }, [scanning, project.id]);
+  const createJob = async () => {
+    const candidates =
+      health?.issues.map((item) => item.assetId) ||
+      project.assets
+        .filter((asset) => asset.status === "unannotated")
+        .map((asset) => asset.id);
+    if (!candidates.length) {
+      notify("Tidak ada asset yang membutuhkan pekerjaan anotasi");
+      return;
+    }
+    const name = prompt("Nama annotation job", "Dataset cleanup")?.trim();
+    if (!name) return;
+    const assignee =
+      members.find((member) => member.role === "annotator") || members[0];
+    await api.createAnnotationJob(project.id, {
+      name,
+      assignee_id: assignee?.id,
+      asset_ids: candidates,
+    });
+    await load();
+    notify(`${candidates.length} asset dimasukkan ke annotation job`);
+  };
+  const openAsset = (assetId: string) => {
+    localStorage.setItem(`vf-annotate-${project.id}`, assetId);
+    go("annotate");
+  };
+  return (
+    <div className="content insights-page">
+      <ProjectTabs active="insights" go={go} />
+      <div className="project-title">
+        <div>
+          <span className="eyebrow">DATASET OPERATIONS</span>
+          <h1>Health, jobs & active learning</h1>
+          <p>
+            Find data problems, distribute annotation work, and prioritize
+            uncertain samples.
+          </p>
+        </div>
+        <button
+          className="secondary"
+          disabled={loadingHealth}
+          onClick={scanHealth}
+        >
+          <Activity /> {loadingHealth ? "Scanning…" : "Rescan dataset"}
+        </button>
+      </div>
+      {health && (
+        <div className="health-summary">
+          <section className="panel health-score">
+            <strong>{health.score}</strong>
+            <span>
+              <b>Dataset health</b>
+              <small>
+                {health.issueAssets} of {health.assets} assets need attention
+              </small>
+            </span>
+          </section>
+          <section className="panel">
+            <b>{health.duplicateGroups.length}</b>
+            <small>Duplicate groups</small>
+          </section>
+          <section className="panel">
+            <b>{health.imbalanceRatio || "—"}</b>
+            <small>Class imbalance ratio</small>
+          </section>
+          <section className="panel">
+            <b>{health.averageBlurScore}</b>
+            <small>Average sharpness</small>
+          </section>
+        </div>
+      )}
+      <div className="insights-grid">
+        <section className="panel health-issues">
+          <div className="panel-head">
+            <div>
+              <h2>Dataset issues</h2>
+              <p>
+                Duplicates, blur, resolution, labels, and annotation outliers.
+              </p>
+            </div>
+            <button className="primary small" onClick={createJob}>
+              <Plus />
+              Create cleanup job
+            </button>
+          </div>
+          {health?.issues.slice(0, 100).map((item) => (
+            <button key={item.assetId} onClick={() => openAsset(item.assetId)}>
+              <span>
+                <b>{item.name}</b>
+                <small>{item.issues.join(" · ")}</small>
+              </span>
+              <ChevronRight />
+            </button>
+          ))}
+          {health && !health.issues.length && (
+            <div className="zero mini">
+              <Check />
+              <h3>No issues detected</h3>
+            </div>
+          )}
+        </section>
+        <section className="panel annotation-jobs">
+          <div className="panel-head">
+            <div>
+              <h2>Annotation jobs</h2>
+              <p>Assignment and review progress.</p>
+            </div>
+            <CheckSquare />
+          </div>
+          {jobs.map((job) => (
+            <article key={job.id}>
+              <header>
+                <span>
+                  <b>{job.name}</b>
+                  <small>{job.assigneeName || "Unassigned"}</small>
+                </span>
+                <select
+                  value={job.status}
+                  onChange={async (event) => {
+                    await api.updateAnnotationJob(
+                      project.id,
+                      job.id,
+                      event.target.value,
+                    );
+                    await load();
+                  }}
+                >
+                  <option value="open">Open</option>
+                  <option value="in-progress">In progress</option>
+                  <option value="review">Review</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </header>
+              <div className="job-meter">
+                <i
+                  style={{
+                    width: `${job.total ? (job.completed / job.total) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+              <footer>
+                <span>
+                  {job.completed}/{job.total} annotated
+                </span>
+                <span>{job.approved} approved</span>
+              </footer>
+            </article>
+          ))}
+          {!jobs.length && <p>No annotation jobs yet.</p>}
+        </section>
+      </div>
+      <section className="panel active-learning-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Active Learning</h2>
+            <p>
+              Use a ready YOLO model to prioritize uncertain, unannotated
+              images.
+            </p>
+          </div>
+          <button
+            className="primary small"
+            disabled={
+              scanning ||
+              !project.models.some((model) => model.status === "ready")
+            }
+            onClick={async () => {
+              try {
+                await api.startActiveLearning(project.id, {
+                  limit: 100,
+                  confidence: 0.5,
+                });
+                setScanning(true);
+                notify("Active-learning scan dimulai");
+              } catch (error) {
+                notify(error instanceof Error ? error.message : "Scan gagal");
+              }
+            }}
+          >
+            <Sparkles />
+            {scanning ? "Scanning…" : "Scan uncertain images"}
+          </button>
+        </div>
+        <div className="active-learning-list">
+          {queue
+            .filter((item) => item.status === "pending")
+            .map((item) => (
+              <div key={item.id}>
+                <strong>{Math.round(item.score * 100)}</strong>
+                <span>
+                  <b>{item.name}</b>
+                  <small>{item.reason}</small>
+                </span>
+                <button onClick={() => openAsset(item.assetId)}>
+                  Annotate
+                </button>
+                <button
+                  onClick={async () => {
+                    await api.updateActiveLearning(
+                      project.id,
+                      item.id,
+                      "dismissed",
+                    );
+                    await load();
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ))}
+          {!queue.some((item) => item.status === "pending") && (
+            <p>No pending samples. Run a scan after a model is ready.</p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function DatasetVersions({
   project,
   go,
@@ -4335,6 +4892,17 @@ function DatasetVersions({
     useState<AugmentationRecipe>(defaultAugmentations);
   const [generating, setGenerating] = useState(false);
   const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [versionDiffs, setVersionDiffs] = useState<
+    Record<
+      string,
+      {
+        added: string[];
+        removed: string[];
+        changed: string[];
+        unchanged: number;
+      }
+    >
+  >({});
   const previewAsset = project.assets[0];
   const enabledCount = Object.values(recipe).filter(
     (setting) => setting.enabled,
@@ -4447,6 +5015,29 @@ function DatasetVersions({
         ? current.filter((value) => value !== id)
         : [...current.slice(-1), id],
     );
+  const inspectDiff = async (versionId: string) => {
+    try {
+      const diff = await api.versionDiff(project.id, versionId);
+      setVersionDiffs((current) => ({ ...current, [versionId]: diff }));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Version diff gagal");
+    }
+  };
+  const rollback = async (version: Project["versions"][number]) => {
+    if (
+      !confirm(
+        `Kembalikan annotations dan splits ke v${version.number}? Metadata saat ini akan ditimpa.`,
+      )
+    )
+      return;
+    try {
+      const saved = await api.rollbackVersion(project.id, version.id);
+      update(() => saved);
+      notify(`Dataset dikembalikan ke snapshot v${version.number}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Rollback gagal");
+    }
+  };
   const compared = compareIds
     .map((id) => project.versions.find((version) => version.id === id))
     .filter(Boolean) as Project["versions"];
@@ -4770,6 +5361,8 @@ function DatasetVersions({
                     >
                       Compare
                     </button>
+                    <button onClick={() => inspectDiff(v.id)}>Diff</button>
+                    <button onClick={() => rollback(v)}>Rollback</button>
                     <a href={api.exportUrl(project.id, v.id, "yolo")} download>
                       YOLO ZIP
                     </a>
@@ -4777,6 +5370,14 @@ function DatasetVersions({
                       COCO ZIP
                     </a>
                   </div>
+                  {versionDiffs[v.id] && (
+                    <div className="version-diff-summary">
+                      <span>+{versionDiffs[v.id].added.length} added</span>
+                      <span>~{versionDiffs[v.id].changed.length} changed</span>
+                      <span>-{versionDiffs[v.id].removed.length} removed</span>
+                      <span>{versionDiffs[v.id].unchanged} unchanged</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -4921,6 +5522,57 @@ function DatasetTrain({
       notify("Training dimulai menggunakan dataset version yang dipilih");
     } catch (e) {
       notify(e instanceof Error ? e.message : "Training gagal dimulai");
+    } finally {
+      setStarting(false);
+    }
+  };
+  const startSweep = async () => {
+    if (!versionId) return notify("Pilih dataset version terlebih dahulu");
+    const rates = (
+      prompt("Learning rates (pisahkan koma, maksimum 4)", "0.01, 0.001") || ""
+    )
+      .split(",")
+      .map(Number)
+      .filter((value) => value > 0 && value <= 1)
+      .slice(0, 4);
+    const optimizers = (
+      prompt("Optimizers (auto, SGD, Adam, AdamW)", "auto, AdamW") || ""
+    )
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    if (
+      !rates.length ||
+      !optimizers.length ||
+      rates.length * optimizers.length > 8
+    ) {
+      notify("Sweep membutuhkan 1–8 kombinasi valid");
+      return;
+    }
+    setStarting(true);
+    try {
+      const saved = await api.trainSweep(project.id, {
+        base: {
+          architecture,
+          epochs,
+          image_size: imageSize,
+          version_id: versionId,
+          batch_size: batchSize,
+          optimizer,
+          learning_rate: learningRate,
+          patience,
+          device,
+        },
+        learning_rates: rates,
+        optimizers,
+      });
+      update(() => saved);
+      notify(
+        `${rates.length * optimizers.length} eksperimen dimasukkan ke training queue`,
+      );
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Sweep gagal dimulai");
     } finally {
       setStarting(false);
     }
@@ -5105,6 +5757,13 @@ function DatasetTrain({
               Delete selected version
             </button>
             <button
+              className="secondary"
+              disabled={starting || active || !versionId}
+              onClick={startSweep}
+            >
+              <FlaskConical /> Hyperparameter sweep
+            </button>
+            <button
               className="primary"
               disabled={starting || active || !versionId}
               onClick={start}
@@ -5179,20 +5838,30 @@ function DatasetTrain({
                 </>
               )}
               {model.status === "ready" && (
-                <div className="metrics">
-                  <span>
-                    <b>{model.map}%</b>
-                    <small>mAP50</small>
-                  </span>
-                  <span>
-                    <b>{model.precision}%</b>
-                    <small>Precision</small>
-                  </span>
-                  <span>
-                    <b>{model.recall}%</b>
-                    <small>Recall</small>
-                  </span>
-                </div>
+                <>
+                  <div className="metrics">
+                    <span>
+                      <b>{model.map}%</b>
+                      <small>mAP50</small>
+                    </span>
+                    <span>
+                      <b>{model.precision}%</b>
+                      <small>Precision</small>
+                    </span>
+                    <span>
+                      <b>{model.recall}%</b>
+                      <small>Recall</small>
+                    </span>
+                  </div>
+                  <a
+                    className="download-best"
+                    href={api.modelWeightsUrl(project.id, model.id)}
+                    download
+                  >
+                    <Download />
+                    Download best.pt
+                  </a>
+                </>
               )}
               {model.error && <p className="run-error">{model.error}</p>}
             </div>
@@ -5972,6 +6641,29 @@ function ModelRegistry({
 }) {
   const [exporting, setExporting] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const importWeightsInput = useRef<HTMLInputElement>(null);
+  const importWeights = async (file?: File) => {
+    if (!file) return;
+    const name = prompt("Nama model", file.name.replace(/\.pt$/i, ""))?.trim();
+    if (!name) return;
+    const versionId = project.versions.at(-1)?.id;
+    if (!versionId) {
+      notify("Buat dataset version sebelum mengimpor model");
+      return;
+    }
+    try {
+      const saved = await api.importModel(project.id, file, {
+        name,
+        version_id: versionId,
+      });
+      update(() => saved);
+      notify("best.pt tervalidasi dan dimasukkan ke Model Registry");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Import model gagal");
+    } finally {
+      if (importWeightsInput.current) importWeightsInput.current.value = "";
+    }
+  };
   const rename = async (id: string, current: string) => {
     const name = prompt("Nama model", current)?.trim();
     if (!name) return;
@@ -6065,6 +6757,19 @@ function ModelRegistry({
             formats.
           </p>
         </div>
+        <button
+          className="secondary"
+          onClick={() => importWeightsInput.current?.click()}
+        >
+          <Upload /> Import best.pt
+        </button>
+        <input
+          ref={importWeightsInput}
+          hidden
+          type="file"
+          accept=".pt"
+          onChange={(event) => importWeights(event.target.files?.[0])}
+        />
       </div>
       {comparedModels.length === 2 && (
         <section className="panel model-comparison">
@@ -6214,6 +6919,9 @@ function ModelRegistry({
             </div>
             {model.status === "ready" && (
               <div className="registry-exports">
+                <a href={api.modelWeightsUrl(project.id, model.id)} download>
+                  BEST.PT
+                </a>
                 {["onnx", "torchscript", "openvino", "ncnn", "tflite"].map(
                   (format) => (
                     <button
@@ -6388,6 +7096,13 @@ function DatasetManager({
       else filtered.forEach((asset) => next.add(asset.id));
       return next;
     });
+  const downloadAnnotated = (format: string) => {
+    if (!format) return;
+    const anchor = document.createElement("a");
+    anchor.href = api.annotatedExportUrl(project.id, format);
+    anchor.download = "";
+    anchor.click();
+  };
   return (
     <div className="content dataset-page">
       <ProjectTabs active="dataset" go={go} />
@@ -6398,6 +7113,25 @@ function DatasetManager({
           <p>Import, inspect, filter, split, and clean your local dataset.</p>
         </div>
         <div className="title-actions">
+          <label className="export-dataset-select">
+            <Download />
+            <select
+              defaultValue=""
+              onChange={(event) => {
+                downloadAnnotated(event.target.value);
+                event.target.value = "";
+              }}
+            >
+              <option value="" disabled>
+                Download annotated ZIP
+              </option>
+              <option value="yolo">YOLO</option>
+              <option value="coco">COCO JSON</option>
+              <option value="voc">Pascal VOC</option>
+              <option value="labelme">LabelMe</option>
+              <option value="masks">PNG masks</option>
+            </select>
+          </label>
           <button
             className="secondary auto-label-button"
             disabled={labeling}
@@ -6707,6 +7441,29 @@ function AssetPreviewModal({
       .map(([key, value]) => `${key}=${value}`)
       .join("\n"),
   );
+  const [comment, setComment] = useState("");
+  const [collaboration, setCollaboration] = useState<{
+    revisions: Array<{
+      id: string;
+      actor: string;
+      createdAt: string;
+      annotations: number;
+    }>;
+    comments: Array<{
+      id: string;
+      actor: string;
+      body: string;
+      createdAt: string;
+    }>;
+  }>({ revisions: [], comments: [] });
+  const loadCollaboration = () =>
+    api
+      .assetCollaboration(project.id, asset.id)
+      .then(setCollaboration)
+      .catch(() => {});
+  useEffect(() => {
+    loadCollaboration();
+  }, [project.id, asset.id]);
   const submit = () => {
     const parsed = Object.fromEntries(
       metadata
@@ -6792,6 +7549,58 @@ function AssetPreviewModal({
             />
             <small>One key=value pair per line.</small>
           </label>
+          <div className="asset-collaboration">
+            <h3>Comments & revision history</h3>
+            <div className="asset-comments">
+              {collaboration.comments.map((item) => (
+                <p key={item.id}>
+                  <b>{item.actor}</b>
+                  <span>{item.body}</span>
+                  <small>{item.createdAt.slice(0, 16).replace("T", " ")}</small>
+                </p>
+              ))}
+              {!collaboration.comments.length && (
+                <small>No comments yet.</small>
+              )}
+            </div>
+            <div className="comment-compose">
+              <input
+                value={comment}
+                onChange={(event) => setComment(event.target.value)}
+                placeholder="Request a change or leave context…"
+              />
+              <button
+                disabled={!comment.trim()}
+                onClick={async () => {
+                  await api.addAssetComment(
+                    project.id,
+                    asset.id,
+                    comment.trim(),
+                  );
+                  setComment("");
+                  loadCollaboration();
+                }}
+              >
+                Send
+              </button>
+            </div>
+            {!!collaboration.revisions.length && (
+              <details>
+                <summary>
+                  {collaboration.revisions.length} saved revisions
+                </summary>
+                {collaboration.revisions.slice(0, 10).map((item) => (
+                  <p key={item.id}>
+                    <b>{item.actor}</b>
+                    <span>{item.annotations} annotations</span>
+                    <small>
+                      {item.createdAt.slice(0, 16).replace("T", " ")}
+                    </small>
+                  </p>
+                ))}
+              </details>
+            )}
+          </div>
           <footer>
             <button className="secondary" onClick={annotate}>
               <PenTool />
@@ -6874,11 +7683,17 @@ function LocalSettings({
     if (!name) return;
     const email = prompt("Email anggota")?.trim();
     if (!email) return;
+    const password = prompt("Password awal (minimal 8 karakter)") || "";
+    if (password.length < 8) {
+      notify("Password minimal 8 karakter");
+      return;
+    }
     try {
       const created = await api.createMember({
         name,
         email,
         role: "annotator",
+        password,
       });
       setMembers((current) => [...current, created]);
       notify("Anggota workspace ditambahkan");
@@ -7042,6 +7857,35 @@ function LocalSettings({
                 onClick={() => activateMember(member)}
               >
                 {activeMemberId === member.id ? "Active" : "Use account"}
+              </button>
+              <button
+                onClick={async () => {
+                  const password =
+                    prompt("Password baru (minimal 8 karakter)") || "";
+                  if (password.length < 8) return;
+                  try {
+                    const updated = await api.updateMember(member.id, {
+                      name: member.name,
+                      email: member.email,
+                      role: member.role,
+                      password,
+                    });
+                    setMembers((current) =>
+                      current.map((item) =>
+                        item.id === member.id ? updated : item,
+                      ),
+                    );
+                    notify("Password anggota diperbarui");
+                  } catch (error) {
+                    notify(
+                      error instanceof Error
+                        ? error.message
+                        : "Gagal mengubah password",
+                    );
+                  }
+                }}
+              >
+                Password
               </button>
               <button
                 className="delete"

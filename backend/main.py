@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import base64
+import asyncio
+from collections import defaultdict, deque
+import hmac
 import hashlib
 import io
+import importlib.util
 import ipaddress
 import json
+import os
 import random
 import re
 import secrets
@@ -18,15 +23,15 @@ import zipfile
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +43,10 @@ EXPORTS = DATA / "exports"
 DB_PATH = DATA / "visionflow.db"
 TRAIN_CANCEL: dict[str, threading.Event] = {}
 TRAIN_SCHEDULER_LOCK = threading.Lock()
+ACTIVE_LEARNING_SCANS: set[str] = set()
+WORKFLOW_SCHEDULER_STARTED = False
+DEPLOY_RATE_LIMIT = max(1, int(os.getenv("VISIONFLOW_RATE_LIMIT", "120")))
+DEPLOY_REQUESTS: dict[str, deque[float]] = defaultdict(deque)
 for folder in (DATA, UPLOADS, VERSIONS, RUNS, EXPORTS):
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -121,6 +130,39 @@ def init_db() -> None:
               counts TEXT NOT NULL DEFAULT '{}', error TEXT, created_at TEXT NOT NULL,
               duration_ms REAL NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+              token_hash TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+              created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS annotation_jobs (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              name TEXT NOT NULL, assignee_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
+              asset_ids TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS active_learning_queue (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              model_id TEXT REFERENCES models(id) ON DELETE SET NULL, score REAL NOT NULL,
+              reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+              UNIQUE(project_id,asset_id)
+            );
+            CREATE TABLE IF NOT EXISTS workflow_schedules (
+              id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL UNIQUE REFERENCES workflows(id) ON DELETE CASCADE,
+              enabled INTEGER NOT NULL DEFAULT 1, interval_minutes INTEGER NOT NULL,
+              next_run TEXT NOT NULL, last_run TEXT, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS annotation_revisions (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              boxes TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS annotation_comments (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              member_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
+              actor TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             """
         )
         columns = {row["name"] for row in con.execute("PRAGMA table_info(projects)")}
@@ -161,6 +203,11 @@ def init_db() -> None:
             con.execute("ALTER TABLE models ADD COLUMN alias TEXT")
         if "stage" not in model_columns:
             con.execute("ALTER TABLE models ADD COLUMN stage TEXT NOT NULL DEFAULT 'development'")
+        member_columns = {row["name"] for row in con.execute("PRAGMA table_info(workspace_members)")}
+        if "password_hash" not in member_columns:
+            con.execute("ALTER TABLE workspace_members ADD COLUMN password_hash TEXT")
+        if "password_salt" not in member_columns:
+            con.execute("ALTER TABLE workspace_members ADD COLUMN password_salt TEXT")
         # Jobs survive an application restart. The scheduler resumes from last.pt
         # when Ultralytics has already written a checkpoint for the run.
         con.execute("UPDATE models SET status='queued', error='Queued for automatic resume after server restart' WHERE status='training'")
@@ -301,6 +348,12 @@ class TrainPayload(BaseModel):
     device: str = Field(default="auto", pattern=r"^(auto|cpu|0)$")
 
 
+class TrainingSweepPayload(BaseModel):
+    base: TrainPayload
+    learning_rates: list[float] = Field(default_factory=lambda: [0.01], min_length=1, max_length=4)
+    optimizers: list[str] = Field(default_factory=lambda: ["auto"], min_length=1, max_length=4)
+
+
 class ModelRenamePayload(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
@@ -343,6 +396,79 @@ class MemberPayload(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     email: str = Field(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", max_length=160)
     role: str = Field(pattern=r"^(owner|admin|annotator|viewer)$")
+    password: str | None = Field(default=None, min_length=8, max_length=200)
+
+
+class LoginPayload(BaseModel):
+    email: str = Field(max_length=160)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class BootstrapPayload(LoginPayload):
+    name: str = Field(default="Local Owner", min_length=1, max_length=80)
+
+
+class AnnotationJobPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    assignee_id: str | None = None
+    asset_ids: list[str] = Field(min_length=1, max_length=5000)
+
+
+class JobStatusPayload(BaseModel):
+    status: str = Field(pattern=r"^(open|in-progress|review|completed)$")
+
+
+class ActiveLearningPayload(BaseModel):
+    model_id: str | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    confidence: float = Field(default=0.5, ge=0.01, le=0.99)
+
+
+class QueueStatusPayload(BaseModel):
+    status: str = Field(pattern=r"^(pending|accepted|dismissed)$")
+
+
+class WorkflowSchedulePayload(BaseModel):
+    enabled: bool = True
+    interval_minutes: int = Field(default=60, ge=1, le=10080)
+
+
+class AnnotationCommentPayload(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+AUTH_REQUIRED = os.getenv("VISIONFLOW_REQUIRE_AUTH", "0").lower() in {"1", "true", "yes"}
+AUTH_PUBLIC_PATHS = {
+    "/",
+    "/favicon.svg",
+    "/api/health",
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/bootstrap",
+    "/docs",
+    "/openapi.json",
+}
+
+
+def password_digest(password: str, salt_hex: str | None = None) -> tuple[str, str]:
+    salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 310_000)
+    return digest.hex(), salt.hex()
+
+
+def session_member(authorization: str | None, cookie_token: str | None = None) -> sqlite3.Row | None:
+    raw_token = cookie_token
+    if authorization and authorization.lower().startswith("bearer "):
+        raw_token = authorization.split(" ", 1)[1]
+    if not raw_token:
+        return None
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    with db() as con:
+        return con.execute(
+            "SELECT m.* FROM auth_sessions s JOIN workspace_members m ON m.id=s.member_id WHERE s.token_hash=? AND s.expires_at>?",
+            (token_hash, now()),
+        ).fetchone()
 
 
 app = FastAPI(title="Roboflow Local API", version="0.3.0")
@@ -351,10 +477,21 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 
 @app.middleware("http")
 async def enforce_workspace_role(request: Request, call_next):
-    """Apply lightweight role boundaries for the single-machine workspace."""
+    """Authenticate production sessions and enforce workspace role boundaries."""
+    member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
+    if AUTH_REQUIRED and not member and request.url.path not in AUTH_PUBLIC_PATHS and not request.url.path.startswith("/assets/"):
+        return JSONResponse(status_code=401, content={"detail": "Login required"})
+    if member:
+        request.state.member_id = member["id"]
+        request.state.actor = member["name"]
+        role = member["role"]
+    else:
+        request.state.actor = "Local Owner"
+        role = request.headers.get("X-Workspace-Role", "owner").lower()
+    if request.url.path.startswith("/api/auth/"):
+        return await call_next(request)
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return await call_next(request)
-    role = request.headers.get("X-Workspace-Role", "owner").lower()
     if role in {"owner", "admin"}:
         return await call_next(request)
     path = request.url.path
@@ -412,12 +549,89 @@ def validate_zip_size(archive: zipfile.ZipFile, maximum_uncompressed: int) -> No
 
 @app.get("/api/health")
 def health():
-    try:
-        import ultralytics  # noqa: F401
-        ml_ready = True
-    except ImportError:
-        ml_ready = False
+    ml_ready = importlib.util.find_spec("ultralytics") is not None
     return {"status": "ok", "database": str(DB_PATH), "mlReady": ml_ready}
+
+
+def member_json(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "email": row["email"],
+        "role": row["role"],
+        "createdAt": row["created_at"],
+        "hasPassword": bool(row["password_hash"]),
+    }
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
+    with db() as con:
+        setup_required = not con.execute("SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL LIMIT 1").fetchone()
+    return {"required": AUTH_REQUIRED, "setupRequired": setup_required, "member": member_json(member) if member else None}
+
+
+@app.post("/api/auth/bootstrap", status_code=201)
+def bootstrap_auth(payload: BootstrapPayload):
+    digest, salt = password_digest(payload.password)
+    with db() as con:
+        if con.execute("SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL LIMIT 1").fetchone():
+            raise HTTPException(409, "Workspace authentication is already configured")
+        owner = con.execute("SELECT * FROM workspace_members WHERE role='owner' ORDER BY rowid LIMIT 1").fetchone()
+        if owner:
+            member_id = owner["id"]
+            con.execute(
+                "UPDATE workspace_members SET name=?,email=?,password_hash=?,password_salt=? WHERE id=?",
+                (payload.name.strip(), payload.email.lower(), digest, salt, member_id),
+            )
+        else:
+            member_id = uid()
+            con.execute(
+                "INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)",
+                (member_id, payload.name.strip(), payload.email.lower(), "owner", now(), digest, salt),
+            )
+    return {"status": "configured"}
+
+
+@app.post("/api/auth/login")
+def login(payload: LoginPayload):
+    with db() as con:
+        member = con.execute("SELECT * FROM workspace_members WHERE email=?", (payload.email.lower(),)).fetchone()
+        if not member or not member["password_hash"] or not member["password_salt"]:
+            raise HTTPException(401, "Invalid email or password")
+        digest, _ = password_digest(payload.password, member["password_salt"])
+        if not hmac.compare_digest(digest, member["password_hash"]):
+            raise HTTPException(401, "Invalid email or password")
+        token = secrets.token_urlsafe(32)
+        expires = datetime.now(timezone.utc) + timedelta(days=30)
+        con.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (now(),))
+        con.execute(
+            "INSERT INTO auth_sessions (token_hash,member_id,created_at,expires_at) VALUES (?,?,?,?)",
+            (hashlib.sha256(token.encode("utf-8")).hexdigest(), member["id"], now(), expires.isoformat()),
+        )
+    response = JSONResponse({"token": token, "member": member_json(member)})
+    response.set_cookie("vf_session", token, max_age=30 * 86400, httponly=True, samesite="lax", secure=False)
+    return response
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(request: Request):
+    token = request.cookies.get("vf_session")
+    if token:
+        with db() as con:
+            con.execute("DELETE FROM auth_sessions WHERE token_hash=?", (hashlib.sha256(token.encode("utf-8")).hexdigest(),))
+    response = Response(status_code=204)
+    response.delete_cookie("vf_session")
+    return response
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
+    if not member:
+        raise HTTPException(401, "Login required")
+    return member_json(member)
 
 
 @app.get("/api/system")
@@ -436,18 +650,20 @@ def system_info():
 @app.get("/api/members")
 def list_members():
     with db() as con:
-        return [{"id": row["id"], "name": row["name"], "email": row["email"], "role": row["role"], "createdAt": row["created_at"]} for row in con.execute("SELECT * FROM workspace_members ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'annotator' THEN 2 ELSE 3 END,rowid")]
+        return [member_json(row) for row in con.execute("SELECT * FROM workspace_members ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'annotator' THEN 2 ELSE 3 END,rowid")]
 
 
 @app.post("/api/members", status_code=201)
 def create_member(payload: MemberPayload):
     member_id = uid()
+    digest, salt = password_digest(payload.password) if payload.password else (None, None)
     try:
         with db() as con:
-            con.execute("INSERT INTO workspace_members (id,name,email,role,created_at) VALUES (?,?,?,?,?)", (member_id, payload.name.strip(), payload.email.lower(), payload.role, now()))
+            con.execute("INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)", (member_id, payload.name.strip(), payload.email.lower(), payload.role, now(), digest, salt))
+            row = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
     except sqlite3.IntegrityError as exc:
         raise HTTPException(409, "A member with this email already exists") from exc
-    return {"id": member_id, **payload.model_dump(), "email": payload.email.lower(), "createdAt": now()}
+    return member_json(row)
 
 
 @app.put("/api/members/{member_id}")
@@ -459,10 +675,15 @@ def update_member(member_id: str, payload: MemberPayload):
         if member["role"] == "owner" and payload.role != "owner" and con.execute("SELECT COUNT(*) n FROM workspace_members WHERE role='owner'").fetchone()["n"] <= 1:
             raise HTTPException(409, "The final workspace owner cannot be demoted")
         try:
-            con.execute("UPDATE workspace_members SET name=?,email=?,role=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, member_id))
+            if payload.password:
+                digest, salt = password_digest(payload.password)
+                con.execute("UPDATE workspace_members SET name=?,email=?,role=?,password_hash=?,password_salt=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, digest, salt, member_id))
+            else:
+                con.execute("UPDATE workspace_members SET name=?,email=?,role=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, member_id))
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "A member with this email already exists") from exc
-    return {"id": member_id, **payload.model_dump(), "email": payload.email.lower(), "createdAt": member["created_at"]}
+        updated = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
+    return member_json(updated)
 
 
 @app.delete("/api/members/{member_id}", status_code=204)
@@ -633,6 +854,176 @@ def list_activity(project_id: str | None = None, limit: int = 100):
     return [{"id": row["id"], "projectId": row["project_id"], "action": row["action"], "detail": row["detail"], "actor": row["actor"], "createdAt": row["created_at"]} for row in rows]
 
 
+@app.get("/api/projects/{project_id}/health")
+def dataset_health(project_id: str):
+    with db() as con:
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise HTTPException(404, "Project not found")
+        assets = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (project_id,)).fetchall()
+    issues: list[dict[str, Any]] = []
+    hashes: dict[str, list[str]] = {}
+    class_counts: dict[str, int] = {name: 0 for name in json.loads(project["classes"])}
+    split_counts = {"train": 0, "valid": 0, "test": 0}
+    blur_scores: list[float] = []
+    for asset in assets:
+        asset_issues: list[str] = []
+        boxes = json.loads(asset["boxes"] or "[]")
+        split_counts[asset["split"]] = split_counts.get(asset["split"], 0) + 1
+        if not boxes:
+            asset_issues.append("unlabeled")
+        for box in boxes:
+            class_counts[box.get("label", "unknown")] = class_counts.get(box.get("label", "unknown"), 0) + 1
+            area = float(box.get("w", 0)) * float(box.get("h", 0)) / 10_000
+            if area < 0.0005:
+                asset_issues.append("tiny-annotation")
+            elif area > 0.9:
+                asset_issues.append("oversized-annotation")
+        path = Path(asset["path"])
+        if path.is_file():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            hashes.setdefault(digest, []).append(asset["id"])
+            try:
+                with Image.open(path) as image:
+                    width, height = image.size
+                if min(width, height) < 320:
+                    asset_issues.append("low-resolution")
+                import cv2
+                grayscale = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+                if grayscale is not None:
+                    blur = float(cv2.Laplacian(grayscale, cv2.CV_64F).var())
+                    blur_scores.append(blur)
+                    if blur < 60:
+                        asset_issues.append("blurry")
+            except Exception:
+                asset_issues.append("unreadable")
+        else:
+            asset_issues.append("missing-file")
+        if asset_issues:
+            issues.append({"assetId": asset["id"], "name": asset["name"], "issues": sorted(set(asset_issues))})
+    duplicate_groups = [ids for ids in hashes.values() if len(ids) > 1]
+    duplicate_ids = {asset_id for group in duplicate_groups for asset_id in group[1:]}
+    for asset_id in duplicate_ids:
+        item = next((entry for entry in issues if entry["assetId"] == asset_id), None)
+        if item:
+            item["issues"].append("duplicate")
+        else:
+            asset = next(row for row in assets if row["id"] == asset_id)
+            issues.append({"assetId": asset_id, "name": asset["name"], "issues": ["duplicate"]})
+    imbalance = 0
+    nonzero = [value for value in class_counts.values() if value]
+    if len(nonzero) > 1:
+        imbalance = round(max(nonzero) / max(1, min(nonzero)), 2)
+    score = max(0, round(100 - len({item["assetId"] for item in issues}) / max(1, len(assets)) * 100))
+    return {
+        "score": score,
+        "assets": len(assets),
+        "issues": issues,
+        "issueAssets": len({item["assetId"] for item in issues}),
+        "duplicateGroups": duplicate_groups,
+        "classCounts": class_counts,
+        "splitCounts": split_counts,
+        "imbalanceRatio": imbalance,
+        "averageBlurScore": round(sum(blur_scores) / len(blur_scores), 1) if blur_scores else 0,
+    }
+
+
+@app.get("/api/projects/{project_id}/annotation-jobs")
+def list_annotation_jobs(project_id: str):
+    with db() as con:
+        rows = con.execute(
+            "SELECT j.*,m.name assignee_name FROM annotation_jobs j LEFT JOIN workspace_members m ON m.id=j.assignee_id WHERE j.project_id=? ORDER BY j.created_at DESC",
+            (project_id,),
+        ).fetchall()
+        assets = {row["id"]: row for row in con.execute("SELECT id,status,review_status FROM assets WHERE project_id=?", (project_id,))}
+    result = []
+    for row in rows:
+        ids = json.loads(row["asset_ids"] or "[]")
+        completed = sum(1 for asset_id in ids if assets.get(asset_id) and assets[asset_id]["status"] == "annotated")
+        approved = sum(1 for asset_id in ids if assets.get(asset_id) and assets[asset_id]["review_status"] == "approved")
+        result.append({"id": row["id"], "name": row["name"], "assigneeId": row["assignee_id"], "assigneeName": row["assignee_name"], "assetIds": ids, "status": row["status"], "completed": completed, "approved": approved, "total": len(ids), "createdAt": row["created_at"], "updatedAt": row["updated_at"]})
+    return result
+
+
+@app.post("/api/projects/{project_id}/annotation-jobs", status_code=201)
+def create_annotation_job(project_id: str, payload: AnnotationJobPayload):
+    job_id = uid()
+    unique_ids = list(dict.fromkeys(payload.asset_ids))
+    with db() as con:
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+        found = con.execute(f"SELECT COUNT(*) n FROM assets WHERE project_id=? AND id IN ({','.join('?' for _ in unique_ids)})", (project_id, *unique_ids)).fetchone()["n"]
+        if found != len(unique_ids):
+            raise HTTPException(404, "One or more assets were not found")
+        if payload.assignee_id and not con.execute("SELECT 1 FROM workspace_members WHERE id=?", (payload.assignee_id,)).fetchone():
+            raise HTTPException(404, "Assignee not found")
+        con.execute("INSERT INTO annotation_jobs (id,project_id,name,assignee_id,asset_ids,status,created_at,updated_at) VALUES (?,?,?,?,?,'open',?,?)", (job_id, project_id, payload.name.strip(), payload.assignee_id, json.dumps(unique_ids), now(), now()))
+        log_activity(con, "annotation-job.created", f"{payload.name} · {len(unique_ids)} assets", project_id)
+    return {"id": job_id, "status": "open"}
+
+
+@app.put("/api/projects/{project_id}/annotation-jobs/{job_id}")
+def update_annotation_job(project_id: str, job_id: str, payload: JobStatusPayload):
+    with db() as con:
+        result = con.execute("UPDATE annotation_jobs SET status=?,updated_at=? WHERE id=? AND project_id=?", (payload.status, now(), job_id, project_id))
+        if not result.rowcount:
+            raise HTTPException(404, "Annotation job not found")
+    return {"id": job_id, "status": payload.status}
+
+
+def run_active_learning_scan(project_id: str, model_id: str, limit: int, confidence: float) -> None:
+    try:
+        from ultralytics import YOLO
+        with db() as con:
+            model = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND status='ready'", (model_id, project_id)).fetchone()
+            assets = con.execute("SELECT * FROM assets WHERE project_id=? AND status='unannotated' ORDER BY rowid LIMIT ?", (project_id, limit)).fetchall()
+        if not model or not model["weights_path"] or not Path(model["weights_path"]).is_file():
+            return
+        detector = YOLO(model["weights_path"])
+        for asset in assets:
+            try:
+                output = detector(asset["path"], conf=max(0.01, confidence / 2), verbose=False)[0]
+                confidences = output.boxes.conf.tolist() if output.boxes is not None else []
+                nearest = min((abs(float(value) - confidence) for value in confidences), default=0.5)
+                score = round(max(0, 1 - nearest * 2), 4) if confidences else 0.75
+                reason = "No confident detections" if not confidences else f"Prediction near {confidence:.0%} threshold"
+                with db() as con:
+                    con.execute("INSERT INTO active_learning_queue (id,project_id,asset_id,model_id,score,reason,status,created_at) VALUES (?,?,?,?,?,?,'pending',?) ON CONFLICT(project_id,asset_id) DO UPDATE SET model_id=excluded.model_id,score=excluded.score,reason=excluded.reason,status='pending',created_at=excluded.created_at", (uid(), project_id, asset["id"], model_id, score, reason, now()))
+            except Exception:
+                continue
+    finally:
+        ACTIVE_LEARNING_SCANS.discard(project_id)
+
+
+@app.get("/api/projects/{project_id}/active-learning")
+def active_learning_queue(project_id: str):
+    with db() as con:
+        rows = con.execute("SELECT q.*,a.name FROM active_learning_queue q JOIN assets a ON a.id=q.asset_id WHERE q.project_id=? ORDER BY q.score DESC,q.created_at DESC", (project_id,)).fetchall()
+    return {"scanning": project_id in ACTIVE_LEARNING_SCANS, "items": [{"id": row["id"], "assetId": row["asset_id"], "name": row["name"], "modelId": row["model_id"], "score": row["score"], "reason": row["reason"], "status": row["status"], "createdAt": row["created_at"]} for row in rows]}
+
+
+@app.post("/api/projects/{project_id}/active-learning", status_code=202)
+def start_active_learning(project_id: str, payload: ActiveLearningPayload, background_tasks: BackgroundTasks):
+    with db() as con:
+        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' AND (? IS NULL OR id=?) ORDER BY CASE stage WHEN 'production' THEN 0 ELSE 1 END,rowid DESC LIMIT 1", (project_id, payload.model_id, payload.model_id)).fetchone()
+        if not model:
+            raise HTTPException(400, "A ready model is required for active learning")
+    if project_id in ACTIVE_LEARNING_SCANS:
+        raise HTTPException(409, "Active-learning scan is already running")
+    ACTIVE_LEARNING_SCANS.add(project_id)
+    background_tasks.add_task(run_active_learning_scan, project_id, model["id"], payload.limit, payload.confidence)
+    return {"status": "scanning", "modelId": model["id"]}
+
+
+@app.put("/api/projects/{project_id}/active-learning/{queue_id}")
+def update_active_learning_item(project_id: str, queue_id: str, payload: QueueStatusPayload):
+    with db() as con:
+        result = con.execute("UPDATE active_learning_queue SET status=? WHERE id=? AND project_id=?", (payload.status, queue_id, project_id))
+        if not result.rowcount:
+            raise HTTPException(404, "Queue item not found")
+    return {"id": queue_id, "status": payload.status}
+
+
 @app.delete("/api/projects/{project_id}", status_code=204)
 def delete_project(project_id: str):
     with db() as con:
@@ -649,7 +1040,7 @@ def delete_project(project_id: str):
         target = (RUNS / model_id).resolve()
         if target.parent == RUNS.resolve() and target.is_dir():
             shutil.rmtree(target)
-    for archive in EXPORTS.glob(f"{project_id}-v*-*.zip"):
+    for archive in EXPORTS.glob(f"{project_id}-*.zip"):
         if archive.resolve().parent == EXPORTS.resolve():
             archive.unlink()
 
@@ -963,7 +1354,7 @@ def delete_asset(project_id: str, asset_id: str):
 
 
 @app.put("/api/projects/{project_id}/assets/{asset_id}/annotations")
-def save_annotations(project_id: str, asset_id: str, payload: AnnotationPayload):
+def save_annotations(project_id: str, asset_id: str, payload: AnnotationPayload, request: Request):
     with db() as con:
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if not project:
@@ -992,8 +1383,36 @@ def save_annotations(project_id: str, asset_id: str, payload: AnnotationPayload)
         result = con.execute("UPDATE assets SET boxes=?, status=? WHERE id=? AND project_id=?", (json.dumps(boxes), "annotated" if boxes else "unannotated", asset_id, project_id))
         if not result.rowcount:
             raise HTTPException(404, "Asset not found")
+        con.execute(
+            "INSERT INTO annotation_revisions (id,project_id,asset_id,boxes,actor,created_at) VALUES (?,?,?,?,?,?)",
+            (uid(), project_id, asset_id, json.dumps(boxes), getattr(request.state, "actor", "Local Owner"), now()),
+        )
         row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return project_dict(con, row)
+
+
+@app.get("/api/projects/{project_id}/assets/{asset_id}/collaboration")
+def asset_collaboration(project_id: str, asset_id: str):
+    with db() as con:
+        if not con.execute("SELECT 1 FROM assets WHERE id=? AND project_id=?", (asset_id, project_id)).fetchone():
+            raise HTTPException(404, "Asset not found")
+        revisions = con.execute("SELECT id,actor,created_at,boxes FROM annotation_revisions WHERE asset_id=? AND project_id=? ORDER BY created_at DESC LIMIT 50", (asset_id, project_id)).fetchall()
+        comments = con.execute("SELECT id,actor,body,created_at FROM annotation_comments WHERE asset_id=? AND project_id=? ORDER BY created_at", (asset_id, project_id)).fetchall()
+    return {
+        "revisions": [{"id": row["id"], "actor": row["actor"], "createdAt": row["created_at"], "annotations": len(json.loads(row["boxes"] or "[]"))} for row in revisions],
+        "comments": [{"id": row["id"], "actor": row["actor"], "body": row["body"], "createdAt": row["created_at"]} for row in comments],
+    }
+
+
+@app.post("/api/projects/{project_id}/assets/{asset_id}/comments", status_code=201)
+def add_asset_comment(project_id: str, asset_id: str, payload: AnnotationCommentPayload, request: Request):
+    comment_id = uid()
+    with db() as con:
+        if not con.execute("SELECT 1 FROM assets WHERE id=? AND project_id=?", (asset_id, project_id)).fetchone():
+            raise HTTPException(404, "Asset not found")
+        con.execute("INSERT INTO annotation_comments (id,project_id,asset_id,member_id,actor,body,created_at) VALUES (?,?,?,?,?,?,?)", (comment_id, project_id, asset_id, getattr(request.state, "member_id", None), getattr(request.state, "actor", "Local Owner"), payload.body.strip(), now()))
+        log_activity(con, "annotation.comment", payload.body.strip()[:120], project_id, getattr(request.state, "actor", "Local Owner"))
+    return {"id": comment_id, "actor": getattr(request.state, "actor", "Local Owner"), "body": payload.body.strip(), "createdAt": now()}
 
 
 @app.put("/api/projects/{project_id}/classes")
@@ -1352,6 +1771,21 @@ def generate_version(project_id: str, payload: VersionPayload):
             target, generated_images = make_classification_version(con, project_id, version_no, payload)
         else:
             target, generated_images = make_yolo_version(con, project_id, version_no, payload)
+        snapshot_assets = [
+            {
+                "id": asset["id"],
+                "name": asset["name"],
+                "split": asset["split"],
+                "boxes": json.loads(asset["boxes"] or "[]"),
+                "tags": json.loads(asset["tags"] or "[]"),
+                "metadata": json.loads(asset["metadata"] or "{}"),
+            }
+            for asset in con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (project_id,))
+        ]
+        (target / "snapshot.json").write_text(
+            json.dumps({"projectId": project_id, "version": version_no, "assets": snapshot_assets}, indent=2),
+            encoding="utf-8",
+        )
         version_id = uid()
         con.execute("INSERT INTO versions (id,project_id,number,created_at,images,resize,augment,splits,path,augmentations,generated_images) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (version_id, project_id, version_no, now()[:10], count, payload.resize, int(payload.augment), json.dumps(payload.splits), str(target), json.dumps({"copies": payload.augmentation_copies, "transforms": payload.augmentations}), generated_images))
         log_activity(con, "version.generated", f"Version {version_no} · {generated_images} generated images", project_id)
@@ -1370,6 +1804,56 @@ def update_version(project_id: str, version_id: str, payload: VersionUpdatePaylo
             raise HTTPException(404, "Dataset version not found")
         log_activity(con, "version.updated", payload.name.strip(), project_id)
         return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
+def load_version_snapshot(version: sqlite3.Row) -> dict[str, Any]:
+    snapshot = Path(version["path"]) / "snapshot.json"
+    if not snapshot.is_file():
+        raise HTTPException(409, "This legacy version has no rollback snapshot")
+    try:
+        return json.loads(snapshot.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(500, "Version snapshot is unreadable") from exc
+
+
+@app.get("/api/projects/{project_id}/versions/{version_id}/diff")
+def version_diff(project_id: str, version_id: str):
+    with db() as con:
+        version = con.execute("SELECT * FROM versions WHERE id=? AND project_id=?", (version_id, project_id)).fetchone()
+        if not version:
+            raise HTTPException(404, "Dataset version not found")
+        current = {row["id"]: row for row in con.execute("SELECT * FROM assets WHERE project_id=?", (project_id,))}
+    snapshot = load_version_snapshot(version)
+    previous = {asset["id"]: asset for asset in snapshot.get("assets", [])}
+    added = [asset_id for asset_id in current if asset_id not in previous]
+    removed = [asset_id for asset_id in previous if asset_id not in current]
+    changed = []
+    for asset_id in current.keys() & previous.keys():
+        row = current[asset_id]
+        old = previous[asset_id]
+        if json.loads(row["boxes"] or "[]") != old.get("boxes", []) or row["split"] != old.get("split"):
+            changed.append(asset_id)
+    return {"versionId": version_id, "added": added, "removed": removed, "changed": changed, "unchanged": len(current.keys() & previous.keys()) - len(changed)}
+
+
+@app.post("/api/projects/{project_id}/versions/{version_id}/rollback")
+def rollback_version(project_id: str, version_id: str):
+    with db() as con:
+        version = con.execute("SELECT * FROM versions WHERE id=? AND project_id=?", (version_id, project_id)).fetchone()
+        if not version:
+            raise HTTPException(404, "Dataset version not found")
+        snapshot = load_version_snapshot(version)
+        restored = 0
+        for asset in snapshot.get("assets", []):
+            boxes = asset.get("boxes", [])
+            result = con.execute(
+                "UPDATE assets SET split=?,boxes=?,status=?,review_status='pending',tags=?,metadata=? WHERE id=? AND project_id=?",
+                (asset.get("split", "train"), json.dumps(boxes), "annotated" if boxes else "unannotated", json.dumps(asset.get("tags", [])), json.dumps(asset.get("metadata", {})), asset["id"], project_id),
+            )
+            restored += result.rowcount
+        log_activity(con, "version.rolled-back", f"Restored {restored} assets from version {version['number']}", project_id)
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return project_dict(con, project)
 
 
 @app.put("/api/projects/{project_id}/assets/{asset_id}/review")
@@ -1424,6 +1908,105 @@ def interpolate_annotations(project_id: str, payload: InterpolatePayload):
                 generated.append(annotation)
             con.execute("UPDATE assets SET boxes=?,status='annotated',review_status='pending' WHERE id=?", (json.dumps(generated), assets[frame_index]["id"]))
         return project_dict(con, project)
+
+
+@app.get("/api/projects/{project_id}/export")
+def export_annotated_dataset(project_id: str, format: str = "yolo"):
+    export_format = format.lower()
+    if export_format not in {"yolo", "coco", "voc", "labelme", "masks"}:
+        raise HTTPException(400, "Supported formats: yolo, coco, voc, labelme, masks")
+    with db() as con:
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise HTTPException(404, "Project not found")
+        assets = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (project_id,)).fetchall()
+    classes = json.loads(project["classes"] or "[]")
+    class_index = {name: index for index, name in enumerate(classes)}
+    archive = EXPORTS / f"{project_id}-annotated-{export_format}-{int(time.time())}.zip"
+    coco: dict[str, Any] = {"images": [], "annotations": [], "categories": [{"id": index + 1, "name": name} for index, name in enumerate(classes)]}
+    annotation_id = 1
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        if export_format == "yolo":
+            bundle.writestr("data.yaml", "path: .\ntrain: images/train\nval: images/valid\ntest: images/test\nnames:\n" + "".join(f"  {index}: {json.dumps(name)}\n" for index, name in enumerate(classes)))
+        if export_format == "masks":
+            bundle.writestr("classes.json", json.dumps({index + 1: name for index, name in enumerate(classes)}, indent=2))
+        for image_id, asset in enumerate(assets, 1):
+            path = Path(asset["path"])
+            if not path.is_file():
+                continue
+            suffix = path.suffix.lower() or ".jpg"
+            stem = asset["id"]
+            image_name = f"{stem}{suffix}"
+            split = asset["split"]
+            boxes = json.loads(asset["boxes"] or "[]")
+            with Image.open(path) as raw:
+                image = ImageOps.exif_transpose(raw).convert("RGB")
+                width, height = image.size
+                if export_format == "masks":
+                    mask = Image.new("L", image.size, 0)
+                    draw = ImageDraw.Draw(mask)
+                    for box in boxes:
+                        value = class_index.get(box.get("label"), -1) + 1
+                        if value <= 0:
+                            continue
+                        points = box.get("points") or []
+                        if len(points) >= 3:
+                            draw.polygon([(point["x"] / 100 * width, point["y"] / 100 * height) for point in points], fill=value)
+                        else:
+                            draw.rectangle((box["x"] / 100 * width, box["y"] / 100 * height, (box["x"] + box["w"]) / 100 * width, (box["y"] + box["h"]) / 100 * height), fill=value)
+                    output = io.BytesIO()
+                    mask.save(output, "PNG")
+                    bundle.writestr(f"masks/{split}/{stem}.png", output.getvalue())
+            bundle.write(path, f"images/{split}/{image_name}")
+            if export_format == "yolo":
+                lines = []
+                for box in boxes:
+                    index = class_index.get(box.get("label"))
+                    if index is None:
+                        continue
+                    points = box.get("points") or []
+                    if len(points) >= 3:
+                        lines.append(" ".join([str(index), *[f"{coordinate:.6f}" for point in points for coordinate in (point["x"] / 100, point["y"] / 100)]]))
+                    else:
+                        lines.append(f"{index} {(box['x'] + box['w'] / 2) / 100:.6f} {(box['y'] + box['h'] / 2) / 100:.6f} {box['w'] / 100:.6f} {box['h'] / 100:.6f}")
+                bundle.writestr(f"labels/{split}/{stem}.txt", "\n".join(lines))
+            elif export_format == "coco":
+                coco["images"].append({"id": image_id, "file_name": f"images/{split}/{image_name}", "width": width, "height": height})
+                for box in boxes:
+                    index = class_index.get(box.get("label"))
+                    if index is None:
+                        continue
+                    x, y, w, h = box["x"] / 100 * width, box["y"] / 100 * height, box["w"] / 100 * width, box["h"] / 100 * height
+                    points = box.get("points") or []
+                    coco["annotations"].append({"id": annotation_id, "image_id": image_id, "category_id": index + 1, "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0, **({"segmentation": [[coordinate for point in points for coordinate in (point["x"] / 100 * width, point["y"] / 100 * height)]]} if len(points) >= 3 else {})})
+                    annotation_id += 1
+            elif export_format == "voc":
+                root = ET.Element("annotation")
+                ET.SubElement(root, "filename").text = image_name
+                size = ET.SubElement(root, "size")
+                ET.SubElement(size, "width").text, ET.SubElement(size, "height").text, ET.SubElement(size, "depth").text = str(width), str(height), "3"
+                for box in boxes:
+                    obj = ET.SubElement(root, "object")
+                    ET.SubElement(obj, "name").text = box.get("label", "object")
+                    bounds = ET.SubElement(obj, "bndbox")
+                    for key, value in (("xmin", box["x"] / 100 * width), ("ymin", box["y"] / 100 * height), ("xmax", (box["x"] + box["w"]) / 100 * width), ("ymax", (box["y"] + box["h"]) / 100 * height)):
+                        ET.SubElement(bounds, key).text = str(round(value))
+                bundle.writestr(f"annotations/{stem}.xml", ET.tostring(root, encoding="unicode"))
+            elif export_format == "labelme":
+                shapes = []
+                for box in boxes:
+                    points = box.get("points") or []
+                    if len(points) >= 3:
+                        pixel_points = [[point["x"] / 100 * width, point["y"] / 100 * height] for point in points]
+                        shape_type = "polygon"
+                    else:
+                        pixel_points = [[box["x"] / 100 * width, box["y"] / 100 * height], [(box["x"] + box["w"]) / 100 * width, (box["y"] + box["h"]) / 100 * height]]
+                        shape_type = "rectangle"
+                    shapes.append({"label": box.get("label", "object"), "points": pixel_points, "shape_type": shape_type, "flags": {}})
+                bundle.writestr(f"annotations/{stem}.json", json.dumps({"version": "5.0.1", "flags": {}, "shapes": shapes, "imagePath": f"../images/{split}/{image_name}", "imageHeight": height, "imageWidth": width}, indent=2))
+        if export_format == "coco":
+            bundle.writestr("annotations.json", json.dumps(coco, indent=2))
+    return FileResponse(archive, media_type="application/zip", filename=archive.name)
 
 
 @app.get("/api/projects/{project_id}/versions/{version_id}/export")
@@ -1567,7 +2150,9 @@ def schedule_training_jobs() -> None:
             active = con.execute("SELECT 1 FROM models WHERE status='training' LIMIT 1").fetchone()
             if active:
                 return
-            queued = con.execute("SELECT m.*,v.path version_path FROM models m JOIN versions v ON v.project_id=m.project_id AND v.number=m.version WHERE m.status='queued' ORDER BY m.rowid LIMIT 1").fetchone()
+            queued = con.execute(
+                "SELECT m.*,v.path version_path FROM models m JOIN versions v ON v.project_id=m.project_id AND v.number=m.version WHERE m.status='queued' ORDER BY m.rowid LIMIT 1"
+            ).fetchone()
             if not queued:
                 return
             try:
@@ -1586,7 +2171,11 @@ def schedule_training_jobs() -> None:
 
 @app.on_event("startup")
 def resume_training_queue() -> None:
+    global WORKFLOW_SCHEDULER_STARTED
     schedule_training_jobs()
+    if not WORKFLOW_SCHEDULER_STARTED:
+        WORKFLOW_SCHEDULER_STARTED = True
+        threading.Thread(target=workflow_scheduler_loop, daemon=True).start()
 
 
 @app.post("/api/projects/{project_id}/train", status_code=202)
@@ -1627,6 +2216,31 @@ def start_training(project_id: str, payload: TrainPayload):
         result = project_dict(con, project)
     schedule_training_jobs()
     return result
+
+
+@app.post("/api/projects/{project_id}/train/sweep", status_code=202)
+def start_training_sweep(project_id: str, payload: TrainingSweepPayload):
+    allowed_optimizers = {"auto", "SGD", "Adam", "AdamW", "NAdam", "RAdam", "RMSProp"}
+    if any(optimizer not in allowed_optimizers for optimizer in payload.optimizers):
+        raise HTTPException(400, "Sweep contains an unsupported optimizer")
+    if any(rate <= 0 or rate > 1 for rate in payload.learning_rates):
+        raise HTTPException(400, "Sweep learning rates must be greater than 0 and at most 1")
+    combinations = [(optimizer, learning_rate) for optimizer in payload.optimizers for learning_rate in payload.learning_rates]
+    if len(combinations) > 8:
+        raise HTTPException(400, "A sweep supports up to 8 experiments")
+    first_optimizer, first_rate = combinations[0]
+    first = payload.base.model_copy(update={"optimizer": first_optimizer, "learning_rate": first_rate})
+    start_training(project_id, first)
+    with db() as con:
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        version = con.execute("SELECT * FROM versions WHERE id=? AND project_id=?", (payload.base.version_id, project_id)).fetchone() if payload.base.version_id else con.execute("SELECT * FROM versions WHERE project_id=? ORDER BY number DESC LIMIT 1", (project_id,)).fetchone()
+        for optimizer, learning_rate in combinations[1:]:
+            config = payload.base.model_copy(update={"optimizer": optimizer, "learning_rate": learning_rate})
+            model_id = uid()
+            display = f"{config.architecture.replace('.pt', '')} · {optimizer} · lr {learning_rate:g}"
+            con.execute("INSERT INTO models (id,project_id,name,version,status,progress,config,created_at,metrics_history) VALUES (?,?,?,?,?,?,?,?,?)", (model_id, project_id, display, version["number"], "queued", 0, config.model_dump_json(), now(), "[]"))
+        log_activity(con, "training.sweep", f"Queued {len(combinations)} experiments", project_id)
+        return project_dict(con, project)
 
 
 @app.post("/api/projects/{project_id}/models/{model_id}/cancel")
@@ -1685,7 +2299,14 @@ def retry_training(project_id: str, model_id: str):
             payload = TrainPayload.model_validate_json(model["config"] or "{}")
         except Exception as exc:
             raise HTTPException(400, "Saved training configuration is invalid") from exc
-    return start_training(project_id, payload)
+        if not con.execute("SELECT 1 FROM versions WHERE project_id=? AND number=?", (project_id, model["version"])).fetchone():
+            raise HTTPException(409, "The dataset version used by this model no longer exists")
+        con.execute("UPDATE models SET status='queued',progress=MIN(progress,95),error=NULL WHERE id=?", (model_id,))
+        log_activity(con, "training.resumed", f"{model['name']} from saved checkpoint", project_id)
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        result = project_dict(con, project)
+    schedule_training_jobs()
+    return result
 
 
 @app.delete("/api/projects/{project_id}/models/{model_id}", status_code=204)
@@ -1700,6 +2321,62 @@ def delete_model(project_id: str, model_id: str):
     target = (RUNS / model_id).resolve()
     if target.parent == RUNS.resolve() and target.is_dir():
         shutil.rmtree(target)
+
+
+@app.get("/api/projects/{project_id}/models/{model_id}/weights")
+def download_model_weights(project_id: str, model_id: str):
+    with db() as con:
+        model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
+    if not model or model["status"] != "ready" or not model["weights_path"]:
+        raise HTTPException(404, "Ready best.pt weights are unavailable")
+    weights = Path(model["weights_path"]).resolve()
+    expected = (RUNS / model_id).resolve()
+    if expected not in weights.parents or not weights.is_file():
+        raise HTTPException(404, "best.pt file is unavailable")
+    return FileResponse(weights, media_type="application/octet-stream", filename=f"{project_id}-{model_id}-best.pt")
+
+
+@app.post("/api/projects/{project_id}/models/import", status_code=201)
+async def import_model_weights(
+    project_id: str,
+    file: UploadFile = File(...),
+    name: str = Form("Imported best.pt"),
+    version_id: str | None = Form(None),
+    map50: float = Form(0),
+    precision: float = Form(0),
+    recall: float = Form(0),
+):
+    if Path(file.filename or "").suffix.lower() != ".pt":
+        raise HTTPException(400, "Upload an Ultralytics .pt checkpoint")
+    with db() as con:
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise HTTPException(404, "Project not found")
+        version = con.execute("SELECT * FROM versions WHERE project_id=? AND (? IS NULL OR id=?) ORDER BY number DESC LIMIT 1", (project_id, version_id, version_id)).fetchone()
+        if not version:
+            raise HTTPException(400, "Create or select a dataset version first")
+    model_id = uid()
+    target = RUNS / model_id / "weights" / "best.pt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with target.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > 2 * 1024 * 1024 * 1024:
+                    raise HTTPException(413, "Checkpoint exceeds 2 GB")
+                output.write(chunk)
+        from ultralytics import YOLO
+        YOLO(str(target))
+    except Exception as exc:
+        shutil.rmtree(target.parents[1], ignore_errors=True)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(400, "Checkpoint could not be loaded by Ultralytics YOLO") from exc
+    with db() as con:
+        con.execute("INSERT INTO models (id,project_id,name,version,status,progress,map,precision,recall,weights_path,config,created_at,metrics_history,stage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (model_id, project_id, name.strip()[:100], version["number"], "ready", 100, map50, precision, recall, str(target), json.dumps({"source": "import", "filename": file.filename}), now(), "[]", "development"))
+        log_activity(con, "model.imported", f"{name} · {size} bytes", project_id)
+        return project_dict(con, project)
 
 
 @app.post("/api/projects/{project_id}/models/{model_id}/export")
@@ -1768,7 +2445,7 @@ def deployment_metrics(project_id: str):
 @app.post("/api/projects/{project_id}/infer")
 async def infer(project_id: str, file: UploadFile = File(...), confidence: float = 0.5):
     with db() as con:
-        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY rowid DESC LIMIT 1", (project_id,)).fetchone()
+        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
     if not model or not model["weights_path"]:
         raise HTTPException(400, "No trained model is ready")
     temp = DATA / f"infer-{uid()}{Path(file.filename or '.jpg').suffix}"
@@ -1810,8 +2487,15 @@ async def secure_infer(project_id: str, file: UploadFile = File(...), confidence
         valid = next((row for row in keys if secrets.compare_digest(row["key_hash"], supplied_hash)), None)
         if not valid:
             raise HTTPException(401, "A valid X-API-Key header is required")
+        bucket = DEPLOY_REQUESTS[valid["id"]]
+        cutoff = time.time() - 60
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= DEPLOY_RATE_LIMIT:
+            raise HTTPException(429, f"Rate limit exceeded ({DEPLOY_RATE_LIMIT} requests/minute)")
+        bucket.append(time.time())
         con.execute("UPDATE api_keys SET last_used=? WHERE id=?", (now(), valid["id"]))
-        model = con.execute("SELECT id FROM models WHERE project_id=? AND status='ready' ORDER BY rowid DESC LIMIT 1", (project_id,)).fetchone()
+        model = con.execute("SELECT id FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
     try:
         result = await infer(project_id, file, confidence)
         with db() as con:
@@ -1833,7 +2517,7 @@ def auto_label(project_id: str, payload: AutoLabelPayload):
         if payload.model_id:
             model_row = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND status='ready'", (payload.model_id, project_id)).fetchone()
         else:
-            model_row = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY rowid DESC LIMIT 1", (project_id,)).fetchone()
+            model_row = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
         weights = model_row["weights_path"] if model_row and model_row["weights_path"] else ("yolo11n-seg.pt" if project["type"] == "Instance Segmentation" else "yolo11n.pt")
         assets = list(con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid LIMIT ?", (project_id, payload.limit)))
         if not payload.overwrite:
@@ -1916,10 +2600,44 @@ def list_workflows():
     return [{"id": row["id"], "name": row["name"], "nodes": json.loads(row["nodes"]), "edges": json.loads(row["edges"]), "updatedAt": row["updated_at"]} for row in rows]
 
 
+def validate_workflow_graph(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ids = [str(node.get("id", "")) for node in nodes]
+    if not ids or any(not node_id for node_id in ids) or len(ids) != len(set(ids)):
+        raise HTTPException(400, "Workflow node IDs must be present and unique")
+    if not any(node.get("type") == "input" for node in nodes) or not any(node.get("type") == "model" for node in nodes) or not any(node.get("type") == "output" for node in nodes):
+        raise HTTPException(400, "Workflow requires input, model, and output nodes")
+    pairs: set[tuple[str, str]] = set()
+    incoming = {node_id: 0 for node_id in ids}
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in ids}
+    for edge in edges:
+        source, target = str(edge.get("from", "")), str(edge.get("to", ""))
+        if source not in incoming or target not in incoming or source == target:
+            raise HTTPException(400, "Workflow contains an invalid connection")
+        if (source, target) in pairs:
+            raise HTTPException(400, "Workflow contains a duplicate connection")
+        pairs.add((source, target))
+        incoming[target] += 1
+        outgoing[source].append(target)
+    queue = [node_id for node_id, degree in incoming.items() if degree == 0]
+    ordered_ids: list[str] = []
+    while queue:
+        node_id = queue.pop(0)
+        ordered_ids.append(node_id)
+        for target in outgoing[node_id]:
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                queue.append(target)
+    if len(ordered_ids) != len(ids):
+        raise HTTPException(400, "Workflow graph contains a cycle")
+    by_id = {str(node["id"]): node for node in nodes}
+    return [by_id[node_id] for node_id in ordered_ids]
+
+
 @app.post("/api/workflows")
 def save_workflow(payload: WorkflowPayload):
+    ordered = validate_workflow_graph(payload.nodes, payload.edges)
     workflow_id = payload.id or uid()
-    for node in payload.nodes:
+    for node in ordered:
         if node.get("type") == "webhook" and (node.get("config") or {}).get("url"):
             validate_webhook_url(str(node["config"]["url"]))
     with db() as con:
@@ -1951,6 +2669,31 @@ def workflow_run_history(workflow_id: str, limit: int = 50):
     return [{"id": row["id"], "status": row["status"], "predictions": row["predictions"], "counts": json.loads(row["counts"] or "{}"), "error": row["error"], "createdAt": row["created_at"], "durationMs": round(row["duration_ms"], 1)} for row in rows]
 
 
+@app.get("/api/workflows/{workflow_id}/schedule")
+def get_workflow_schedule(workflow_id: str):
+    with db() as con:
+        row = con.execute("SELECT * FROM workflow_schedules WHERE workflow_id=?", (workflow_id,)).fetchone()
+    if not row:
+        return None
+    return {"id": row["id"], "enabled": bool(row["enabled"]), "intervalMinutes": row["interval_minutes"], "nextRun": row["next_run"], "lastRun": row["last_run"]}
+
+
+@app.put("/api/workflows/{workflow_id}/schedule")
+def set_workflow_schedule(workflow_id: str, payload: WorkflowSchedulePayload):
+    next_run = (datetime.now(timezone.utc) + timedelta(minutes=payload.interval_minutes)).isoformat()
+    with db() as con:
+        if not con.execute("SELECT 1 FROM workflows WHERE id=?", (workflow_id,)).fetchone():
+            raise HTTPException(404, "Workflow not found")
+        con.execute("INSERT INTO workflow_schedules (id,workflow_id,enabled,interval_minutes,next_run,created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(workflow_id) DO UPDATE SET enabled=excluded.enabled,interval_minutes=excluded.interval_minutes,next_run=excluded.next_run", (uid(), workflow_id, int(payload.enabled), payload.interval_minutes, next_run, now()))
+    return {"enabled": payload.enabled, "intervalMinutes": payload.interval_minutes, "nextRun": next_run}
+
+
+@app.delete("/api/workflows/{workflow_id}/schedule", status_code=204)
+def delete_workflow_schedule(workflow_id: str):
+    with db() as con:
+        con.execute("DELETE FROM workflow_schedules WHERE workflow_id=?", (workflow_id,))
+
+
 @app.delete("/api/workflows/{workflow_id}", status_code=204)
 def delete_workflow(workflow_id: str):
     with db() as con:
@@ -1967,7 +2710,8 @@ async def run_workflow(workflow_id: str, file: UploadFile = File(...), confidenc
         workflow = con.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
         if not workflow:
             raise HTTPException(404, "Workflow not found")
-        nodes = json.loads(workflow["nodes"])
+        edges = json.loads(workflow["edges"])
+        nodes = validate_workflow_graph(json.loads(workflow["nodes"]), edges)
         model_node = next((node for node in nodes if node.get("type") == "model"), None)
         requested_project = (model_node or {}).get("projectId")
         if requested_project:
@@ -2006,12 +2750,20 @@ async def run_workflow(workflow_id: str, file: UploadFile = File(...), confidenc
             counts[prediction["class"]] = counts.get(prediction["class"], 0) + 1
         payload = {"workflowId": workflow_id, "status": "completed", "predictions": predictions, "counts": counts, "image": {"width": output.orig_shape[1], "height": output.orig_shape[0]}}
         actions = []
+        branch_results: dict[str, str] = {}
         for node in nodes:
+            incoming_edges = [edge for edge in edges if edge.get("to") == node.get("id")]
+            if any(edge.get("condition") in {"true", "false"} and branch_results.get(str(edge.get("from"))) != edge.get("condition") for edge in incoming_edges):
+                actions.append({"nodeId": node.get("id"), "type": node.get("type"), "status": "skipped"})
+                continue
             if node.get("type") == "branch":
                 config = node.get("config") or {}
                 class_name = str(config.get("class", ""))
                 threshold = int(config.get("count", 1))
-                actions.append({"nodeId": node.get("id"), "type": "branch", "status": "true" if counts.get(class_name, sum(counts.values()) if not class_name else 0) >= threshold else "false", "observed": counts.get(class_name, sum(counts.values()) if not class_name else 0)})
+                observed = counts.get(class_name, sum(counts.values()) if not class_name else 0)
+                branch_status = "true" if observed >= threshold else "false"
+                branch_results[str(node.get("id"))] = branch_status
+                actions.append({"nodeId": node.get("id"), "type": "branch", "status": branch_status, "observed": observed})
                 continue
             if node.get("type") != "webhook" or not (node.get("config") or {}).get("url"):
                 continue
@@ -2029,8 +2781,93 @@ async def run_workflow(workflow_id: str, file: UploadFile = File(...), confidenc
                 (uid(), workflow_id, "completed", len(predictions), json.dumps(counts), now(), (time.perf_counter() - started) * 1000),
             )
         return payload
+    except Exception as exc:
+        with db() as con:
+            con.execute(
+                "INSERT INTO workflow_runs (id,workflow_id,status,predictions,counts,error,created_at,duration_ms) VALUES (?,?,?,?,?,?,?,?)",
+                (uid(), workflow_id, "failed", 0, "{}", str(exc)[:1000], now(), (time.perf_counter() - started) * 1000),
+            )
+        raise
     finally:
         temp.unlink(missing_ok=True)
+
+
+@app.post("/api/projects/{project_id}/infer/video")
+async def infer_video(project_id: str, file: UploadFile = File(...), confidence: float = 0.5, frame_interval: int = 1):
+    if Path(file.filename or "").suffix.lower() not in {".mp4", ".mov", ".webm", ".avi"}:
+        raise HTTPException(400, "Upload an MP4, MOV, WEBM, or AVI video")
+    with db() as con:
+        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+    if not model or not model["weights_path"]:
+        raise HTTPException(400, "No trained model is ready")
+    temp = DATA / f"video-infer-{uid()}{Path(file.filename or '.mp4').suffix}"
+    size = 0
+    with temp.open("wb") as output:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > 4 * 1024 * 1024 * 1024:
+                temp.unlink(missing_ok=True)
+                raise HTTPException(413, "Video exceeds 4 GB")
+            output.write(chunk)
+    try:
+        import cv2
+        from ultralytics import YOLO
+        capture = cv2.VideoCapture(str(temp))
+        fps = max(1, round(capture.get(cv2.CAP_PROP_FPS) or 1))
+        stride = fps * max(1, frame_interval)
+        detector = YOLO(model["weights_path"])
+        frame_index = 0
+        sampled = 0
+        timeline = []
+        totals: dict[str, int] = {}
+        while capture.isOpened() and sampled < 300:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame_index % stride == 0:
+                result = detector(frame, conf=confidence, verbose=False)[0]
+                counts: dict[str, int] = {}
+                detection = result.obb if result.obb is not None else result.boxes
+                if result.probs is not None:
+                    top = int(result.probs.top1)
+                    counts[result.names[top]] = 1
+                elif detection is not None:
+                    for class_id in detection.cls.tolist():
+                        name = result.names[int(class_id)]
+                        counts[name] = counts.get(name, 0) + 1
+                for name, count in counts.items():
+                    totals[name] = totals.get(name, 0) + count
+                timeline.append({"second": round(frame_index / fps, 2), "counts": counts})
+                sampled += 1
+            frame_index += 1
+        capture.release()
+        return {"sampledFrames": sampled, "durationSeconds": round(frame_index / fps, 2), "frameInterval": max(1, frame_interval), "totals": totals, "timeline": timeline}
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def workflow_scheduler_loop() -> None:
+    """Run enabled workflows against the latest project asset at their interval."""
+    while True:
+        try:
+            with db() as con:
+                due = con.execute("SELECT s.*,w.nodes FROM workflow_schedules s JOIN workflows w ON w.id=s.workflow_id WHERE s.enabled=1 AND s.next_run<=?", (now(),)).fetchall()
+            for schedule in due:
+                nodes = json.loads(schedule["nodes"])
+                model_node = next((node for node in nodes if node.get("type") == "model"), None)
+                project_id = (model_node or {}).get("projectId")
+                with db() as con:
+                    asset = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid DESC LIMIT 1", (project_id,)).fetchone() if project_id else con.execute("SELECT a.* FROM assets a JOIN models m ON m.project_id=a.project_id WHERE m.status='ready' ORDER BY CASE m.stage WHEN 'production' THEN 0 ELSE 1 END,m.rowid DESC,a.rowid DESC LIMIT 1").fetchone()
+                    next_run = (datetime.now(timezone.utc) + timedelta(minutes=schedule["interval_minutes"])).isoformat()
+                    con.execute("UPDATE workflow_schedules SET next_run=?,last_run=? WHERE id=?", (next_run, now(), schedule["id"]))
+                if not asset or not Path(asset["path"]).is_file():
+                    continue
+                with Path(asset["path"]).open("rb") as source:
+                    upload = UploadFile(file=source, filename=asset["name"])
+                    asyncio.run(run_workflow(schedule["workflow_id"], upload))
+        except Exception:
+            pass
+        time.sleep(30)
 
 
 @app.get("/")

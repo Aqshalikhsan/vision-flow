@@ -117,6 +117,23 @@ def main() -> None:
             ]}, timeout=10,
         ).json()
         assert project["assets"][0]["status"] == "annotated"
+        comment = requests.post(
+            f"{BASE}/api/projects/{project_id}/assets/{asset_id}/comments",
+            json={"body": "Smoke review comment"}, timeout=10,
+        )
+        assert comment.status_code == 201
+        collaboration = requests.get(
+            f"{BASE}/api/projects/{project_id}/assets/{asset_id}/collaboration", timeout=10,
+        ).json()
+        assert collaboration["revisions"] and collaboration["comments"][0]["body"] == "Smoke review comment"
+        dataset_health = requests.get(f"{BASE}/api/projects/{project_id}/health", timeout=15).json()
+        assert dataset_health["assets"] == 1 and "classCounts" in dataset_health
+        job = requests.post(
+            f"{BASE}/api/projects/{project_id}/annotation-jobs",
+            json={"name": "Smoke cleanup", "asset_ids": [asset_id]}, timeout=10,
+        ).json()
+        jobs = requests.get(f"{BASE}/api/projects/{project_id}/annotation-jobs", timeout=10).json()
+        assert jobs[0]["id"] == job["id"] and jobs[0]["completed"] == 1
         in_use_class = requests.delete(f"{BASE}/api/projects/{project_id}/classes/object", timeout=10)
         assert in_use_class.status_code == 409
         project = requests.post(
@@ -169,6 +186,15 @@ def main() -> None:
         assert project["versions"][0]["number"] == 1
         assert project["versions"][0]["generatedImages"] == 3
         assert project["versions"][0]["augmentations"]["copies"] == 2
+        version_id = project["versions"][0]["id"]
+        version_diff_result = requests.get(
+            f"{BASE}/api/projects/{project_id}/versions/{version_id}/diff", timeout=10,
+        ).json()
+        assert version_diff_result["versionId"] == version_id
+        rolled_back = requests.post(
+            f"{BASE}/api/projects/{project_id}/versions/{version_id}/rollback", timeout=10,
+        )
+        assert rolled_back.status_code == 200
         version = Path(__file__).resolve().parent.parent / "local_data" / "versions" / project_id / "v1"
         train_images = list((version / "images" / "train").glob("*.jpg"))
         assert len(train_images) == 3, "original + horizontal flip + brightness expected"
@@ -191,6 +217,38 @@ def main() -> None:
             assert [category["name"] for category in coco["categories"]] == ["target", "secondary"]
             assert coco["annotations"] and coco["annotations"][0]["category_id"] == 1
             assert any(annotation["segmentation"] for annotation in coco["annotations"]), "COCO polygon segmentation expected"
+        for current_format in ("yolo", "coco", "voc", "labelme", "masks"):
+            current_export = requests.get(
+                f"{BASE}/api/projects/{project_id}/export?format={current_format}", timeout=30,
+            )
+            assert current_export.status_code == 200 and current_export.content[:2] == b"PK", current_format
+        graph = requests.post(
+            f"{BASE}/api/workflows",
+            json={
+                "name": "Scheduled Smoke Workflow",
+                "nodes": [
+                    {"id": "input", "type": "input"},
+                    {"id": "model", "type": "model", "projectId": project_id},
+                    {"id": "output", "type": "output"},
+                ],
+                "edges": [{"from": "input", "to": "model"}, {"from": "model", "to": "output"}],
+            }, timeout=10,
+        ).json()
+        workflow_id = graph["id"]
+        schedule = requests.put(
+            f"{BASE}/api/workflows/{workflow_id}/schedule",
+            json={"enabled": True, "interval_minutes": 60}, timeout=10,
+        ).json()
+        assert schedule["enabled"] is True and schedule["intervalMinutes"] == 60
+        cyclic = requests.post(
+            f"{BASE}/api/workflows",
+            json={**graph, "id": None, "name": "Cyclic", "edges": [
+                {"from": "input", "to": "model"},
+                {"from": "model", "to": "output"},
+                {"from": "output", "to": "input"},
+            ]}, timeout=10,
+        )
+        assert cyclic.status_code == 400
         if "--train" in sys.argv:
             project = requests.post(
                 f"{BASE}/api/projects/{project_id}/train",
@@ -219,7 +277,6 @@ def main() -> None:
                 files={"file": ("sample.png", io.BytesIO(image_bytes), "image/png")}, timeout=60,
             ).json()
             assert workflow_run["status"] == "completed" and "counts" in workflow_run
-        version_id = project["versions"][0]["id"]
         removed_version = requests.delete(f"{BASE}/api/projects/{project_id}/versions/{version_id}", timeout=10)
         assert removed_version.status_code == 204
         assert not requests.get(f"{BASE}/api/projects/{project_id}", timeout=10).json()["versions"]
@@ -297,7 +354,7 @@ def main() -> None:
                 assert "classification.json" in archive.namelist()
         finally:
             requests.delete(f"{BASE}/api/projects/{classification_id}", timeout=10)
-        print("SMOKE TEST PASSED: images, video interpolation, detection/segmentation/classification annotations, smart mask, review roles, API-key security, YOLO/COCO/VOC imports, augmentation, task-aware exports, version cleanup" + (", training, selected version, workflow" if "--train" in sys.argv else ""))
+        print("SMOKE TEST PASSED: dataset health, jobs, collaboration history, images, video interpolation, detection/segmentation/classification annotations, smart mask, review roles, API-key security, YOLO/COCO/VOC imports, augmentation, five-format exports, version diff/rollback, workflow validation/scheduling, version cleanup" + (", training, selected version, workflow" if "--train" in sys.argv else ""))
     finally:
         if workflow_id:
             requests.delete(f"{BASE}/api/workflows/{workflow_id}", timeout=10)

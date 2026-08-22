@@ -1,4 +1,4 @@
-# Roboflow Local
+# VisionFlow Local
 
 Local computer-vision dataset, annotation, training, and inference workspace modeled after the Roboflow application workflow.
 
@@ -25,7 +25,7 @@ All persistent data stays in `F:\scrap-web\local_data`:
 - `versions`: immutable YOLO dataset snapshots
 - `runs`: training results and `best.pt` weights
 
-Training currently uses Ultralytics YOLO on CPU. The first training run downloads the selected pretrained checkpoint if it is not already cached.
+Training uses the real Ultralytics YOLO runtime—not simulated progress. A run creates an Ultralytics directory under `local_data/runs/<model-id>` and a successful run exposes its actual `weights/best.pt` in Model Registry and Train. The first run downloads the selected pretrained checkpoint if it is not cached. The UI supports CPU/CUDA auto-selection, queued runs, cancellation, checkpoint resume, hyperparameter sweeps, version selection, and direct `best.pt` download. A compatible external `.pt` can also be imported and validated by Ultralytics.
 
 Dataset generation performs real EXIF auto-orientation, square resizing, configurable train/valid/test splits, and writes immutable YOLO snapshots. The Augmentation Studio supports up to eight generated copies per training image and 16 independently configurable transforms: horizontal/vertical flip, rotation, translation, shear, random crop, brightness, contrast, saturation, hue, grayscale, Gaussian blur, sharpening, sensor noise, cutout, and JPEG compression. Geometry transforms synchronize, clip, and validate every bounding box. Recipes and generated image counts are stored with each version.
 
@@ -35,7 +35,7 @@ The local Model Library exposes detection and segmentation checkpoints from YOLO
 
 Instance Segmentation projects use a dedicated polygon annotator. Polygon points persist in SQLite, follow geometric augmentation, export as normalized YOLO segmentation labels and COCO polygons, and return as mask overlays during segmentation inference. The guided workflow exposes direct actions from saved annotations to version generation, from a generated version to training, and from a ready model to deployment.
 
-Additional local features include project/image deletion with filesystem cleanup, downloadable YOLO and COCO ZIP exports, mouse-based box movement and resizing, live webcam inference, and a persistent executable workflow builder. Workflow runs can select a trained project model and return predictions plus per-class counts.
+Additional local features include project/image deletion with filesystem cleanup, downloadable annotated ZIPs in YOLO, COCO, Pascal VOC, LabelMe, and mask formats, mouse-based box movement and resizing, image/webcam/batch/video inference, and a persistent executable workflow builder. Workflow graphs reject cycles and invalid links, support conditional branches, retain run history, and can run on a recurring schedule.
 
 Workspace productivity features include persistent hash-based routes, global search with `Ctrl+K`, an in-app workflow and shortcut guide, visible backend connectivity, editable project metadata, safe deletion of unused classes, and dataset bulk actions. From the Dataset page you can select the current filtered result set, assign train/valid/test splits, approve or reject review items, and delete multiple images with their local files in one operation.
 
@@ -48,11 +48,26 @@ The extended product suite also includes:
 - Model metric comparison, aliases, development/staging/production lifecycle stages, failed-run retry, and artifact exports.
 - Single-image, webcam, and batch inference; API-key management; copyable integration snippets; and recent deployment request logs.
 - Workflow JSON import/export, duplication, validation, editable nodes, explicit edge management, and run history.
-- Switchable local workspace accounts with owner, admin, annotator, and viewer permissions enforced for API mutations.
+- Dataset health checks for duplicates, blur, low resolution, missing labels, class imbalance, and invalid annotation sizes.
+- Annotation assignments with live completion/review progress, comments, immutable revision history, and an active-learning uncertainty queue.
+- Dataset version snapshots with diff and rollback.
+- Password login with PBKDF2 hashing, expiring server-side sessions, HttpOnly cookies, owner/admin/annotator/viewer permissions, and logout.
 
-Roles are designed for a trusted, single-machine workspace. The active account is stored in the browser and sent as `X-Workspace-Role`; this is workflow protection, not internet-facing authentication. Put the app behind real authentication before exposing it to an untrusted network.
+Set `VISIONFLOW_REQUIRE_AUTH=1` for server-enforced login. On the first visit, VisionFlow asks you to configure the owner account. For local development with authentication disabled, the legacy role header remains available for compatibility. Internet-facing deployments should additionally use HTTPS and a reverse proxy.
 
 MP4, MOV, and WEBM uploads are sampled locally with OpenCV at approximately one frame per second, up to 100 frames per video.
+
+## UGREEN NAS deployment
+
+The included Compose file runs the web UI, API, SQLite database, inference service, and persistent files together on the NAS:
+
+```powershell
+docker compose -f compose.ugreen.yml up -d --build
+```
+
+Open `http://NAS-IP:8080`, create the first owner account, and keep the generated `visionflow-data` directory backed up. The container enables authentication and a per-client API rate limit by default. To expose it through a domain, place it behind UGREEN's reverse proxy (or another reverse proxy), enable HTTPS, and avoid forwarding the raw port directly unless the network is otherwise protected.
+
+The DXP2800 can host the application and CPU inference through Docker. CPU training works but will be substantially slower than a CUDA-capable laptop or workstation, especially beyond nano/small checkpoints. Persistent datasets and `best.pt` artifacts remain on the mounted NAS volume.
 
 Annotation shortcuts:
 

@@ -6,6 +6,7 @@ tsconfig.tsbuildinfo
 .venv/
 .venv313/
 .tmp/
+.playwright-temp/
 .cache/
 .npm-cache/
 .npm-cache-legacy/

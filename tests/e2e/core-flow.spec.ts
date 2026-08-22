@@ -74,6 +74,14 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   await expect(page.locator(".review-select")).toHaveValue("approved");
 
   await projectTabs
+    .getByRole("button", { name: "Health & Jobs", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Health, jobs & active learning" }),
+  ).toBeVisible();
+  await expect(page.getByText("Dataset health", { exact: true })).toBeVisible();
+
+  await projectTabs
     .getByRole("button", { name: "Annotate", exact: true })
     .click();
   await expect(page.getByText("CLASSES", { exact: true })).toBeVisible();

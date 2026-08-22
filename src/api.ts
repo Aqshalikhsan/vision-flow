@@ -14,7 +14,7 @@ export type WorkflowData = {
   id: string;
   name: string;
   nodes: WorkflowNode[];
-  edges: Array<{ from: string; to: string }>;
+  edges: Array<{ from: string; to: string; condition?: "true" | "false" }>;
   updatedAt?: string;
 };
 export type WorkspaceMember = {
@@ -23,6 +23,12 @@ export type WorkspaceMember = {
   email: string;
   role: "owner" | "admin" | "annotator" | "viewer";
   createdAt: string;
+  hasPassword?: boolean;
+};
+export type AuthStatus = {
+  required: boolean;
+  setupRequired: boolean;
+  member?: WorkspaceMember | null;
 };
 export type ActivityEntry = {
   id: string;
@@ -40,6 +46,40 @@ export type WorkflowRun = {
   error?: string;
   createdAt: string;
   durationMs: number;
+};
+export type DatasetHealth = {
+  score: number;
+  assets: number;
+  issueAssets: number;
+  issues: Array<{ assetId: string; name: string; issues: string[] }>;
+  duplicateGroups: string[][];
+  classCounts: Record<string, number>;
+  splitCounts: Record<string, number>;
+  imbalanceRatio: number;
+  averageBlurScore: number;
+};
+export type AnnotationJob = {
+  id: string;
+  name: string;
+  assigneeId?: string;
+  assigneeName?: string;
+  assetIds: string[];
+  status: string;
+  completed: number;
+  approved: number;
+  total: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ActiveLearningItem = {
+  id: string;
+  assetId: string;
+  name: string;
+  modelId?: string;
+  score: number;
+  reason: string;
+  status: string;
+  createdAt: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -59,6 +99,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>("/api/auth/status"),
+  bootstrapAuth: (data: { name: string; email: string; password: string }) =>
+    request<{ status: string }>("/api/auth/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  login: (email: string, password: string) =>
+    request<{ token: string; member: WorkspaceMember }>("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request<void>("/api/auth/logout", { method: "POST" }),
   health: () => request<{ status: string; mlReady: boolean }>("/api/health"),
   projects: () => request<Project[]>("/api/projects"),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
@@ -79,6 +133,56 @@ export const api = {
   activity: (projectId?: string) =>
     request<ActivityEntry[]>(
       `/api/activity${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
+  datasetHealth: (projectId: string) =>
+    request<DatasetHealth>(`/api/projects/${projectId}/health`),
+  annotationJobs: (projectId: string) =>
+    request<AnnotationJob[]>(`/api/projects/${projectId}/annotation-jobs`),
+  createAnnotationJob: (
+    projectId: string,
+    data: { name: string; assignee_id?: string; asset_ids: string[] },
+  ) =>
+    request<{ id: string; status: string }>(
+      `/api/projects/${projectId}/annotation-jobs`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      },
+    ),
+  updateAnnotationJob: (projectId: string, jobId: string, status: string) =>
+    request<{ id: string; status: string }>(
+      `/api/projects/${projectId}/annotation-jobs/${jobId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      },
+    ),
+  activeLearning: (projectId: string) =>
+    request<{ scanning: boolean; items: ActiveLearningItem[] }>(
+      `/api/projects/${projectId}/active-learning`,
+    ),
+  startActiveLearning: (
+    projectId: string,
+    data: { model_id?: string; limit?: number; confidence?: number },
+  ) =>
+    request<{ status: string; modelId: string }>(
+      `/api/projects/${projectId}/active-learning`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      },
+    ),
+  updateActiveLearning: (projectId: string, queueId: string, status: string) =>
+    request<{ id: string; status: string }>(
+      `/api/projects/${projectId}/active-learning/${queueId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      },
     ),
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: "DELETE" }),
@@ -226,6 +330,45 @@ export const api = {
     format: "yolo" | "coco" = "yolo",
   ) =>
     `/api/projects/${projectId}/versions/${versionId}/export?format=${format}`,
+  annotatedExportUrl: (projectId: string, format: string) =>
+    `/api/projects/${projectId}/export?format=${format}`,
+  versionDiff: (projectId: string, versionId: string) =>
+    request<{
+      versionId: string;
+      added: string[];
+      removed: string[];
+      changed: string[];
+      unchanged: number;
+    }>(`/api/projects/${projectId}/versions/${versionId}/diff`),
+  rollbackVersion: (projectId: string, versionId: string) =>
+    request<Project>(
+      `/api/projects/${projectId}/versions/${versionId}/rollback`,
+      { method: "POST" },
+    ),
+  assetCollaboration: (projectId: string, assetId: string) =>
+    request<{
+      revisions: Array<{
+        id: string;
+        actor: string;
+        createdAt: string;
+        annotations: number;
+      }>;
+      comments: Array<{
+        id: string;
+        actor: string;
+        body: string;
+        createdAt: string;
+      }>;
+    }>(`/api/projects/${projectId}/assets/${assetId}/collaboration`),
+  addAssetComment: (projectId: string, assetId: string, body: string) =>
+    request<{ id: string; actor: string; body: string; createdAt: string }>(
+      `/api/projects/${projectId}/assets/${assetId}/comments`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      },
+    ),
   deleteVersion: (projectId: string, versionId: string) =>
     request<void>(`/api/projects/${projectId}/versions/${versionId}`, {
       method: "DELETE",
@@ -314,6 +457,29 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  trainSweep: (
+    id: string,
+    data: {
+      base: {
+        architecture: string;
+        epochs: number;
+        image_size: number;
+        version_id?: string;
+        batch_size?: number;
+        optimizer?: string;
+        learning_rate?: number;
+        patience?: number;
+        device?: string;
+      };
+      learning_rates: number[];
+      optimizers: string[];
+    },
+  ) =>
+    request<Project>(`/api/projects/${id}/train/sweep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   cancelTraining: (projectId: string, modelId: string) =>
     request<{ status: string; modelId: string }>(
       `/api/projects/${projectId}/models/${modelId}/cancel`,
@@ -349,6 +515,29 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ format }),
     }),
+  modelWeightsUrl: (projectId: string, modelId: string) =>
+    `/api/projects/${projectId}/models/${modelId}/weights`,
+  importModel: (
+    projectId: string,
+    file: File,
+    data: {
+      name: string;
+      version_id?: string;
+      map50?: number;
+      precision?: number;
+      recall?: number;
+    },
+  ) => {
+    const body = new FormData();
+    body.append("file", file);
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined) body.append(key, String(value));
+    });
+    return request<Project>(`/api/projects/${projectId}/models/import`, {
+      method: "POST",
+      body,
+    });
+  },
   deploymentKeys: (projectId: string) =>
     request<
       Array<{
@@ -396,7 +585,12 @@ export const api = {
       data: Record<string, number>;
     }>("/api/system"),
   members: () => request<WorkspaceMember[]>("/api/members"),
-  createMember: (data: { name: string; email: string; role: string }) =>
+  createMember: (data: {
+    name: string;
+    email: string;
+    role: string;
+    password?: string;
+  }) =>
     request<WorkspaceMember>("/api/members", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -404,7 +598,7 @@ export const api = {
     }),
   updateMember: (
     id: string,
-    data: { name: string; email: string; role: string },
+    data: { name: string; email: string; role: string; password?: string },
   ) =>
     request<WorkspaceMember>(`/api/members/${id}`, {
       method: "PUT",
@@ -441,6 +635,20 @@ export const api = {
       body,
     });
   },
+  inferVideo: (id: string, file: File, confidence = 0.5) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{
+      sampledFrames: number;
+      durationSeconds: number;
+      frameInterval: number;
+      totals: Record<string, number>;
+      timeline: Array<{ second: number; counts: Record<string, number> }>;
+    }>(`/api/projects/${id}/infer/video?confidence=${confidence}`, {
+      method: "POST",
+      body,
+    });
+  },
   workflows: () => request<WorkflowData[]>("/api/workflows"),
   saveWorkflow: (data: WorkflowData) =>
     request<WorkflowData>("/api/workflows", {
@@ -452,6 +660,29 @@ export const api = {
     request<WorkflowData>(`/api/workflows/${id}/duplicate`, { method: "POST" }),
   workflowRuns: (id: string) =>
     request<WorkflowRun[]>(`/api/workflows/${id}/runs`),
+  workflowSchedule: (id: string) =>
+    request<{
+      id?: string;
+      enabled: boolean;
+      intervalMinutes: number;
+      nextRun: string;
+      lastRun?: string;
+    } | null>(`/api/workflows/${id}/schedule`),
+  setWorkflowSchedule: (
+    id: string,
+    enabled: boolean,
+    intervalMinutes: number,
+  ) =>
+    request<{ enabled: boolean; intervalMinutes: number; nextRun: string }>(
+      `/api/workflows/${id}/schedule`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, interval_minutes: intervalMinutes }),
+      },
+    ),
+  deleteWorkflowSchedule: (id: string) =>
+    request<void>(`/api/workflows/${id}/schedule`, { method: "DELETE" }),
   deleteWorkflow: (id: string) =>
     request<void>(`/api/workflows/${id}`, { method: "DELETE" }),
   runWorkflow: (id: string, file: File, confidence = 0.5) => {

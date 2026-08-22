@@ -1,0 +1,17 @@
+services:
+  visionflow:
+    build: .
+    container_name: visionflow
+    restart: unless-stopped
+    ports:
+      - "8080:8000"
+    environment:
+      VISIONFLOW_REQUIRE_AUTH: "1"
+      VISIONFLOW_RATE_LIMIT: "120"
+      TZ: Asia/Jakarta
+    volumes:
+      - ./visionflow-data:/app/local_data
+    deploy:
+      resources:
+        limits:
+          memory: 6G
