@@ -35,6 +35,20 @@ jobs:
       - name: Compile backend
         run: python -m compileall -q backend
 
+      - name: Check frontend formatting
+        run: npm run format:check
+
+      - name: Run API smoke tests
+        run: |
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
+          api_pid=$!
+          trap 'kill $api_pid' EXIT
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+          python backend/smoke_test.py
+
       - name: Build and run browser tests
         env:
           PYTHON_EXECUTABLE: python

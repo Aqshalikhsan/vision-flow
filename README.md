@@ -37,6 +37,8 @@ Instance Segmentation projects use a dedicated polygon annotator. Polygon points
 
 Additional local features include project/image deletion with filesystem cleanup, downloadable YOLO and COCO ZIP exports, mouse-based box movement and resizing, live webcam inference, and a persistent executable workflow builder. Workflow runs can select a trained project model and return predictions plus per-class counts.
 
+Workspace productivity features include persistent hash-based routes, global search with `Ctrl+K`, an in-app workflow and shortcut guide, visible backend connectivity, editable project metadata, safe deletion of unused classes, and dataset bulk actions. From the Dataset page you can select the current filtered result set, assign train/valid/test splits, approve or reject review items, and delete multiple images with their local files in one operation.
+
 MP4, MOV, and WEBM uploads are sampled locally with OpenCV at approximately one frame per second, up to 100 frames per video.
 
 Annotation shortcuts:
@@ -53,4 +55,5 @@ Classes can be added directly in Annotate with the `+` button. Each class has it
 ```powershell
 .\.venv313\Scripts\python.exe backend\smoke_test.py
 npm run build
+npm run test:e2e
 ```

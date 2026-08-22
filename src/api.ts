@@ -1,74 +1,365 @@
-import type { AugmentationRecipe, Box, Project } from './types'
+import type { AugmentationRecipe, Box, Project } from "./types";
 
-export type WorkflowNode = {id:string;type:string;x:number;y:number;title:string;subtitle:string;projectId?:string;config?:Record<string,string|number|boolean>}
-export type WorkflowData = {id:string;name:string;nodes:WorkflowNode[];edges:Array<{from:string;to:string}>;updatedAt?:string}
-export type WorkspaceMember = {id:string;name:string;email:string;role:'owner'|'admin'|'annotator'|'viewer';createdAt:string}
+export type WorkflowNode = {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  title: string;
+  subtitle: string;
+  projectId?: string;
+  config?: Record<string, string | number | boolean>;
+};
+export type WorkflowData = {
+  id: string;
+  name: string;
+  nodes: WorkflowNode[];
+  edges: Array<{ from: string; to: string }>;
+  updatedAt?: string;
+};
+export type WorkspaceMember = {
+  id: string;
+  name: string;
+  email: string;
+  role: "owner" | "admin" | "annotator" | "viewer";
+  createdAt: string;
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
+  const response = await fetch(path, init);
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.detail || `Request failed (${response.status})`)
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Request failed (${response.status})`);
   }
-  if (response.status === 204) return undefined as T
-  return response.json()
+  if (response.status === 204) return undefined as T;
+  return response.json();
 }
 
 export const api = {
-  health: () => request<{status:string;mlReady:boolean}>('/api/health'),
-  projects: () => request<Project[]>('/api/projects'),
+  health: () => request<{ status: string; mlReady: boolean }>("/api/health"),
+  projects: () => request<Project[]>("/api/projects"),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
-  deleteProject: (id:string) => request<void>(`/api/projects/${id}`, {method:'DELETE'}),
-  createProject: (data: {name:string;type:string;description:string;classes:string[];colors?:Record<string,string>}) =>
-    request<Project>('/api/projects', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
+  updateProject: (id: string, data: { name: string; description: string }) =>
+    request<Project>(`/api/projects/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteProject: (id: string) =>
+    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+  createProject: (data: {
+    name: string;
+    type: string;
+    description: string;
+    classes: string[];
+    colors?: Record<string, string>;
+  }) =>
+    request<Project>("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   upload: (id: string, files: FileList) => {
-    const body = new FormData()
-    Array.from(files).forEach(file => body.append('files', file))
-    return request<Project>(`/api/projects/${id}/assets`, {method:'POST',body})
+    const body = new FormData();
+    Array.from(files).forEach((file) => body.append("files", file));
+    return request<Project>(`/api/projects/${id}/assets`, {
+      method: "POST",
+      body,
+    });
   },
-  deleteAsset: (projectId:string, assetId:string) => request<void>(`/api/projects/${projectId}/assets/${assetId}`, {method:'DELETE'}),
-  importYolo: (projectId:string,file:File) => {const body=new FormData();body.append('file',file);return request<Project>(`/api/projects/${projectId}/import/yolo`,{method:'POST',body})},
-  setAssetSplit: (projectId:string,assetId:string,split:'train'|'valid'|'test') => request<Project>(`/api/projects/${projectId}/assets/${assetId}/split`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({split})}),
-  setAssetReview: (projectId:string,assetId:string,status:'pending'|'approved'|'needs-fix') => request<Project>(`/api/projects/${projectId}/assets/${assetId}/review`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})}),
-  interpolate: (projectId:string,startAssetId:string,endAssetId:string) => request<Project>(`/api/projects/${projectId}/assets/interpolate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start_asset_id:startAssetId,end_asset_id:endAssetId})}),
-  autoLabel: (projectId:string,data:{confidence:number;overwrite:boolean;model_id?:string;limit?:number}) => request<Project>(`/api/projects/${projectId}/auto-label`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  smartMask: (projectId:string,assetId:string,data:{x:number;y:number;label:string;size?:number}) => request<Box>(`/api/projects/${projectId}/assets/${assetId}/smart-mask`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  exportUrl: (projectId:string, versionId:string, format:'yolo'|'coco'='yolo') => `/api/projects/${projectId}/versions/${versionId}/export?format=${format}`,
-  deleteVersion: (projectId:string, versionId:string) => request<void>(`/api/projects/${projectId}/versions/${versionId}`, {method:'DELETE'}),
+  deleteAsset: (projectId: string, assetId: string) =>
+    request<void>(`/api/projects/${projectId}/assets/${assetId}`, {
+      method: "DELETE",
+    }),
+  importYolo: (projectId: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<Project>(`/api/projects/${projectId}/import/yolo`, {
+      method: "POST",
+      body,
+    });
+  },
+  setAssetSplit: (
+    projectId: string,
+    assetId: string,
+    split: "train" | "valid" | "test",
+  ) =>
+    request<Project>(`/api/projects/${projectId}/assets/${assetId}/split`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ split }),
+    }),
+  setAssetReview: (
+    projectId: string,
+    assetId: string,
+    status: "pending" | "approved" | "needs-fix",
+  ) =>
+    request<Project>(`/api/projects/${projectId}/assets/${assetId}/review`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }),
+  bulkAssets: (
+    projectId: string,
+    ids: string[],
+    action: "split" | "review" | "delete",
+    value?: string,
+  ) =>
+    request<Project>(`/api/projects/${projectId}/assets/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, action, value }),
+    }),
+  interpolate: (projectId: string, startAssetId: string, endAssetId: string) =>
+    request<Project>(`/api/projects/${projectId}/assets/interpolate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        start_asset_id: startAssetId,
+        end_asset_id: endAssetId,
+      }),
+    }),
+  autoLabel: (
+    projectId: string,
+    data: {
+      confidence: number;
+      overwrite: boolean;
+      model_id?: string;
+      limit?: number;
+    },
+  ) =>
+    request<Project>(`/api/projects/${projectId}/auto-label`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  smartMask: (
+    projectId: string,
+    assetId: string,
+    data: { x: number; y: number; label: string; size?: number },
+  ) =>
+    request<Box>(`/api/projects/${projectId}/assets/${assetId}/smart-mask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  exportUrl: (
+    projectId: string,
+    versionId: string,
+    format: "yolo" | "coco" = "yolo",
+  ) =>
+    `/api/projects/${projectId}/versions/${versionId}/export?format=${format}`,
+  deleteVersion: (projectId: string, versionId: string) =>
+    request<void>(`/api/projects/${projectId}/versions/${versionId}`, {
+      method: "DELETE",
+    }),
   annotate: (projectId: string, assetId: string, boxes: Box[]) =>
-    request<Project>(`/api/projects/${projectId}/assets/${assetId}/annotations`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes})}),
-  classes: (projectId:string, classes:string[]) =>
-    request<Project>(`/api/projects/${projectId}/classes`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({classes})}),
-  addClass: (projectId:string, name:string, color:string) =>
-    request<Project>(`/api/projects/${projectId}/classes`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,color})}),
-  renameClass: (projectId:string, oldName:string, name:string, color:string) =>
-    request<Project>(`/api/projects/${projectId}/classes/${encodeURIComponent(oldName)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,color})}),
-  version: (id:string, data:{resize:number;augment:boolean;splits:[number,number,number];augmentations?:AugmentationRecipe;augmentation_copies?:number}) =>
-    request<Project>(`/api/projects/${id}/versions`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  train: (id:string, data:{architecture:string;epochs:number;image_size:number;version_id?:string;batch_size?:number;optimizer?:string;learning_rate?:number;patience?:number;device?:string}) =>
-    request<Project>(`/api/projects/${id}/train`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  cancelTraining: (projectId:string, modelId:string) =>
-    request<{status:string;modelId:string}>(`/api/projects/${projectId}/models/${modelId}/cancel`, {method:'POST'}),
-  renameModel: (projectId:string, modelId:string, name:string) => request<Project>(`/api/projects/${projectId}/models/${modelId}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}),
-  deleteModel: (projectId:string, modelId:string) => request<void>(`/api/projects/${projectId}/models/${modelId}`, {method:'DELETE'}),
-  exportModel: (projectId:string, modelId:string, format:string) => fetch(`/api/projects/${projectId}/models/${modelId}/export`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format})}),
-  deploymentKeys: (projectId:string) => request<Array<{id:string;name:string;prefix:string;createdAt:string;lastUsed?:string;revoked:boolean}>>(`/api/projects/${projectId}/deployment/keys`),
-  createDeploymentKey: (projectId:string,name:string) => request<{id:string;name:string;key:string;prefix:string;createdAt:string;revoked:boolean}>(`/api/projects/${projectId}/deployment/keys`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}),
-  revokeDeploymentKey: (projectId:string,keyId:string) => request<void>(`/api/projects/${projectId}/deployment/keys/${keyId}`,{method:'DELETE'}),
-  deploymentMetrics: (projectId:string) => request<{requests:number;averageLatencyMs:number;errors:number;recent:Array<{created_at:string;latency_ms:number;predictions:number;status:string}>}>(`/api/projects/${projectId}/deployment/metrics`),
-  system: () => request<{disk:{total:number;used:number;free:number};gpu:{available:boolean;name?:string;count:number};data:Record<string,number>}>('/api/system'),
-  members: () => request<WorkspaceMember[]>('/api/members'),
-  createMember: (data:{name:string;email:string;role:string}) => request<WorkspaceMember>('/api/members',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  updateMember: (id:string,data:{name:string;email:string;role:string}) => request<WorkspaceMember>(`/api/members/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  deleteMember: (id:string) => request<void>(`/api/members/${id}`,{method:'DELETE'}),
-  backupUrl: '/api/backup',
-  restore: (file:File) => {const body=new FormData();body.append('file',file);return request<{status:string;safetyCopy:string;projects:number}>('/api/restore',{method:'POST',body})},
-  infer: (id:string, file:File, confidence=.5) => {
-    const body = new FormData(); body.append('file',file)
-    return request<{predictions:Array<{x1:number;y1:number;x2:number;y2:number;confidence:number;class:string;points?:Array<{x:number;y:number}>}>;image:{width:number;height:number}}>(`/api/projects/${id}/infer?confidence=${confidence}`, {method:'POST',body})
+    request<Project>(
+      `/api/projects/${projectId}/assets/${assetId}/annotations`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boxes }),
+      },
+    ),
+  classes: (projectId: string, classes: string[]) =>
+    request<Project>(`/api/projects/${projectId}/classes`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ classes }),
+    }),
+  addClass: (projectId: string, name: string, color: string) =>
+    request<Project>(`/api/projects/${projectId}/classes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, color }),
+    }),
+  renameClass: (
+    projectId: string,
+    oldName: string,
+    name: string,
+    color: string,
+  ) =>
+    request<Project>(
+      `/api/projects/${projectId}/classes/${encodeURIComponent(oldName)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, color }),
+      },
+    ),
+  deleteClass: (projectId: string, name: string) =>
+    request<Project>(
+      `/api/projects/${projectId}/classes/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  version: (
+    id: string,
+    data: {
+      resize: number;
+      augment: boolean;
+      splits: [number, number, number];
+      augmentations?: AugmentationRecipe;
+      augmentation_copies?: number;
+    },
+  ) =>
+    request<Project>(`/api/projects/${id}/versions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  train: (
+    id: string,
+    data: {
+      architecture: string;
+      epochs: number;
+      image_size: number;
+      version_id?: string;
+      batch_size?: number;
+      optimizer?: string;
+      learning_rate?: number;
+      patience?: number;
+      device?: string;
+    },
+  ) =>
+    request<Project>(`/api/projects/${id}/train`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  cancelTraining: (projectId: string, modelId: string) =>
+    request<{ status: string; modelId: string }>(
+      `/api/projects/${projectId}/models/${modelId}/cancel`,
+      { method: "POST" },
+    ),
+  renameModel: (projectId: string, modelId: string, name: string) =>
+    request<Project>(`/api/projects/${projectId}/models/${modelId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  deleteModel: (projectId: string, modelId: string) =>
+    request<void>(`/api/projects/${projectId}/models/${modelId}`, {
+      method: "DELETE",
+    }),
+  exportModel: (projectId: string, modelId: string, format: string) =>
+    fetch(`/api/projects/${projectId}/models/${modelId}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format }),
+    }),
+  deploymentKeys: (projectId: string) =>
+    request<
+      Array<{
+        id: string;
+        name: string;
+        prefix: string;
+        createdAt: string;
+        lastUsed?: string;
+        revoked: boolean;
+      }>
+    >(`/api/projects/${projectId}/deployment/keys`),
+  createDeploymentKey: (projectId: string, name: string) =>
+    request<{
+      id: string;
+      name: string;
+      key: string;
+      prefix: string;
+      createdAt: string;
+      revoked: boolean;
+    }>(`/api/projects/${projectId}/deployment/keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  revokeDeploymentKey: (projectId: string, keyId: string) =>
+    request<void>(`/api/projects/${projectId}/deployment/keys/${keyId}`, {
+      method: "DELETE",
+    }),
+  deploymentMetrics: (projectId: string) =>
+    request<{
+      requests: number;
+      averageLatencyMs: number;
+      errors: number;
+      recent: Array<{
+        created_at: string;
+        latency_ms: number;
+        predictions: number;
+        status: string;
+      }>;
+    }>(`/api/projects/${projectId}/deployment/metrics`),
+  system: () =>
+    request<{
+      disk: { total: number; used: number; free: number };
+      gpu: { available: boolean; name?: string; count: number };
+      data: Record<string, number>;
+    }>("/api/system"),
+  members: () => request<WorkspaceMember[]>("/api/members"),
+  createMember: (data: { name: string; email: string; role: string }) =>
+    request<WorkspaceMember>("/api/members", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  updateMember: (
+    id: string,
+    data: { name: string; email: string; role: string },
+  ) =>
+    request<WorkspaceMember>(`/api/members/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteMember: (id: string) =>
+    request<void>(`/api/members/${id}`, { method: "DELETE" }),
+  backupUrl: "/api/backup",
+  restore: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{ status: string; safetyCopy: string; projects: number }>(
+      "/api/restore",
+      { method: "POST", body },
+    );
   },
-  workflows: () => request<WorkflowData[]>('/api/workflows'),
-  saveWorkflow: (data:WorkflowData) => request<WorkflowData>('/api/workflows', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),
-  deleteWorkflow: (id:string) => request<void>(`/api/workflows/${id}`, {method:'DELETE'}),
-  runWorkflow: (id:string,file:File,confidence=.5) => {const body=new FormData();body.append('file',file);return request<{workflowId:string;status:string;predictions:Array<{class:string;confidence:number}>;counts:Record<string,number>}>(`/api/workflows/${id}/run?confidence=${confidence}`,{method:'POST',body})}
-}
+  infer: (id: string, file: File, confidence = 0.5) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{
+      predictions: Array<{
+        x1: number;
+        y1: number;
+        x2: number;
+        y2: number;
+        confidence: number;
+        class: string;
+        points?: Array<{ x: number; y: number }>;
+      }>;
+      image: { width: number; height: number };
+    }>(`/api/projects/${id}/infer?confidence=${confidence}`, {
+      method: "POST",
+      body,
+    });
+  },
+  workflows: () => request<WorkflowData[]>("/api/workflows"),
+  saveWorkflow: (data: WorkflowData) =>
+    request<WorkflowData>("/api/workflows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteWorkflow: (id: string) =>
+    request<void>(`/api/workflows/${id}`, { method: "DELETE" }),
+  runWorkflow: (id: string, file: File, confidence = 0.5) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{
+      workflowId: string;
+      status: string;
+      predictions: Array<{ class: string; confidence: number }>;
+      counts: Record<string, number>;
+    }>(`/api/workflows/${id}/run?confidence=${confidence}`, {
+      method: "POST",
+      body,
+    });
+  },
+};
