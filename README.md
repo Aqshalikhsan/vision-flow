@@ -39,11 +39,25 @@ Additional local features include project/image deletion with filesystem cleanup
 
 Workspace productivity features include persistent hash-based routes, global search with `Ctrl+K`, an in-app workflow and shortcut guide, visible backend connectivity, editable project metadata, safe deletion of unused classes, and dataset bulk actions. From the Dataset page you can select the current filtered result set, assign train/valid/test splits, approve or reject review items, and delete multiple images with their local files in one operation.
 
+The extended product suite also includes:
+
+- Resumable annotation state, save feedback, zoom controls, and box copy/paste.
+- Drag-and-drop uploads with progress, dataset pagination, large-result filtering, image previews, tags, and custom metadata.
+- Project archive/restore and duplication, plus a persistent workspace activity feed.
+- Version notes/tags, recipe reuse, preprocessing previews, and side-by-side version comparison.
+- Model metric comparison, aliases, development/staging/production lifecycle stages, failed-run retry, and artifact exports.
+- Single-image, webcam, and batch inference; API-key management; copyable integration snippets; and recent deployment request logs.
+- Workflow JSON import/export, duplication, validation, editable nodes, explicit edge management, and run history.
+- Switchable local workspace accounts with owner, admin, annotator, and viewer permissions enforced for API mutations.
+
+Roles are designed for a trusted, single-machine workspace. The active account is stored in the browser and sent as `X-Workspace-Role`; this is workflow protection, not internet-facing authentication. Put the app behind real authentication before exposing it to an untrusted network.
+
 MP4, MOV, and WEBM uploads are sampled locally with OpenCV at approximately one frame per second, up to 100 frames per video.
 
 Annotation shortcuts:
 
 - `Ctrl+Z` / `Ctrl+Y`: undo / redo
+- `Ctrl+C` / `Ctrl+V`: copy / paste the selected box
 - Arrow keys: move the selected box precisely
 - `Delete`: remove the selected box
 - Left / right arrows with no selection: previous / next image

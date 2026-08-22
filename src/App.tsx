@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  Archive,
   ArrowLeft,
   BarChart3,
   BookOpen,
@@ -19,6 +20,7 @@ import {
   FlaskConical,
   FolderKanban,
   GalleryHorizontalEnd,
+  History,
   Home,
   Image as ImageIcon,
   Keyboard,
@@ -54,7 +56,12 @@ import {
 import { starterProjects, uid } from "./data";
 import type { Asset, AugmentationRecipe, Box, Model, Project } from "./types";
 import { api } from "./api";
-import type { WorkflowNode, WorkspaceMember } from "./api";
+import type {
+  ActivityEntry,
+  WorkflowNode,
+  WorkflowRun,
+  WorkspaceMember,
+} from "./api";
 
 type Page =
   | "dashboard"
@@ -600,6 +607,34 @@ function App() {
             projects={projects}
             go={go}
             create={() => setModal(true)}
+            duplicate={async (id) => {
+              try {
+                const saved = await api.duplicateProject(id);
+                setProjects((current) => [saved, ...current]);
+                notify("Project duplicated with its dataset");
+              } catch (error) {
+                notify(
+                  error instanceof Error
+                    ? error.message
+                    : "Project duplication failed",
+                );
+              }
+            }}
+            archive={async (id, archived) => {
+              try {
+                const saved = await api.archiveProject(id, archived);
+                setProjects((current) =>
+                  current.map((item) => (item.id === id ? saved : item)),
+                );
+                notify(archived ? "Project archived" : "Project restored");
+              } catch (error) {
+                notify(
+                  error instanceof Error
+                    ? error.message
+                    : "Project archive failed",
+                );
+              }
+            }}
           />
         )}
         {page === "project" && project && (
@@ -1300,14 +1335,22 @@ function Dashboard({
   projects,
   go,
   create,
+  duplicate,
+  archive,
 }: {
   projects: Project[];
   go: (p: Page, id?: string) => void;
   create: () => void;
+  duplicate: (id: string) => void;
+  archive: (id: string, archived: boolean) => void;
 }) {
   const [q, setQ] = useState("");
-  const filtered = projects.filter((p) =>
-    p.name.toLowerCase().includes(q.toLowerCase()),
+  const [showArchived, setShowArchived] = useState(false);
+  const [menu, setMenu] = useState<string | null>(null);
+  const filtered = projects.filter(
+    (p) =>
+      p.archived === showArchived &&
+      p.name.toLowerCase().includes(q.toLowerCase()),
   );
   return (
     <div className="content dashboard">
@@ -1356,52 +1399,91 @@ function Dashboard({
             <h2>Your projects</h2>
             <p>Manage datasets and model experiments.</p>
           </div>
-          <div className="search">
-            <Search size={16} />
-            <input
-              placeholder="Search projects"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+          <div className="dashboard-tools">
+            <button
+              className={showArchived ? "active" : ""}
+              onClick={() => setShowArchived((value) => !value)}
+            >
+              <Archive />
+              {showArchived
+                ? "Active projects"
+                : `Archived (${projects.filter((item) => item.archived).length})`}
+            </button>
+            <div className="search">
+              <Search size={16} />
+              <input
+                placeholder="Search projects"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            </div>
           </div>
         </div>
         <div className="project-grid">
           {filtered.map((p, i) => (
-            <button
-              className="project-card"
-              key={p.id}
-              onClick={() => go("project", p.id)}
-            >
-              <div className={"project-cover cover-" + (i % 4)}>
-                <Boxes />
-                <span>{p.type}</span>
-              </div>
-              <div className="project-info">
-                <div>
-                  <h3>{p.name}</h3>
-                  <MoreHorizontal size={18} />
+            <article className="project-card" key={p.id}>
+              <button
+                className="project-card-main"
+                onClick={() => go("project", p.id)}
+              >
+                <div className={"project-cover cover-" + (i % 4)}>
+                  <Boxes />
+                  <span>{p.type}</span>
                 </div>
-                <p>{p.description}</p>
-                <div className="meta">
-                  <span>
-                    <ImageIcon size={14} />
-                    {p.assets.length || (i ? 0 : 248)} images
-                  </span>
-                  <span>
-                    <Tag size={14} />
-                    {p.classes.length} classes
-                  </span>
+                <div className="project-info">
+                  <div>
+                    <h3>{p.name}</h3>
+                    <span />
+                  </div>
+                  <p>{p.description}</p>
+                  <div className="meta">
+                    <span>
+                      <ImageIcon size={14} />
+                      {p.assets.length || (i ? 0 : 248)} images
+                    </span>
+                    <span>
+                      <Tag size={14} />
+                      {p.classes.length} classes
+                    </span>
+                  </div>
+                  <div className="card-foot">
+                    <span>
+                      {p.models.length
+                        ? p.models.length + " model ready"
+                        : "Not trained"}
+                    </span>
+                    <ChevronRight size={16} />
+                  </div>
                 </div>
-                <div className="card-foot">
-                  <span>
-                    {p.models.length
-                      ? p.models.length + " model ready"
-                      : "Not trained"}
-                  </span>
-                  <ChevronRight size={16} />
+              </button>
+              <button
+                className="project-card-menu"
+                aria-label={`Actions for ${p.name}`}
+                onClick={() => setMenu(menu === p.id ? "" : p.id)}
+              >
+                <MoreHorizontal />
+              </button>
+              {menu === p.id && (
+                <div className="project-card-popover">
+                  <button
+                    onClick={() => {
+                      setMenu("");
+                      duplicate(p.id);
+                    }}
+                  >
+                    <Copy /> Duplicate
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMenu("");
+                      archive(p.id, !p.archived);
+                    }}
+                  >
+                    <Archive /> {p.archived ? "Restore" : "Archive"}
+                  </button>
                 </div>
-              </div>
-            </button>
+              )}
+            </article>
           ))}
           <button className="new-card" onClick={create}>
             <span>
@@ -1482,14 +1564,24 @@ function ProjectHome({
   remove: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const [draggingUpload, setDraggingUpload] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const upload = async (files: FileList | null) => {
     if (!files) return;
     try {
-      const saved = await api.upload(project.id, files);
+      setUploadProgress(0);
+      const saved = await api.uploadWithProgress(
+        project.id,
+        files,
+        setUploadProgress,
+      );
       update(() => saved);
       notify(`${files.length} file disimpan ke dataset lokal`);
     } catch (e) {
       notify(e instanceof Error ? e.message : "Upload gagal");
+    } finally {
+      setUploadProgress(null);
+      setDraggingUpload(false);
     }
   };
   const deleteImage = async (id: string) => {
@@ -1592,7 +1684,23 @@ function ProjectHome({
               />
             </div>
           </section>
-          <section className="panel">
+          <section
+            className={
+              "panel project-drop-zone " + (draggingUpload ? "drop-active" : "")
+            }
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDraggingUpload(true);
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node))
+                setDraggingUpload(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              upload(event.dataTransfer.files);
+            }}
+          >
             <div className="panel-head">
               <div>
                 <h2>Dataset</h2>
@@ -1602,6 +1710,15 @@ function ProjectHome({
                 View dataset <ChevronRight size={15} />
               </button>
             </div>
+            {uploadProgress !== null && (
+              <div className="upload-progress">
+                <span>Uploading files…</span>
+                <b>{uploadProgress}%</b>
+                <i>
+                  <em style={{ width: `${uploadProgress}%` }} />
+                </i>
+              </div>
+            )}
             {project.assets.length ? (
               <div className="thumb-grid">
                 {project.assets
@@ -1766,7 +1883,11 @@ function Annotate({
   update: (fn: (p: Project) => Project) => void;
   notify: (s: string) => void;
 }) {
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() => {
+    const requested = localStorage.getItem(`vf-annotate-${project.id}`);
+    const found = project.assets.findIndex((item) => item.id === requested);
+    return found >= 0 ? found : 0;
+  });
   const asset = project.assets[index];
   const [drawing, setDrawing] = useState<{ x: number; y: number } | null>(null);
   const [draft, setDraft] = useState<Box | null>(null);
@@ -1774,6 +1895,11 @@ function Annotate({
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<Box[][]>([]);
   const [future, setFuture] = useState<Box[][]>([]);
+  const [zoom, setZoom] = useState(1);
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">(
+    "saved",
+  );
+  const copied = useRef<Box | null>(null);
   const [editing, setEditing] = useState<{
     id: string;
     mode: "move" | "resize";
@@ -1791,6 +1917,8 @@ function Annotate({
     setHistory([]);
     setFuture([]);
     setSelected(null);
+    setZoom(1);
+    if (asset) localStorage.setItem(`vf-annotate-${project.id}`, asset.id);
   }, [asset?.id]);
   const point = (e: any) => {
     const r = canvas.current!.getBoundingClientRect();
@@ -1802,6 +1930,7 @@ function Annotate({
   const saveBoxes = (boxes: Box[]) => {
     if (!asset) return;
     const sequence = ++saveSequence.current;
+    setSaveState("saving");
     update((p) => ({
       ...p,
       assets: p.assets.map((a) =>
@@ -1813,11 +1942,15 @@ function Annotate({
     api
       .annotate(project.id, asset.id, boxes)
       .then((saved) => {
-        if (sequence === saveSequence.current) update(() => saved);
+        if (sequence === saveSequence.current) {
+          update(() => saved);
+          setSaveState("saved");
+        }
       })
-      .catch((e) =>
-        notify(e instanceof Error ? e.message : "Gagal menyimpan anotasi"),
-      );
+      .catch((e) => {
+        setSaveState("error");
+        notify(e instanceof Error ? e.message : "Gagal menyimpan anotasi");
+      });
   };
   const commitBoxes = (boxes: Box[]) => {
     if (!asset) return;
@@ -1849,6 +1982,40 @@ function Annotate({
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
         e.preventDefault();
         redo();
+        return;
+      }
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key.toLowerCase() === "c" &&
+        selected &&
+        asset
+      ) {
+        e.preventDefault();
+        copied.current = asset.boxes.find((box) => box.id === selected) || null;
+        if (copied.current) notify("Annotation copied");
+        return;
+      }
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key.toLowerCase() === "v" &&
+        copied.current &&
+        asset
+      ) {
+        e.preventDefault();
+        const source = copied.current;
+        const duplicate = {
+          ...source,
+          id: uid(),
+          x: Math.min(100 - source.w, source.x + 2),
+          y: Math.min(100 - source.h, source.y + 2),
+          points: source.points?.map((point) => ({
+            ...point,
+            x: Math.min(100, point.x + 2),
+            y: Math.min(100, point.y + 2),
+          })),
+        };
+        commitBoxes([...asset.boxes, duplicate]);
+        setSelected(duplicate.id);
         return;
       }
       if (!asset) return;
@@ -2069,6 +2236,13 @@ function Annotate({
         <div>
           <b>Annotate</b>
           <span>{asset.name}</span>
+          <span className={"save-state " + saveState}>
+            {saveState === "saving"
+              ? "Saving…"
+              : saveState === "error"
+                ? "Save failed"
+                : "Saved"}
+          </span>
         </div>
         <div className="image-nav">
           <button disabled={!index} onClick={() => setIndex((i) => i - 1)}>
@@ -2124,6 +2298,17 @@ function Annotate({
             title="Delete selected"
           >
             <Trash2 />
+          </button>
+          <button
+            disabled={!selected}
+            title="Copy selected (Ctrl+C)"
+            onClick={() => {
+              copied.current =
+                asset.boxes.find((box) => box.id === selected) || null;
+              if (copied.current) notify("Annotation copied");
+            }}
+          >
+            <Copy />
           </button>
         </aside>
         <aside className="classes">
@@ -2205,10 +2390,23 @@ function Annotate({
             </span>
           </div>
         </aside>
-        <div className="canvas-wrap">
+        <div
+          className={"canvas-wrap " + (zoom > 1 ? "zoomed" : "")}
+          onWheel={(event) => {
+            if (!event.ctrlKey) return;
+            event.preventDefault();
+            setZoom((value) =>
+              Math.max(
+                0.5,
+                Math.min(3, value + (event.deltaY < 0 ? 0.1 : -0.1)),
+              ),
+            );
+          }}
+        >
           <div
             className="canvas"
             ref={canvas}
+            style={{ transform: `scale(${zoom})` }}
             onMouseDown={down}
             onMouseMove={move}
             onMouseUp={up}
@@ -2268,11 +2466,23 @@ function Annotate({
             )}
           </div>
           <div className="zoom">
-            <button>
+            <button
+              onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+              title="Zoom out"
+            >
               <ZoomOut />
             </button>
-            <span>100%</span>
-            <button>
+            <button
+              className="zoom-value"
+              onClick={() => setZoom(1)}
+              title="Reset zoom"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              onClick={() => setZoom((value) => Math.min(3, value + 0.25))}
+              title="Zoom in"
+            >
               <ZoomIn />
             </button>
           </div>
@@ -2324,8 +2534,15 @@ function ClassificationAnnotate({
   update: (fn: (p: Project) => Project) => void;
   notify: (s: string) => void;
 }) {
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() => {
+    const requested = localStorage.getItem(`vf-annotate-${project.id}`);
+    const found = project.assets.findIndex((item) => item.id === requested);
+    return found >= 0 ? found : 0;
+  });
   const asset = project.assets[index];
+  useEffect(() => {
+    if (asset) localStorage.setItem(`vf-annotate-${project.id}`, asset.id);
+  }, [asset?.id]);
   const multi = project.type === "Multi-Label Classification";
   const apply = async (label: string) => {
     if (!asset) return;
@@ -2900,6 +3117,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   } | null>(null);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(0);
+  const [batchResults, setBatchResults] = useState<
+    Array<{ file: string; predictions: number; error?: string }>
+  >([]);
   const [cameraOn, setCameraOn] = useState(false);
   const [keys, setKeys] = useState<
     Array<{
@@ -2916,6 +3137,12 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     requests: number;
     averageLatencyMs: number;
     errors: number;
+    recent: Array<{
+      created_at: string;
+      latency_ms: number;
+      predictions: number;
+      status: string;
+    }>;
   } | null>(null);
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
@@ -2937,6 +3164,52 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
       setRunning(false);
     }
   };
+  const testBatch = async (files?: FileList | null) => {
+    if (!files?.length) return;
+    setRunning(true);
+    setBatchProgress(0);
+    setBatchResults([]);
+    const outputs: Array<{
+      file: string;
+      predictions: number;
+      error?: string;
+    }> = [];
+    for (const [index, file] of Array.from(files).entries()) {
+      try {
+        const output = await api.infer(project.id, file, threshold / 100);
+        outputs.push({
+          file: file.name,
+          predictions: output.predictions.length,
+        });
+      } catch (batchError) {
+        outputs.push({
+          file: file.name,
+          predictions: 0,
+          error:
+            batchError instanceof Error
+              ? batchError.message
+              : "Inference gagal",
+        });
+      }
+      setBatchResults([...outputs]);
+      setBatchProgress(Math.round(((index + 1) / files.length) * 100));
+    }
+    setRunning(false);
+  };
+  const downloadBatch = () => {
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(batchResults, null, 2)], {
+        type: "application/json",
+      }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "visionflow-batch-results.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+  const endpoint = `http://localhost:8000/api/projects/${project.id}/infer`;
+  const pythonSnippet = `import requests\n\nresponse = requests.post(\n  "${endpoint}",\n  files={"file": open("image.jpg", "rb")},\n  params={"confidence": 0.5}\n)\n\nprint(response.json())`;
   const boxes = result?.predictions.map((p, i) => (
     <div
       className={p.points?.length ? "inference-mask" : "inference-box"}
@@ -3076,6 +3349,12 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
               >
                 Webcam
               </button>
+              <button
+                className={tab === "batch" ? "active" : ""}
+                onClick={() => changeTab("batch")}
+              >
+                Batch
+              </button>
             </div>
             {tab === "image" ? (
               preview ? (
@@ -3107,7 +3386,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   />
                 </label>
               )
-            ) : (
+            ) : tab === "webcam" ? (
               <div>
                 <div className="preview webcam-preview">
                   <video ref={video} muted playsInline />
@@ -3127,6 +3406,41 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                 >
                   {cameraOn ? "Stop camera" : "Start camera"}
                 </button>
+              </div>
+            ) : (
+              <div className="batch-inference">
+                <label className="test-drop">
+                  <GalleryHorizontalEnd />
+                  <b>Run a batch</b>
+                  <span>
+                    Select multiple images and process them sequentially.
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(event) => testBatch(event.target.files)}
+                  />
+                </label>
+                {running && <progress max="100" value={batchProgress} />}
+                {!!batchResults.length && (
+                  <div className="batch-results">
+                    <header>
+                      <b>{batchResults.length} files processed</b>
+                      <button onClick={downloadBatch}>
+                        <Download /> JSON
+                      </button>
+                    </header>
+                    {batchResults.map((item) => (
+                      <span key={item.file}>
+                        <b>{item.file}</b>
+                        <small>
+                          {item.error || `${item.predictions} predictions`}
+                        </small>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {error && <p className="infer-error">{error}</p>}
@@ -3153,19 +3467,21 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             <div className="endpoint">
               <span>POST</span> http://localhost:8000/api/projects/{project.id}
               /infer
-              <button>
+              <button onClick={() => navigator.clipboard.writeText(endpoint)}>
                 <Copy />
               </button>
             </div>
             <div className="code">
               <div>
                 <span>Python</span>
-                <button>
+                <button
+                  onClick={() => navigator.clipboard.writeText(pythonSnippet)}
+                >
                   <Copy size={15} />
                   Copy
                 </button>
               </div>
-              <pre>{`import requests\n\nresponse = requests.post(\n  "http://localhost:8000/api/projects/${project.id}/infer",\n  files={"file": open("image.jpg", "rb")},\n  params={"confidence": 0.5}\n)\n\nprint(response.json())`}</pre>
+              <pre>{pythonSnippet}</pre>
             </div>
             <div className="deploy-note ready">
               <Check />
@@ -3255,6 +3571,29 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
               <p>No API keys yet. Create one for external applications.</p>
             )}
           </div>
+          {!!metrics?.recent.length && (
+            <div className="request-log">
+              <h3>Recent requests</h3>
+              <div className="request-log-head">
+                <span>Time</span>
+                <span>Status</span>
+                <span>Predictions</span>
+                <span>Latency</span>
+              </div>
+              {metrics.recent.map((entry, index) => (
+                <div key={`${entry.created_at}-${index}`}>
+                  <span>{entry.created_at.slice(0, 19).replace("T", " ")}</span>
+                  <span
+                    className={entry.status === "success" ? "success" : "error"}
+                  >
+                    {entry.status}
+                  </span>
+                  <span>{entry.predictions}</span>
+                  <span>{Math.round(entry.latency_ms)} ms</span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
     </div>
@@ -3323,8 +3662,13 @@ function Workflows({
     counts: Record<string, number>;
   } | null>(null);
   const [running, setRunning] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState("");
+  const [edgeFrom, setEdgeFrom] = useState("");
+  const [edgeTo, setEdgeTo] = useState("");
+  const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const board = useRef<HTMLDivElement>(null);
   const runInput = useRef<HTMLInputElement>(null);
+  const importInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     api
       .workflows()
@@ -3338,7 +3682,43 @@ function Workflows({
       })
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!workflowId) {
+      setRuns([]);
+      return;
+    }
+    api
+      .workflowRuns(workflowId)
+      .then(setRuns)
+      .catch(() => setRuns([]));
+  }, [workflowId]);
+  const validationErrors = useMemo(() => {
+    const errors: string[] = [];
+    if (!nodes.some((node) => node.type === "input"))
+      errors.push("Add at least one input block.");
+    if (!nodes.some((node) => node.type === "model"))
+      errors.push("Add a vision model block.");
+    if (!nodes.some((node) => node.type === "output"))
+      errors.push("Add an output block.");
+    if (edges.some((edge) => edge.from === edge.to))
+      errors.push("A block cannot connect to itself.");
+    const seen = new Set<string>();
+    if (
+      edges.some((edge) => {
+        const key = `${edge.from}:${edge.to}`;
+        if (seen.has(key)) return true;
+        seen.add(key);
+        return false;
+      })
+    )
+      errors.push("Remove duplicate connections.");
+    return errors;
+  }, [edges, nodes]);
   const save = async () => {
+    if (validationErrors.length) {
+      notify(validationErrors[0]);
+      throw new Error(validationErrors[0]);
+    }
     const saved = await api.saveWorkflow({
       id: workflowId,
       name,
@@ -3406,6 +3786,10 @@ function Workflows({
       const saved = await save();
       const output = await api.runWorkflow(saved.id, file);
       setResult({ status: output.status, counts: output.counts });
+      api
+        .workflowRuns(saved.id)
+        .then(setRuns)
+        .catch(() => {});
       notify("Workflow selesai dieksekusi");
     } catch (e) {
       notify(e instanceof Error ? e.message : "Workflow gagal");
@@ -3425,6 +3809,55 @@ function Workflows({
     a.click();
     URL.revokeObjectURL(url);
   };
+  const importJson = async (file?: File) => {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as {
+        name?: string;
+        nodes?: WorkflowNode[];
+        edges?: Array<{ from: string; to: string }>;
+      };
+      if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges))
+        throw new Error("Workflow JSON tidak valid");
+      setWorkflowId("");
+      setName(parsed.name || "Imported workflow");
+      setNodes(parsed.nodes);
+      setEdges(parsed.edges);
+      notify("Workflow JSON dimuat. Save untuk menyimpannya.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Import gagal");
+    } finally {
+      if (importInput.current) importInput.current.value = "";
+    }
+  };
+  const duplicateCurrent = async () => {
+    try {
+      const saved = workflowId
+        ? await api.duplicateWorkflow(workflowId)
+        : await api.saveWorkflow({
+            id: "",
+            name: `${name} copy`,
+            nodes,
+            edges,
+          });
+      setWorkflowId(saved.id);
+      setName(saved.name);
+      setNodes(saved.nodes);
+      setEdges(saved.edges);
+      notify("Workflow diduplikasi");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Duplikasi gagal");
+    }
+  };
+  const addEdge = () => {
+    if (!edgeFrom || !edgeTo || edgeFrom === edgeTo) return;
+    if (edges.some((edge) => edge.from === edgeFrom && edge.to === edgeTo))
+      return;
+    setEdges((current) => [...current, { from: edgeFrom, to: edgeTo }]);
+    setEdgeFrom("");
+    setEdgeTo("");
+  };
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const icon = (type: string) =>
     type === "input" ? (
       <ImageIcon />
@@ -3461,6 +3894,22 @@ function Workflows({
             <Download />
             Export JSON
           </button>
+          <button
+            className="secondary"
+            onClick={() => importInput.current?.click()}
+          >
+            <Upload /> Import
+          </button>
+          <button className="secondary" onClick={duplicateCurrent}>
+            <Copy /> Duplicate
+          </button>
+          <input
+            ref={importInput}
+            hidden
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => importJson(event.target.files?.[0])}
+          />
           <button
             className="primary"
             onClick={() => runInput.current?.click()}
@@ -3556,6 +4005,124 @@ function Workflows({
                 </option>
               ))}
           </select>
+          <div className="workflow-connections">
+            <p>CONNECTIONS</p>
+            <select
+              value={edgeFrom}
+              onChange={(event) => setEdgeFrom(event.target.value)}
+            >
+              <option value="">From block</option>
+              {nodes.map((node) => (
+                <option value={node.id} key={node.id}>
+                  {node.title}
+                </option>
+              ))}
+            </select>
+            <select
+              value={edgeTo}
+              onChange={(event) => setEdgeTo(event.target.value)}
+            >
+              <option value="">To block</option>
+              {nodes.map((node) => (
+                <option value={node.id} key={node.id}>
+                  {node.title}
+                </option>
+              ))}
+            </select>
+            <button onClick={addEdge} disabled={!edgeFrom || !edgeTo}>
+              Add connection
+            </button>
+            {edges.map((edge, index) => (
+              <span key={`${edge.from}-${edge.to}-${index}`}>
+                <small>
+                  {nodes.find((node) => node.id === edge.from)?.title ||
+                    edge.from}{" "}
+                  →{" "}
+                  {nodes.find((node) => node.id === edge.to)?.title || edge.to}
+                </small>
+                <button
+                  onClick={() =>
+                    setEdges((current) =>
+                      current.filter((_, itemIndex) => itemIndex !== index),
+                    )
+                  }
+                >
+                  <X />
+                </button>
+              </span>
+            ))}
+          </div>
+          {!!validationErrors.length && (
+            <div className="workflow-validation">
+              <b>Needs attention</b>
+              {validationErrors.map((message) => (
+                <small key={message}>{message}</small>
+              ))}
+            </div>
+          )}
+          {selectedNode && (
+            <div className="workflow-node-editor">
+              <p>SELECTED BLOCK</p>
+              <label>
+                Title
+                <input
+                  value={selectedNode.title}
+                  onChange={(event) =>
+                    setNodes((current) =>
+                      current.map((node) =>
+                        node.id === selectedNode.id
+                          ? { ...node, title: event.target.value }
+                          : node,
+                      ),
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Description
+                <input
+                  value={selectedNode.subtitle}
+                  onChange={(event) =>
+                    setNodes((current) =>
+                      current.map((node) =>
+                        node.id === selectedNode.id
+                          ? { ...node, subtitle: event.target.value }
+                          : node,
+                      ),
+                    )
+                  }
+                />
+              </label>
+              {selectedNode.type === "model" && (
+                <label>
+                  Project
+                  <select
+                    value={selectedNode.projectId || ""}
+                    onChange={(event) =>
+                      setNodes((current) =>
+                        current.map((node) =>
+                          node.id === selectedNode.id
+                            ? { ...node, projectId: event.target.value }
+                            : node,
+                        ),
+                      )
+                    }
+                  >
+                    <option value="">Latest ready model</option>
+                    {projects
+                      .filter((item) =>
+                        item.models.some((model) => model.status === "ready"),
+                      )
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          )}
           {result && (
             <div className="workflow-result">
               <Check />
@@ -3569,6 +4136,19 @@ function Workflows({
               {!Object.keys(result.counts).length && (
                 <small>No objects above threshold.</small>
               )}
+            </div>
+          )}
+          {!!runs.length && (
+            <div className="workflow-runs">
+              <p>RECENT RUNS</p>
+              {runs.slice(0, 5).map((runItem) => (
+                <span key={runItem.id}>
+                  <b>{runItem.status}</b>
+                  <small>
+                    {runItem.predictions} predictions · {runItem.durationMs} ms
+                  </small>
+                </span>
+              ))}
             </div>
           )}
         </aside>
@@ -3587,7 +4167,7 @@ function Workflows({
           </svg>
           {nodes.map((node) => (
             <div
-              className="wf-node draggable"
+              className={`wf-node draggable ${selectedNodeId === node.id ? "selected" : ""}`}
               style={{ left: node.x, top: node.y }}
               key={node.id}
               onPointerDown={(e) => {
@@ -3627,6 +4207,7 @@ function Workflows({
                 );
               }}
               onPointerUp={() => setDrag(null)}
+              onClick={() => setSelectedNodeId(node.id)}
             >
               <div>
                 <span>{icon(node.type)}</span>
@@ -3753,6 +4334,8 @@ function DatasetVersions({
   const [recipe, setRecipe] =
     useState<AugmentationRecipe>(defaultAugmentations);
   const [generating, setGenerating] = useState(false);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const previewAsset = project.assets[0];
   const enabledCount = Object.values(recipe).filter(
     (setting) => setting.enabled,
   ).length;
@@ -3818,6 +4401,55 @@ function DatasetVersions({
       setGenerating(false);
     }
   };
+  const reuseVersion = (version: Project["versions"][number]) => {
+    setResize(version.resize);
+    setAugment(version.augment);
+    setSplits(version.splits);
+    setCopies(version.augmentations?.copies || 1);
+    setRecipe({
+      ...defaultAugmentations(),
+      ...(version.augmentations?.transforms || {}),
+    });
+    notify(`Recipe v${version.number} dimuat ke editor`);
+  };
+  const editVersion = async (version: Project["versions"][number]) => {
+    const name = prompt(
+      "Nama version",
+      version.name || `Version ${version.number}`,
+    )?.trim();
+    if (!name) return;
+    const notes =
+      prompt("Catatan version", version.notes || "") ?? version.notes ?? "";
+    const tags = (
+      prompt("Tags (pisahkan dengan koma)", (version.tags || []).join(", ")) ||
+      ""
+    )
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    try {
+      const saved = await api.updateVersion(project.id, version.id, {
+        name,
+        notes,
+        tags,
+      });
+      update(() => saved);
+      notify("Metadata version diperbarui");
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Gagal memperbarui version",
+      );
+    }
+  };
+  const toggleCompare = (id: string) =>
+    setCompareIds((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : [...current.slice(-1), id],
+    );
+  const compared = compareIds
+    .map((id) => project.versions.find((version) => version.id === id))
+    .filter(Boolean) as Project["versions"];
   return (
     <div className="content versions-page">
       <ProjectTabs active="versions" go={go} />
@@ -3926,6 +4558,20 @@ function DatasetVersions({
                 </select>
               </label>
             </div>
+            {previewAsset && (
+              <div className="preprocess-preview">
+                <figure>
+                  <img src={previewAsset.src} />
+                  <figcaption>Original</figcaption>
+                </figure>
+                <figure className="square-preview">
+                  <img src={previewAsset.src} />
+                  <figcaption>
+                    {resize} × {resize} preview
+                  </figcaption>
+                </figure>
+              </div>
+            )}
           </section>
           <section className="panel version-section augment-panel">
             <div className="version-section-head">
@@ -4105,7 +4751,25 @@ function DatasetVersions({
                     </span>
                     <span>{v.createdAt}</span>
                   </div>
+                  {v.notes && <p className="version-notes">{v.notes}</p>}
+                  {!!v.tags?.length && (
+                    <div className="version-tags">
+                      {v.tags.map((tag) => (
+                        <span key={tag}>{tag}</span>
+                      ))}
+                    </div>
+                  )}
                   <div className="version-actions">
+                    <button onClick={() => reuseVersion(v)}>
+                      Reuse recipe
+                    </button>
+                    <button onClick={() => editVersion(v)}>Edit</button>
+                    <button
+                      className={compareIds.includes(v.id) ? "active" : ""}
+                      onClick={() => toggleCompare(v.id)}
+                    >
+                      Compare
+                    </button>
                     <a href={api.exportUrl(project.id, v.id, "yolo")} download>
                       YOLO ZIP
                     </a>
@@ -4121,6 +4785,28 @@ function DatasetVersions({
                 <Database />
                 <b>No versions yet</b>
                 <span>Your immutable snapshots will appear here.</span>
+              </div>
+            )}
+            {compared.length === 2 && (
+              <div className="version-compare">
+                <h4>Version comparison</h4>
+                <div>
+                  {compared.map((version) => (
+                    <span key={version.id}>
+                      <b>{version.name || `v${version.number}`}</b>
+                      <small>
+                        {version.generatedImages || version.images} images
+                      </small>
+                      <small>
+                        {version.resize}px ·{" "}
+                        {version.augment
+                          ? `${version.augmentations?.copies || 1} copies`
+                          : "no augment"}
+                      </small>
+                      <small>{version.splits.join(" / ")} split</small>
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </section>
@@ -4748,8 +5434,13 @@ function SegmentationAnnotate({
   update: (fn: (project: Project) => Project) => void;
   notify: (message: string) => void;
 }) {
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() => {
+    const requested = localStorage.getItem(`vf-annotate-${project.id}`);
+    const found = project.assets.findIndex((item) => item.id === requested);
+    return found >= 0 ? found : 0;
+  });
   const asset = project.assets[index];
+  const [zoom, setZoom] = useState(1);
   const [label, setLabel] = useState(project.classes[0] || "object");
   const [points, setPoints] = useState<Array<{ x: number; y: number }>>([]);
   const [selectedMask, setSelectedMask] = useState<string | null>(null);
@@ -4763,6 +5454,10 @@ function SegmentationAnnotate({
   const isObb = project.type === "Oriented Bounding Box";
   const isPose = project.type === "Keypoint Detection";
   const minimumPoints = isPose ? 1 : 3;
+  useEffect(() => {
+    if (asset) localStorage.setItem(`vf-annotate-${project.id}`, asset.id);
+    setZoom(1);
+  }, [asset?.id]);
   const location = (event: { clientX: number; clientY: number }) => {
     const rect = canvas.current!.getBoundingClientRect();
     return {
@@ -5085,12 +5780,13 @@ function SegmentationAnnotate({
             </button>
           </div>
         </aside>
-        <div className="canvas-wrap">
+        <div className={"canvas-wrap " + (zoom > 1 ? "zoomed" : "")}>
           <div
             className={
               "canvas polygon-canvas " + (smart ? "smart-mask-cursor" : "")
             }
             ref={canvas}
+            style={{ transform: `scale(${zoom})` }}
             onClick={(event) => {
               if (smart) {
                 smartAt(event);
@@ -5185,6 +5881,21 @@ function SegmentationAnnotate({
               )}
             </svg>
           </div>
+          <div className="zoom">
+            <button
+              onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+            >
+              <ZoomOut />
+            </button>
+            <button className="zoom-value" onClick={() => setZoom(1)}>
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              onClick={() => setZoom((value) => Math.min(3, value + 0.25))}
+            >
+              <ZoomIn />
+            </button>
+          </div>
         </div>
         <aside className="annotation-list">
           <h3>
@@ -5260,6 +5971,7 @@ function ModelRegistry({
   notify: (message: string) => void;
 }) {
   const [exporting, setExporting] = useState("");
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const rename = async (id: string, current: string) => {
     const name = prompt("Nama model", current)?.trim();
     if (!name) return;
@@ -5307,6 +6019,40 @@ function ModelRegistry({
       setExporting("");
     }
   };
+  const updateLifecycle = async (
+    id: string,
+    stage: NonNullable<Model["stage"]>,
+    alias?: string,
+  ) => {
+    try {
+      const saved = await api.updateModelLifecycle(project.id, id, {
+        stage,
+        alias,
+      });
+      update(() => saved);
+      notify(`Model dipindahkan ke ${stage}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Lifecycle gagal diubah");
+    }
+  };
+  const retry = async (id: string) => {
+    try {
+      const saved = await api.retryTraining(project.id, id);
+      update(() => saved);
+      notify("Training dijadwalkan ulang dengan konfigurasi yang sama");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Retry training gagal");
+    }
+  };
+  const toggleModel = (id: string) =>
+    setSelectedModels((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : [...current.slice(-1), id],
+    );
+  const comparedModels = selectedModels
+    .map((id) => project.models.find((model) => model.id === id))
+    .filter(Boolean) as Model[];
   return (
     <div className="content registry-page">
       <ProjectTabs active="registry" go={go} />
@@ -5320,15 +6066,54 @@ function ModelRegistry({
           </p>
         </div>
       </div>
+      {comparedModels.length === 2 && (
+        <section className="panel model-comparison">
+          <div className="panel-head">
+            <div>
+              <h2>Model comparison</h2>
+              <p>Compare validation metrics before promoting a checkpoint.</p>
+            </div>
+            <button className="ghost" onClick={() => setSelectedModels([])}>
+              Clear
+            </button>
+          </div>
+          <div>
+            {comparedModels.map((model) => (
+              <article key={model.id}>
+                <b>{model.alias || model.name}</b>
+                <span>
+                  mAP50 <strong>{model.map}%</strong>
+                </span>
+                <span>
+                  Precision <strong>{model.precision}%</strong>
+                </span>
+                <span>
+                  Recall <strong>{model.recall}%</strong>
+                </span>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="registry-grid">
         {[...project.models].reverse().map((model) => (
           <article className="registry-card" key={model.id}>
             <div className="registry-head">
+              <label className="model-select" title="Select for comparison">
+                <input
+                  type="checkbox"
+                  checked={selectedModels.includes(model.id)}
+                  onChange={() => toggleModel(model.id)}
+                />
+              </label>
               <span className={model.status}>
                 <BrainCircuit />
               </span>
               <div>
                 <h3>{model.name}</h3>
+                {model.alias && (
+                  <strong className="model-alias">{model.alias}</strong>
+                )}
                 <p>
                   Dataset v{model.version} ·{" "}
                   {model.createdAt?.slice(0, 10) || "local run"}
@@ -5389,6 +6174,44 @@ function ModelRegistry({
                 Optimizer <b>{String(model.config?.optimizer || "—")}</b>
               </span>
             </div>
+            <div className="model-lifecycle">
+              <label>
+                Stage
+                <select
+                  value={model.stage || "development"}
+                  disabled={model.status !== "ready"}
+                  onChange={(event) =>
+                    updateLifecycle(
+                      model.id,
+                      event.target.value as NonNullable<Model["stage"]>,
+                      model.alias,
+                    )
+                  }
+                >
+                  <option value="development">Development</option>
+                  <option value="staging">Staging</option>
+                  <option value="production">Production</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </label>
+              <button
+                disabled={model.status !== "ready"}
+                onClick={() => {
+                  const alias = prompt(
+                    "Alias model",
+                    model.alias || "latest",
+                  )?.trim();
+                  if (alias)
+                    updateLifecycle(
+                      model.id,
+                      model.stage || "development",
+                      alias,
+                    );
+                }}
+              >
+                Set alias
+              </button>
+            </div>
             {model.status === "ready" && (
               <div className="registry-exports">
                 {["onnx", "torchscript", "openvino", "ncnn", "tflite"].map(
@@ -5407,6 +6230,11 @@ function ModelRegistry({
               </div>
             )}
             <div className="registry-actions">
+              {(model.status === "failed" || model.status === "cancelled") && (
+                <button onClick={() => retry(model.id)}>
+                  <Redo2 /> Retry
+                </button>
+              )}
               <button onClick={() => rename(model.id, model.name)}>
                 Rename
               </button>
@@ -5449,6 +6277,9 @@ function DatasetManager({
   const [status, setStatus] = useState("all");
   const [split, setSplit] = useState("all");
   const [review, setReview] = useState("all");
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -5456,11 +6287,22 @@ function DatasetManager({
   const input = useRef<HTMLInputElement>(null);
   const filtered = project.assets.filter(
     (asset) =>
-      asset.name.toLowerCase().includes(query.toLowerCase()) &&
+      `${asset.name} ${(asset.tags || []).join(" ")} ${Object.values(asset.metadata || {}).join(" ")}`
+        .toLowerCase()
+        .includes(query.toLowerCase()) &&
       (status === "all" || asset.status === status) &&
       (split === "all" || asset.split === split) &&
       (review === "all" || (asset.reviewStatus || "pending") === review),
   );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const visibleAssets = filtered.slice(
+    (pageNumber - 1) * pageSize,
+    pageNumber * pageSize,
+  );
+  useEffect(() => setPageNumber(1), [query, status, split, review, pageSize]);
+  useEffect(() => {
+    if (pageNumber > totalPages) setPageNumber(totalPages);
+  }, [pageNumber, totalPages]);
   useEffect(
     () =>
       setSelected(
@@ -5687,7 +6529,7 @@ function DatasetManager({
         </div>
       )}
       <div className="dataset-grid">
-        {filtered.map((asset) => (
+        {visibleAssets.map((asset) => (
           <article
             className={
               "dataset-item " + (selected.has(asset.id) ? "selected" : "")
@@ -5710,13 +6552,24 @@ function DatasetManager({
               >
                 {selected.has(asset.id) ? <CheckSquare /> : <Square />}
               </button>
-              <img src={asset.src} />
+              <img
+                src={asset.src}
+                onClick={() => setPreviewAsset(asset)}
+                title="Preview and edit metadata"
+              />
               <span className={asset.status}>{asset.status}</span>
               <button onClick={() => remove(asset.id)}>
                 <Trash2 />
               </button>
             </div>
             <h3 title={asset.name}>{asset.name}</h3>
+            {!!asset.tags?.length && (
+              <div className="asset-tags">
+                {asset.tags.slice(0, 3).map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </div>
+            )}
             <footer>
               <span>{asset.boxes.length} labels</span>
               <select
@@ -5754,6 +6607,33 @@ function DatasetManager({
           </article>
         ))}
       </div>
+      {filtered.length > pageSize && (
+        <div className="dataset-pagination">
+          <span>
+            Page {pageNumber} of {totalPages}
+          </span>
+          <button
+            disabled={pageNumber === 1}
+            onClick={() => setPageNumber((value) => value - 1)}
+          >
+            Previous
+          </button>
+          <button
+            disabled={pageNumber === totalPages}
+            onClick={() => setPageNumber((value) => value + 1)}
+          >
+            Next
+          </button>
+          <select
+            value={pageSize}
+            onChange={(event) => setPageSize(Number(event.target.value))}
+          >
+            <option value={25}>25 / page</option>
+            <option value={50}>50 / page</option>
+            <option value={100}>100 / page</option>
+          </select>
+        </div>
+      )}
       {!filtered.length && (
         <div className="zero">
           <ImageIcon />
@@ -5763,6 +6643,171 @@ function DatasetManager({
           </p>
         </div>
       )}
+      {previewAsset && (
+        <AssetPreviewModal
+          project={project}
+          asset={
+            project.assets.find((item) => item.id === previewAsset.id) ||
+            previewAsset
+          }
+          close={() => setPreviewAsset(null)}
+          annotate={() => {
+            localStorage.setItem(`vf-annotate-${project.id}`, previewAsset.id);
+            setPreviewAsset(null);
+            go("annotate");
+          }}
+          save={async (data) => {
+            try {
+              const saved = await api.updateAssetMetadata(
+                project.id,
+                previewAsset.id,
+                data,
+              );
+              update(() => saved);
+              setPreviewAsset(
+                saved.assets.find((item) => item.id === previewAsset.id) ||
+                  null,
+              );
+              notify("Image metadata updated");
+            } catch (error) {
+              notify(
+                error instanceof Error
+                  ? error.message
+                  : "Metadata update failed",
+              );
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AssetPreviewModal({
+  project,
+  asset,
+  close,
+  annotate,
+  save,
+}: {
+  project: Project;
+  asset: Asset;
+  close: () => void;
+  annotate: () => void;
+  save: (data: {
+    name: string;
+    tags: string[];
+    metadata: Record<string, string>;
+  }) => void;
+}) {
+  const [name, setName] = useState(asset.name);
+  const [tags, setTags] = useState((asset.tags || []).join(", "));
+  const [metadata, setMetadata] = useState(
+    Object.entries(asset.metadata || {})
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n"),
+  );
+  const submit = () => {
+    const parsed = Object.fromEntries(
+      metadata
+        .split("\n")
+        .map((line) => line.split("="))
+        .filter((parts) => parts.length >= 2 && parts[0].trim())
+        .map((parts) => [parts[0].trim(), parts.slice(1).join("=").trim()]),
+    );
+    save({
+      name: name.trim(),
+      tags: tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+      metadata: parsed,
+    });
+  };
+  return (
+    <div className="modal-bg asset-preview-bg" onMouseDown={close}>
+      <section
+        className="asset-preview-modal"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="asset-preview-image">
+          <img src={asset.src} />
+          {asset.boxes.map((box, index) => (
+            <i
+              key={box.id}
+              style={{
+                left: `${box.x}%`,
+                top: `${box.y}%`,
+                width: `${box.w}%`,
+                height: `${box.h}%`,
+                borderColor: classColor(project, box.label, index),
+              }}
+            >
+              <span>{box.label}</span>
+            </i>
+          ))}
+        </div>
+        <div className="asset-preview-details">
+          <header>
+            <div>
+              <span className="eyebrow">IMAGE DETAILS</span>
+              <h2>{asset.name}</h2>
+            </div>
+            <button className="icon ghost" onClick={close}>
+              <X />
+            </button>
+          </header>
+          <div className="asset-facts">
+            <span>
+              <b>{asset.boxes.length}</b> annotations
+            </span>
+            <span>
+              <b>{asset.split}</b> split
+            </span>
+            <span>
+              <b>{asset.reviewStatus || "pending"}</b> review
+            </span>
+          </div>
+          <label>
+            Filename
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label>
+            Tags
+            <input
+              value={tags}
+              onChange={(event) => setTags(event.target.value)}
+              placeholder="warehouse, night, camera-2"
+            />
+          </label>
+          <label>
+            Custom metadata
+            <textarea
+              value={metadata}
+              onChange={(event) => setMetadata(event.target.value)}
+              placeholder={"camera=loading-bay\nlocation=jakarta"}
+            />
+            <small>One key=value pair per line.</small>
+          </label>
+          <footer>
+            <button className="secondary" onClick={annotate}>
+              <PenTool />
+              Open in annotator
+            </button>
+            <button
+              className="primary"
+              disabled={!name.trim()}
+              onClick={submit}
+            >
+              <Check />
+              Save metadata
+            </button>
+          </footer>
+        </div>
+      </section>
     </div>
   );
 }
@@ -5778,6 +6823,10 @@ function LocalSettings({
     ReturnType<typeof api.system>
   > | null>(null);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const [activeMemberId, setActiveMemberId] = useState(
+    () => localStorage.getItem("vf-active-member") || "",
+  );
   const [restoring, setRestoring] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -5787,7 +6836,14 @@ function LocalSettings({
       .catch(() => {});
     api
       .members()
-      .then(setMembers)
+      .then((items) => {
+        setMembers(items);
+        if (!activeMemberId && items[0]) setActiveMemberId(items[0].id);
+      })
+      .catch(() => {});
+    api
+      .activity()
+      .then(setActivityLog)
       .catch(() => {});
   }, []);
   const restore = async (file?: File) => {
@@ -5830,6 +6886,19 @@ function LocalSettings({
       notify(e instanceof Error ? e.message : "Gagal menambah anggota");
     }
   };
+  const activateMember = (member: WorkspaceMember) => {
+    localStorage.setItem("vf-active-member", member.id);
+    localStorage.setItem("vf-active-role", member.role);
+    localStorage.setItem("vf-active-name", member.name);
+    setActiveMemberId(member.id);
+    notify(`Active account: ${member.name} (${member.role})`);
+  };
+  const permissionRows = [
+    ["View projects & reports", true, true, true, true],
+    ["Upload & annotate data", true, true, true, false],
+    ["Versions, training & deploy", true, true, false, false],
+    ["Members & recovery", true, true, false, false],
+  ];
   return (
     <div className="content settings-page">
       <div className="project-title">
@@ -5969,6 +7038,12 @@ function LocalSettings({
                 <option value="viewer">Viewer</option>
               </select>
               <button
+                className={activeMemberId === member.id ? "active-member" : ""}
+                onClick={() => activateMember(member)}
+              >
+                {activeMemberId === member.id ? "Active" : "Use account"}
+              </button>
+              <button
                 className="delete"
                 onClick={async () => {
                   if (!confirm(`Hapus ${member.name} dari workspace?`)) return;
@@ -5992,6 +7067,55 @@ function LocalSettings({
           ))}
         </div>
       </section>
+      <div className="workspace-governance">
+        <section className="panel permission-panel">
+          <div className="panel-head">
+            <div>
+              <h2>Role permissions</h2>
+              <p>Mutation requests are enforced by the local API.</p>
+            </div>
+          </div>
+          <div className="permission-table">
+            <div>
+              <b>Capability</b>
+              <b>Owner</b>
+              <b>Admin</b>
+              <b>Annotator</b>
+              <b>Viewer</b>
+            </div>
+            {permissionRows.map(([label, ...roles]) => (
+              <div key={String(label)}>
+                <span>{String(label)}</span>
+                {roles.map((allowed, index) => (
+                  <span key={index}>{allowed ? <Check /> : "—"}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="panel activity-panel">
+          <div className="panel-head">
+            <div>
+              <h2>Workspace activity</h2>
+              <p>Latest project, dataset, version, and model events.</p>
+            </div>
+            <History />
+          </div>
+          <div className="activity-list">
+            {activityLog.slice(0, 12).map((entry) => (
+              <div key={entry.id}>
+                <i />
+                <span>
+                  <b>{entry.action.replaceAll(".", " ")}</b>
+                  <small>{entry.detail || "Workspace updated"}</small>
+                </span>
+                <time>{entry.createdAt.slice(0, 16).replace("T", " ")}</time>
+              </div>
+            ))}
+            {!activityLog.length && <p>No activity recorded yet.</p>}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }

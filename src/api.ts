@@ -24,9 +24,32 @@ export type WorkspaceMember = {
   role: "owner" | "admin" | "annotator" | "viewer";
   createdAt: string;
 };
+export type ActivityEntry = {
+  id: string;
+  projectId?: string;
+  action: string;
+  detail: string;
+  actor: string;
+  createdAt: string;
+};
+export type WorkflowRun = {
+  id: string;
+  status: string;
+  predictions: number;
+  counts: Record<string, number>;
+  error?: string;
+  createdAt: string;
+  durationMs: number;
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const role =
+    typeof localStorage === "undefined"
+      ? "owner"
+      : localStorage.getItem("vf-active-role") || "owner";
+  const headers = new Headers(init?.headers);
+  headers.set("X-Workspace-Role", role);
+  const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `Request failed (${response.status})`);
@@ -45,6 +68,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  archiveProject: (id: string, archived: boolean) =>
+    request<Project>(`/api/projects/${id}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived }),
+    }),
+  duplicateProject: (id: string) =>
+    request<Project>(`/api/projects/${id}/duplicate`, { method: "POST" }),
+  activity: (projectId?: string) =>
+    request<ActivityEntry[]>(
+      `/api/activity${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
   deleteProject: (id: string) =>
     request<void>(`/api/projects/${id}`, { method: "DELETE" }),
   createProject: (data: {
@@ -67,6 +102,38 @@ export const api = {
       body,
     });
   },
+  uploadWithProgress: (
+    id: string,
+    files: FileList,
+    onProgress: (percent: number) => void,
+  ) =>
+    new Promise<Project>((resolve, reject) => {
+      const body = new FormData();
+      Array.from(files).forEach((file) => body.append("files", file));
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `/api/projects/${id}/assets`);
+      xhr.upload.onprogress = (event) =>
+        event.lengthComputable &&
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300)
+          resolve(JSON.parse(xhr.responseText));
+        else {
+          try {
+            reject(
+              new Error(
+                JSON.parse(xhr.responseText).detail ||
+                  `Upload failed (${xhr.status})`,
+              ),
+            );
+          } catch {
+            reject(new Error(`Upload failed (${xhr.status})`));
+          }
+        }
+      };
+      xhr.onerror = () => reject(new Error("Upload connection failed"));
+      xhr.send(body);
+    }),
   deleteAsset: (projectId: string, assetId: string) =>
     request<void>(`/api/projects/${projectId}/assets/${assetId}`, {
       method: "DELETE",
@@ -110,6 +177,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids, action, value }),
     }),
+  updateAssetMetadata: (
+    projectId: string,
+    assetId: string,
+    data: { name: string; tags: string[]; metadata: Record<string, string> },
+  ) =>
+    request<Project>(`/api/projects/${projectId}/assets/${assetId}/metadata`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   interpolate: (projectId: string, startAssetId: string, endAssetId: string) =>
     request<Project>(`/api/projects/${projectId}/assets/interpolate`, {
       method: "POST",
@@ -152,6 +229,16 @@ export const api = {
   deleteVersion: (projectId: string, versionId: string) =>
     request<void>(`/api/projects/${projectId}/versions/${versionId}`, {
       method: "DELETE",
+    }),
+  updateVersion: (
+    projectId: string,
+    versionId: string,
+    data: { name: string; notes: string; tags: string[] },
+  ) =>
+    request<Project>(`/api/projects/${projectId}/versions/${versionId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
     }),
   annotate: (projectId: string, assetId: string, boxes: Box[]) =>
     request<Project>(
@@ -237,6 +324,20 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
+    }),
+  updateModelLifecycle: (
+    projectId: string,
+    modelId: string,
+    data: { alias?: string; stage: string },
+  ) =>
+    request<Project>(`/api/projects/${projectId}/models/${modelId}/lifecycle`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  retryTraining: (projectId: string, modelId: string) =>
+    request<Project>(`/api/projects/${projectId}/models/${modelId}/retry`, {
+      method: "POST",
     }),
   deleteModel: (projectId: string, modelId: string) =>
     request<void>(`/api/projects/${projectId}/models/${modelId}`, {
@@ -347,6 +448,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  duplicateWorkflow: (id: string) =>
+    request<WorkflowData>(`/api/workflows/${id}/duplicate`, { method: "POST" }),
+  workflowRuns: (id: string) =>
+    request<WorkflowRun[]>(`/api/workflows/${id}/runs`),
   deleteWorkflow: (id: string) =>
     request<void>(`/api/workflows/${id}`, { method: "DELETE" }),
   runWorkflow: (id: string, file: File, confidence = 0.5) => {

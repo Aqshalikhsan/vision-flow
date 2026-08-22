@@ -22,9 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel, Field
@@ -55,6 +55,13 @@ def db() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def log_activity(con: sqlite3.Connection, action: str, detail: str = "", project_id: str | None = None, actor: str = "Local Owner") -> None:
+    con.execute(
+        "INSERT INTO activity_logs (id,project_id,action,detail,actor,created_at) VALUES (?,?,?,?,?,?)",
+        (uid(), project_id, action, detail[:1000], actor[:100], now()),
+    )
 
 
 def init_db() -> None:
@@ -103,6 +110,17 @@ def init_db() -> None:
               id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
               role TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS activity_logs (
+              id TEXT PRIMARY KEY, project_id TEXT, action TEXT NOT NULL,
+              detail TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT 'Local Owner',
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+              id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+              status TEXT NOT NULL, predictions INTEGER NOT NULL DEFAULT 0,
+              counts TEXT NOT NULL DEFAULT '{}', error TEXT, created_at TEXT NOT NULL,
+              duration_ms REAL NOT NULL DEFAULT 0
+            );
             """
         )
         columns = {row["name"] for row in con.execute("PRAGMA table_info(projects)")}
@@ -125,6 +143,24 @@ def init_db() -> None:
             con.execute("ALTER TABLE assets ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'")
         if "split_locked" not in asset_columns:
             con.execute("ALTER TABLE assets ADD COLUMN split_locked INTEGER NOT NULL DEFAULT 0")
+        if "tags" not in asset_columns:
+            con.execute("ALTER TABLE assets ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+        if "metadata" not in asset_columns:
+            con.execute("ALTER TABLE assets ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+        if "archived" not in columns:
+            con.execute("ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        if "updated_at" not in columns:
+            con.execute("ALTER TABLE projects ADD COLUMN updated_at TEXT")
+        if "name" not in version_columns:
+            con.execute("ALTER TABLE versions ADD COLUMN name TEXT")
+        if "notes" not in version_columns:
+            con.execute("ALTER TABLE versions ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+        if "tags" not in version_columns:
+            con.execute("ALTER TABLE versions ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+        if "alias" not in model_columns:
+            con.execute("ALTER TABLE models ADD COLUMN alias TEXT")
+        if "stage" not in model_columns:
+            con.execute("ALTER TABLE models ADD COLUMN stage TEXT NOT NULL DEFAULT 'development'")
         # Jobs survive an application restart. The scheduler resumes from last.pt
         # when Ultralytics has already written a checkpoint for the run.
         con.execute("UPDATE models SET status='queued', error='Queued for automatic resume after server restart' WHERE status='training'")
@@ -139,23 +175,27 @@ def project_dict(con: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"], "name": row["name"], "type": row["type"],
         "description": row["description"], "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"], "archived": bool(row["archived"]),
         "classes": json.loads(row["classes"]), "colors": json.loads(row["colors"] or "{}"),
         "assets": [{
             "id": a["id"], "name": a["name"], "src": f"/files/{a['id']}",
-            "split": a["split"], "status": a["status"], "reviewStatus": a["review_status"], "boxes": json.loads(a["boxes"])
+            "split": a["split"], "status": a["status"], "reviewStatus": a["review_status"], "boxes": json.loads(a["boxes"]),
+            "tags": json.loads(a["tags"] or "[]"), "metadata": json.loads(a["metadata"] or "{}")
         } for a in assets],
         "versions": [{
             "id": v["id"], "number": v["number"], "createdAt": v["created_at"],
             "images": v["images"], "resize": v["resize"], "augment": bool(v["augment"]),
             "splits": json.loads(v["splits"]),
             "augmentations": json.loads(v["augmentations"] or "{}"),
-            "generatedImages": v["generated_images"] or v["images"]
+            "generatedImages": v["generated_images"] or v["images"], "name": v["name"] or f"Version {v['number']}",
+            "notes": v["notes"] or "", "tags": json.loads(v["tags"] or "[]")
         } for v in versions],
         "models": [{
             "id": m["id"], "name": m["name"], "version": m["version"],
             "status": m["status"], "progress": m["progress"], "map": m["map"],
             "precision": m["precision"], "recall": m["recall"], "error": m["error"]
-            , "config": json.loads(m["config"] or "{}"), "createdAt": m["created_at"], "metricsHistory": json.loads(m["metrics_history"] or "[]")
+            , "config": json.loads(m["config"] or "{}"), "createdAt": m["created_at"], "metricsHistory": json.loads(m["metrics_history"] or "[]"),
+            "alias": m["alias"], "stage": m["stage"] or "development"
         } for m in models]
     }
 
@@ -175,6 +215,10 @@ class ProjectCreate(BaseModel):
 class ProjectUpdatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=1000)
+
+
+class ProjectArchivePayload(BaseModel):
+    archived: bool = True
 
 
 class BoxPayload(BaseModel):
@@ -206,6 +250,12 @@ class BulkAssetPayload(BaseModel):
     value: str | None = None
 
 
+class AssetMetadataPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    tags: list[str] = Field(default_factory=list, max_length=30)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
 class InterpolatePayload(BaseModel):
     start_asset_id: str
     end_asset_id: str
@@ -233,6 +283,12 @@ class VersionPayload(BaseModel):
     augmentation_copies: int = Field(default=2, ge=1, le=8)
 
 
+class VersionUpdatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    notes: str = Field(default="", max_length=2000)
+    tags: list[str] = Field(default_factory=list, max_length=30)
+
+
 class TrainPayload(BaseModel):
     architecture: str = "yolo11n.pt"
     epochs: int = Field(default=10, ge=1, le=300)
@@ -247,6 +303,11 @@ class TrainPayload(BaseModel):
 
 class ModelRenamePayload(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+
+
+class ModelLifecyclePayload(BaseModel):
+    alias: str | None = Field(default=None, max_length=60)
+    stage: str = Field(default="development", pattern=r"^(development|staging|production|archived)$")
 
 
 class ModelExportPayload(BaseModel):
@@ -286,6 +347,33 @@ class MemberPayload(BaseModel):
 
 app = FastAPI(title="Roboflow Local API", version="0.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def enforce_workspace_role(request: Request, call_next):
+    """Apply lightweight role boundaries for the single-machine workspace."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return await call_next(request)
+    role = request.headers.get("X-Workspace-Role", "owner").lower()
+    if role in {"owner", "admin"}:
+        return await call_next(request)
+    path = request.url.path
+    annotator_paths = (
+        "/assets",
+        "/annotations",
+        "/review",
+        "/metadata",
+        "/bulk",
+        "/auto-label",
+    )
+    if role == "annotator" and path.startswith("/api/projects/") and any(
+        marker in path for marker in annotator_paths
+    ):
+        return await call_next(request)
+    return JSONResponse(
+        status_code=403,
+        content={"detail": f"Role {role} tidak memiliki izin untuk aksi ini"},
+    )
 init_db()
 
 
@@ -458,7 +546,8 @@ def create_project(payload: ProjectCreate):
     project_id = "-".join("".join(c if c.isalnum() else " " for c in project_id).split()) + "-" + uid()[:4]
     with db() as con:
         colors = {name: payload.colors.get(name, "#7457e8") for name in cleaned_classes}
-        con.execute("INSERT INTO projects (id,name,type,description,created_at,classes,colors) VALUES (?,?,?,?,?,?,?)", (project_id, payload.name, payload.type, payload.description, now()[:10], json.dumps(cleaned_classes), json.dumps(colors)))
+        con.execute("INSERT INTO projects (id,name,type,description,created_at,classes,colors,updated_at) VALUES (?,?,?,?,?,?,?,?)", (project_id, payload.name, payload.type, payload.description, now()[:10], json.dumps(cleaned_classes), json.dumps(colors), now()))
+        log_activity(con, "project.created", payload.name, project_id)
         row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return project_dict(con, row)
 
@@ -479,12 +568,69 @@ def update_project(project_id: str, payload: ProjectUpdatePayload):
         raise HTTPException(400, "Project name is required")
     with db() as con:
         result = con.execute(
-            "UPDATE projects SET name=?,description=? WHERE id=?",
-            (name, payload.description.strip(), project_id),
+            "UPDATE projects SET name=?,description=?,updated_at=? WHERE id=?",
+            (name, payload.description.strip(), now(), project_id),
         )
         if not result.rowcount:
             raise HTTPException(404, "Project not found")
+        log_activity(con, "project.updated", f"Updated project details for {name}", project_id)
         return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
+@app.post("/api/projects/{project_id}/archive")
+def archive_project(project_id: str, payload: ProjectArchivePayload):
+    with db() as con:
+        result = con.execute(
+            "UPDATE projects SET archived=?,updated_at=? WHERE id=?",
+            (int(payload.archived), now(), project_id),
+        )
+        if not result.rowcount:
+            raise HTTPException(404, "Project not found")
+        log_activity(con, "project.archived" if payload.archived else "project.restored", "", project_id)
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
+@app.post("/api/projects/{project_id}/duplicate", status_code=201)
+def duplicate_project(project_id: str):
+    with db() as con:
+        source = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not source:
+            raise HTTPException(404, "Project not found")
+        duplicate_id = "-".join("".join(c if c.isalnum() else " " for c in f"{source['name']} copy".lower()).split()) + "-" + uid()[:4]
+        duplicate_name = f"{source['name']} Copy"
+        con.execute(
+            "INSERT INTO projects (id,name,type,description,created_at,classes,colors,archived,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (duplicate_id, duplicate_name, source["type"], source["description"], now()[:10], source["classes"], source["colors"], 0, now()),
+        )
+        target_dir = UPLOADS / duplicate_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for asset in con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (project_id,)):
+            asset_id = uid()
+            source_file = Path(asset["path"])
+            suffix = source_file.suffix.lower() or ".jpg"
+            target_file = target_dir / f"{asset_id}{suffix}"
+            if source_file.is_file():
+                shutil.copy2(source_file, target_file)
+            boxes = json.loads(asset["boxes"])
+            for box in boxes:
+                box["id"] = uid()
+            con.execute(
+                "INSERT INTO assets (id,project_id,name,path,split,status,boxes,split_locked,review_status,tags,metadata) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (asset_id, duplicate_id, asset["name"], str(target_file), asset["split"], asset["status"], json.dumps(boxes), asset["split_locked"], asset["review_status"], asset["tags"], asset["metadata"]),
+            )
+        log_activity(con, "project.duplicated", f"Duplicated from {source['name']}", duplicate_id)
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (duplicate_id,)).fetchone())
+
+
+@app.get("/api/activity")
+def list_activity(project_id: str | None = None, limit: int = 100):
+    limit = max(1, min(limit, 500))
+    with db() as con:
+        if project_id:
+            rows = con.execute("SELECT * FROM activity_logs WHERE project_id=? ORDER BY created_at DESC LIMIT ?", (project_id, limit)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return [{"id": row["id"], "projectId": row["project_id"], "action": row["action"], "detail": row["detail"], "actor": row["actor"], "createdAt": row["created_at"]} for row in rows]
 
 
 @app.delete("/api/projects/{project_id}", status_code=204)
@@ -493,6 +639,7 @@ def delete_project(project_id: str):
         if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
             raise HTTPException(404, "Project not found")
         model_ids = [row["id"] for row in con.execute("SELECT id FROM models WHERE project_id=?", (project_id,))]
+        con.execute("DELETE FROM activity_logs WHERE project_id=?", (project_id,))
         con.execute("DELETE FROM projects WHERE id=?", (project_id,))
     for root in (UPLOADS, VERSIONS):
         target = (root / project_id).resolve()
@@ -562,6 +709,7 @@ async def upload_assets(project_id: str, files: list[UploadFile] = File(...)):
             target.write_bytes(content)
             con.execute("INSERT INTO assets (id,project_id,name,path,split,status,boxes) VALUES (?,?,?,?,?,?,?)", (asset_id, project_id, incoming.filename or target.name, str(target), "train", "unannotated", "[]"))
             created.append(asset_id)
+        log_activity(con, "assets.uploaded", f"{len(created)} image(s) added", project_id)
         row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return project_dict(con, row)
 
@@ -729,6 +877,23 @@ def update_asset_split(project_id: str, asset_id: str, payload: SplitPayload):
         return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
 
 
+@app.put("/api/projects/{project_id}/assets/{asset_id}/metadata")
+def update_asset_metadata(project_id: str, asset_id: str, payload: AssetMetadataPayload):
+    tags = list(dict.fromkeys(tag.strip() for tag in payload.tags if tag.strip()))[:30]
+    metadata = {key.strip(): value.strip() for key, value in payload.metadata.items() if key.strip() and value.strip()}
+    if len(metadata) > 50:
+        raise HTTPException(400, "Asset metadata supports up to 50 fields")
+    with db() as con:
+        result = con.execute(
+            "UPDATE assets SET name=?,tags=?,metadata=? WHERE id=? AND project_id=?",
+            (payload.name.strip(), json.dumps(tags), json.dumps(metadata), asset_id, project_id),
+        )
+        if not result.rowcount:
+            raise HTTPException(404, "Asset not found")
+        log_activity(con, "asset.updated", payload.name.strip(), project_id)
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
 @app.post("/api/projects/{project_id}/assets/bulk")
 def bulk_update_assets(project_id: str, payload: BulkAssetPayload):
     unique_ids = list(dict.fromkeys(payload.ids))
@@ -764,6 +929,7 @@ def bulk_update_assets(project_id: str, payload: BulkAssetPayload):
                 f"DELETE FROM assets WHERE project_id=? AND id IN ({placeholders})",
                 (project_id, *unique_ids),
             )
+        log_activity(con, f"assets.{payload.action}", f"{len(unique_ids)} image(s){' → ' + payload.value if payload.value else ''}", project_id)
         updated = project_dict(con, project)
     project_root = (UPLOADS / project_id).resolve()
     for filename in files_to_remove:
@@ -1188,7 +1354,22 @@ def generate_version(project_id: str, payload: VersionPayload):
             target, generated_images = make_yolo_version(con, project_id, version_no, payload)
         version_id = uid()
         con.execute("INSERT INTO versions (id,project_id,number,created_at,images,resize,augment,splits,path,augmentations,generated_images) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (version_id, project_id, version_no, now()[:10], count, payload.resize, int(payload.augment), json.dumps(payload.splits), str(target), json.dumps({"copies": payload.augmentation_copies, "transforms": payload.augmentations}), generated_images))
+        log_activity(con, "version.generated", f"Version {version_no} · {generated_images} generated images", project_id)
         return project_dict(con, project)
+
+
+@app.put("/api/projects/{project_id}/versions/{version_id}")
+def update_version(project_id: str, version_id: str, payload: VersionUpdatePayload):
+    tags = list(dict.fromkeys(tag.strip() for tag in payload.tags if tag.strip()))[:30]
+    with db() as con:
+        result = con.execute(
+            "UPDATE versions SET name=?,notes=?,tags=? WHERE id=? AND project_id=?",
+            (payload.name.strip(), payload.notes.strip(), json.dumps(tags), version_id, project_id),
+        )
+        if not result.rowcount:
+            raise HTTPException(404, "Dataset version not found")
+        log_activity(con, "version.updated", payload.name.strip(), project_id)
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
 
 
 @app.put("/api/projects/{project_id}/assets/{asset_id}/review")
@@ -1442,6 +1623,7 @@ def start_training(project_id: str, payload: TrainPayload):
         model_id = uid()
         display = payload.architecture.replace(".pt", "")
         con.execute("INSERT INTO models (id,project_id,name,version,status,progress,config,created_at,metrics_history) VALUES (?,?,?,?,?,?,?,?,?)", (model_id, project_id, display, version["number"], "queued", 0, payload.model_dump_json(), now(), "[]"))
+        log_activity(con, "training.started", f"{display} on version {version['number']}", project_id)
         result = project_dict(con, project)
     schedule_training_jobs()
     return result
@@ -1471,6 +1653,39 @@ def rename_model(project_id: str, model_id: str, payload: ModelRenamePayload):
             raise HTTPException(404, "Model not found")
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return project_dict(con, project)
+
+
+@app.put("/api/projects/{project_id}/models/{model_id}/lifecycle")
+def update_model_lifecycle(project_id: str, model_id: str, payload: ModelLifecyclePayload):
+    alias = payload.alias.strip() if payload.alias else None
+    with db() as con:
+        model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
+        if not model:
+            raise HTTPException(404, "Model not found")
+        if payload.stage in {"staging", "production"} and model["status"] != "ready":
+            raise HTTPException(409, "Only ready models can be promoted")
+        if payload.stage == "production":
+            con.execute("UPDATE models SET stage='staging' WHERE project_id=? AND stage='production' AND id<>?", (project_id, model_id))
+        if alias:
+            con.execute("UPDATE models SET alias=NULL WHERE project_id=? AND alias=? AND id<>?", (project_id, alias, model_id))
+        con.execute("UPDATE models SET alias=?,stage=? WHERE id=?", (alias, payload.stage, model_id))
+        log_activity(con, "model.promoted", f"{model['name']} → {payload.stage}{' · ' + alias if alias else ''}", project_id)
+        return project_dict(con, con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
+@app.post("/api/projects/{project_id}/models/{model_id}/retry", status_code=202)
+def retry_training(project_id: str, model_id: str):
+    with db() as con:
+        model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
+        if not model:
+            raise HTTPException(404, "Model not found")
+        if model["status"] not in {"failed", "cancelled", "ready"}:
+            raise HTTPException(409, "This training run cannot be retried yet")
+        try:
+            payload = TrainPayload.model_validate_json(model["config"] or "{}")
+        except Exception as exc:
+            raise HTTPException(400, "Saved training configuration is invalid") from exc
+    return start_training(project_id, payload)
 
 
 @app.delete("/api/projects/{project_id}/models/{model_id}", status_code=204)
@@ -1715,9 +1930,31 @@ def save_workflow(payload: WorkflowPayload):
     return {"id": workflow_id, "name": payload.name, "nodes": payload.nodes, "edges": payload.edges, "updatedAt": now()}
 
 
+@app.post("/api/workflows/{workflow_id}/duplicate", status_code=201)
+def duplicate_workflow(workflow_id: str):
+    with db() as con:
+        row = con.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Workflow not found")
+        new_id = uid()
+        new_name = f"{row['name']} Copy"
+        con.execute("INSERT INTO workflows (id,name,nodes,edges,updated_at) VALUES (?,?,?,?,?)", (new_id, new_name, row["nodes"], row["edges"], now()))
+    return {"id": new_id, "name": new_name, "nodes": json.loads(row["nodes"]), "edges": json.loads(row["edges"]), "updatedAt": now()}
+
+
+@app.get("/api/workflows/{workflow_id}/runs")
+def workflow_run_history(workflow_id: str, limit: int = 50):
+    with db() as con:
+        if not con.execute("SELECT 1 FROM workflows WHERE id=?", (workflow_id,)).fetchone():
+            raise HTTPException(404, "Workflow not found")
+        rows = con.execute("SELECT * FROM workflow_runs WHERE workflow_id=? ORDER BY created_at DESC LIMIT ?", (workflow_id, max(1, min(limit, 200)))).fetchall()
+    return [{"id": row["id"], "status": row["status"], "predictions": row["predictions"], "counts": json.loads(row["counts"] or "{}"), "error": row["error"], "createdAt": row["created_at"], "durationMs": round(row["duration_ms"], 1)} for row in rows]
+
+
 @app.delete("/api/workflows/{workflow_id}", status_code=204)
 def delete_workflow(workflow_id: str):
     with db() as con:
+        con.execute("DELETE FROM workflow_runs WHERE workflow_id=?", (workflow_id,))
         result = con.execute("DELETE FROM workflows WHERE id=?", (workflow_id,))
         if not result.rowcount:
             raise HTTPException(404, "Workflow not found")
@@ -1725,6 +1962,7 @@ def delete_workflow(workflow_id: str):
 
 @app.post("/api/workflows/{workflow_id}/run")
 async def run_workflow(workflow_id: str, file: UploadFile = File(...), confidence: float = 0.5):
+    started = time.perf_counter()
     with db() as con:
         workflow = con.execute("SELECT * FROM workflows WHERE id=?", (workflow_id,)).fetchone()
         if not workflow:
@@ -1785,6 +2023,11 @@ async def run_workflow(workflow_id: str, file: UploadFile = File(...), confidenc
             except Exception as exc:
                 actions.append({"nodeId": node.get("id"), "type": "webhook", "status": "failed", "error": str(exc)[:300]})
         payload["actions"] = actions
+        with db() as con:
+            con.execute(
+                "INSERT INTO workflow_runs (id,workflow_id,status,predictions,counts,created_at,duration_ms) VALUES (?,?,?,?,?,?,?)",
+                (uid(), workflow_id, "completed", len(predictions), json.dumps(counts), now(), (time.perf_counter() - started) * 1000),
+            )
         return payload
     finally:
         temp.unlink(missing_ok=True)

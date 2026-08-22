@@ -17,6 +17,8 @@ export type Asset = {
   boxes: Box[];
   status: "unannotated" | "annotated";
   reviewStatus?: "pending" | "approved" | "needs-fix";
+  tags?: string[];
+  metadata?: Record<string, string>;
 };
 export type AugmentationSetting = {
   enabled: boolean;
@@ -34,6 +36,9 @@ export type Version = {
   augment: boolean;
   splits: [number, number, number];
   augmentations?: { copies?: number; transforms?: AugmentationRecipe };
+  name?: string;
+  notes?: string;
+  tags?: string[];
 };
 export type Model = {
   id: string;
@@ -48,6 +53,8 @@ export type Model = {
   createdAt?: string;
   config?: Record<string, unknown>;
   metricsHistory?: Array<Record<string, number>>;
+  alias?: string;
+  stage?: "development" | "staging" | "production" | "archived";
 };
 export type Project = {
   id: string;
@@ -55,6 +62,8 @@ export type Project = {
   type: string;
   description: string;
   createdAt: string;
+  updatedAt?: string;
+  archived?: boolean;
   classes: string[];
   colors: Record<string, string>;
   assets: Asset[];
