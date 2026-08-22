@@ -666,7 +666,9 @@ function App() {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
-  const project = projects.find((p) => p.id === selectedId) || projects[0];
+  const project =
+    projects.find((p) => p.id === selectedId) ||
+    (backend === "checking" ? undefined : projects[0]);
   const update = (fn: (p: Project) => Project) =>
     setProjects((ps) => ps.map((p) => (p.id === selectedId ? fn(p) : p)));
   const go = (p: Page, id?: string) => {
@@ -3873,6 +3875,70 @@ function Workflows({
   const board = useRef<HTMLDivElement>(null);
   const runInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  const layoutWorkflow = (
+    items: WorkflowNode[],
+    links: Array<{ from: string; to: string; condition?: "true" | "false" }>,
+  ) => {
+    const width = board.current?.clientWidth || 1000;
+    const incoming = new Map(items.map((item) => [item.id, 0]));
+    const outgoing = new Map(items.map((item) => [item.id, [] as string[]]));
+    links.forEach((link) => {
+      if (!incoming.has(link.to) || !outgoing.has(link.from)) return;
+      incoming.set(link.to, (incoming.get(link.to) || 0) + 1);
+      outgoing.get(link.from)!.push(link.to);
+    });
+    const queue = items
+      .filter((item) => incoming.get(item.id) === 0)
+      .map((item) => item.id);
+    const layer = new Map(items.map((item) => [item.id, 0]));
+    const ordered: string[] = [];
+    while (queue.length) {
+      const id = queue.shift()!;
+      ordered.push(id);
+      outgoing.get(id)?.forEach((target) => {
+        layer.set(
+          target,
+          Math.max(layer.get(target) || 0, (layer.get(id) || 0) + 1),
+        );
+        incoming.set(target, (incoming.get(target) || 0) - 1);
+        if (incoming.get(target) === 0) queue.push(target);
+      });
+    }
+    items.forEach((item) => {
+      if (!ordered.includes(item.id)) ordered.push(item.id);
+    });
+    if (width < 650) {
+      return ordered.map((id, index) => ({
+        ...items.find((item) => item.id === id)!,
+        x: 24,
+        y: 28 + index * 118,
+      }));
+    }
+    const maximumLayer = Math.max(1, ...layer.values());
+    const horizontalGap = Math.max(0, width - 258) / maximumLayer;
+    if (horizontalGap < 230) {
+      const columns = Math.max(1, Math.floor((width - 48) / 230));
+      const step =
+        columns > 1 ? Math.max(230, (width - 48 - 210) / (columns - 1)) : 0;
+      return ordered.map((id, index) => ({
+        ...items.find((item) => item.id === id)!,
+        x: 24 + (index % columns) * step,
+        y: 38 + Math.floor(index / columns) * 128,
+      }));
+    }
+    const layerCounts = new Map<number, number>();
+    return ordered.map((id) => {
+      const item = items.find((candidate) => candidate.id === id)!;
+      const itemLayer = layer.get(id) || 0;
+      const row = layerCounts.get(itemLayer) || 0;
+      layerCounts.set(itemLayer, row + 1);
+      return {
+        ...item,
+        x: 24 + (itemLayer / maximumLayer) * Math.max(0, width - 258),
+        y: 38 + row * 118,
+      };
+    });
+  };
   useEffect(() => {
     api
       .workflows()
@@ -3880,7 +3946,7 @@ function Workflows({
         if (items[0]) {
           setWorkflowId(items[0].id);
           setName(items[0].name);
-          setNodes(items[0].nodes);
+          setNodes(layoutWorkflow(items[0].nodes, items[0].edges));
           setEdges(items[0].edges);
         }
       })
@@ -4175,6 +4241,12 @@ function Workflows({
           </button>
           <button className="secondary" onClick={duplicateCurrent}>
             <Copy /> Duplicate
+          </button>
+          <button
+            className="secondary"
+            onClick={() => setNodes(layoutWorkflow(nodes, edges))}
+          >
+            <Layers3 /> Tidy layout
           </button>
           <button
             className={workflowSchedule ? "secondary scheduled" : "secondary"}
@@ -5628,25 +5700,27 @@ function DatasetTrain({
           <p className="muted">
             Choose the speed and accuracy profile for this run.
           </p>
-          {architectures.map((item) => (
-            <button
-              className={
-                "model-option " + (architecture === item.id ? "active" : "")
-              }
-              onClick={() => setArchitecture(item.id)}
-              key={item.id}
-            >
-              <span className={item.tone}>
-                <BrainCircuit />
-              </span>
-              <div>
-                <b>{item.name}</b>
-                <small>{item.note}</small>
-              </div>
-              {item.id === "yolo11n.pt" && <em>RECOMMENDED</em>}
-              <i>{architecture === item.id && <Check />}</i>
-            </button>
-          ))}
+          <div className="architecture-catalog">
+            {architectures.map((item) => (
+              <button
+                className={
+                  "model-option " + (architecture === item.id ? "active" : "")
+                }
+                onClick={() => setArchitecture(item.id)}
+                key={item.id}
+              >
+                <span className={item.tone}>
+                  <BrainCircuit />
+                </span>
+                <div>
+                  <b>{item.name}</b>
+                  <small>{item.note}</small>
+                </div>
+                {item.id === "yolo11n.pt" && <em>RECOMMENDED</em>}
+                <i>{architecture === item.id && <Check />}</i>
+              </button>
+            ))}
+          </div>
           <h2 className="train-step-title">2. Dataset & configuration</h2>
           <div className="training-fields">
             <label>

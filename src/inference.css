@@ -2276,6 +2276,350 @@
   }
 }
 
+/* Advanced workspace polish: keep new operational surfaces on the same
+   typography, spacing, and responsive rhythm as the core product. */
+.insights-page .panel,
+.registry-page .registry-card,
+.train-page .panel {
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+}
+.health-summary > section {
+  min-width: 0;
+  padding: 20px;
+}
+.health-summary small,
+.health-issues small,
+.annotation-jobs small,
+.active-learning-panel small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.health-issues > button {
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid #eeeaf2;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  transition: background 0.15s ease;
+}
+.health-issues > button:hover {
+  background: #f8f6fc;
+}
+.health-issues > button span,
+.health-issues > button b {
+  min-width: 0;
+}
+.health-issues > button b,
+.health-issues > button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.insights-page .panel-head {
+  gap: 16px;
+}
+.insights-page .panel-head .small {
+  flex: 0 0 auto;
+}
+.active-learning-panel .panel-head {
+  flex-wrap: wrap;
+}
+
+.train-grid {
+  align-items: start;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+}
+.train-grid > .panel {
+  min-width: 0;
+}
+.architecture-catalog {
+  max-height: 510px;
+  margin: 10px -5px 0 0;
+  padding-right: 7px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #cfc7df transparent;
+  scrollbar-width: thin;
+}
+.train-page .model-option {
+  min-width: 0;
+  min-height: 66px;
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+.training-fields label,
+.run-progress,
+.run-error,
+.danger-link {
+  font-size: 10px;
+}
+.training-fields select,
+.training-fields input {
+  font-size: 11px;
+}
+.train-actions {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.registry-grid {
+  align-items: start;
+}
+.registry-card {
+  min-width: 0;
+}
+.registry-head h3 {
+  font-size: 14px;
+}
+.registry-head p {
+  font-size: 10px;
+}
+.registry-head em {
+  font-size: 9px;
+}
+.registry-metrics b {
+  font-size: 14px;
+}
+.registry-metrics small,
+.registry-config span,
+.registry-exports button,
+.registry-actions button,
+.registry-exports a,
+.download-best,
+.version-diff-summary {
+  font-size: 10px;
+}
+.registry-config b {
+  font-size: 11px;
+}
+.registry-exports {
+  gap: 7px;
+}
+.registry-exports button,
+.registry-exports a {
+  min-height: 30px;
+  padding: 7px 10px;
+}
+.registry-actions button {
+  min-height: 32px;
+  padding: 7px 10px;
+}
+
+.workflow-top {
+  min-height: 78px;
+  height: auto;
+  gap: 18px;
+}
+.workflow-top > div:first-child {
+  display: flex;
+  min-width: 250px;
+  align-items: center;
+  gap: 12px;
+}
+.workflow-top > div:last-child {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.workflow-name {
+  min-width: 180px;
+  width: min(220px, 24vw);
+  border-bottom: 1px solid transparent;
+}
+.workflow-name:focus {
+  border-color: #d6ccef;
+}
+.workflow-top .primary,
+.workflow-top .secondary {
+  padding: 9px 11px;
+  font-size: 11px;
+}
+.workflow-body aside {
+  overflow-y: auto;
+}
+.workflow-connections > span {
+  align-items: flex-start;
+}
+.workflow-connections > span small {
+  min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.wf-node {
+  height: 96px;
+}
+.wf-node b,
+.wf-node small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .train-grid,
+  .registry-grid {
+    grid-template-columns: 1fr;
+  }
+  .architecture-catalog {
+    max-height: 440px;
+  }
+  .workflow-top {
+    align-items: flex-start;
+    padding-block: 14px;
+  }
+}
+
+@media (max-width: 900px) {
+  body {
+    min-width: 0;
+  }
+  .sidebar {
+    width: 68px;
+    padding: 16px 9px;
+  }
+  .brand {
+    justify-content: center;
+    padding-inline: 0;
+  }
+  .brand > span:last-child,
+  .workspace > div,
+  .workspace > svg,
+  .sidebar nav p,
+  .usage {
+    display: none;
+  }
+  .workspace {
+    justify-content: center;
+    padding: 8px;
+  }
+  .sidebar nav button,
+  .sidebar-bottom > button {
+    justify-content: center;
+    gap: 0;
+    min-height: 42px;
+    padding: 10px;
+    font-size: 0;
+  }
+  .sidebar nav button svg,
+  .sidebar-bottom > button svg {
+    width: 19px;
+    height: 19px;
+  }
+  main {
+    width: calc(100% - 68px);
+    margin-left: 68px;
+  }
+  .topbar {
+    padding: 0 14px;
+  }
+  .crumb span,
+  .crumb > svg,
+  .global-search span,
+  .global-search kbd,
+  .backend-state {
+    display: none;
+  }
+  .global-search {
+    width: 38px;
+    height: 36px;
+    justify-content: center;
+    padding: 0;
+  }
+  .content {
+    width: 100%;
+    padding: 24px 16px 56px;
+  }
+  .tabs {
+    gap: 20px;
+    margin: -24px -16px 26px;
+    padding: 0 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs button {
+    flex: 0 0 auto;
+  }
+  .project-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .project-title h1 {
+    font-size: 24px;
+  }
+  .health-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .health-score {
+    grid-column: 1 / -1;
+  }
+  .insights-page .panel-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .insights-page .panel-head .small {
+    width: 100%;
+  }
+  .training-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .train-page .model-option {
+    width: 100%;
+    margin-right: 0;
+  }
+  .registry-config {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .workflow-page {
+    height: auto;
+    min-height: calc(100vh - 60px);
+  }
+  .workflow-top,
+  .workflow-top > div:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .workflow-top > div:last-child {
+    justify-content: flex-start;
+  }
+  .workflow-name {
+    width: 100%;
+  }
+  .workflow-body {
+    grid-template-columns: 1fr;
+  }
+  .workflow-body aside {
+    max-height: 410px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .board {
+    min-height: 680px;
+  }
+}
+
+@media (max-width: 560px) {
+  .health-summary,
+  .training-fields,
+  .registry-config {
+    grid-template-columns: 1fr;
+  }
+  .health-score {
+    grid-column: auto;
+  }
+  .panel {
+    padding: 17px;
+  }
+  .train-actions > * {
+    width: 100%;
+  }
+  .active-learning-list > div {
+    grid-template-columns: 1fr;
+  }
+}
+
 .auth-loading,
 .auth-page {
   min-height: 100vh;
