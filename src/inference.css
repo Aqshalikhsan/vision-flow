@@ -1095,6 +1095,7 @@
 }
 .worker-token {
   display: grid;
+  min-width: 0;
   gap: 7px;
   padding: 11px;
   border: 1px solid #d8caef;
@@ -1103,6 +1104,7 @@
 }
 .worker-token code {
   display: block;
+  min-width: 0;
   max-width: 100%;
   padding: 8px;
   overflow: auto;
@@ -1110,7 +1112,9 @@
   color: #49358e;
   background: #fff;
   font-size: 10px;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .worker-token button {
   width: fit-content;
@@ -1119,6 +1123,7 @@
 }
 .worker-guide {
   display: grid;
+  min-width: 0;
   gap: 7px;
   padding-top: 10px;
   border-top: 1px solid #ded5f0;
@@ -1137,12 +1142,14 @@
 }
 .worker-guide code {
   display: inline-block;
+  max-width: 100%;
   padding: 2px 5px;
   border-radius: 4px;
   color: #49358e;
   background: #fff;
   font-size: 9px;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .worker-guide .worker-command {
   display: block;
@@ -1166,6 +1173,7 @@
 }
 .worker-manual {
   display: grid;
+  min-width: 0;
   gap: 7px;
   padding-top: 8px;
   border-top: 1px solid #ded5f0;
@@ -1179,14 +1187,17 @@
 }
 .worker-manual code {
   display: block;
+  min-width: 0;
   max-width: 100%;
   padding: 8px;
-  overflow: auto;
+  overflow: hidden;
   border-radius: 6px;
   color: #49358e;
   background: #fff;
   font-size: 9px;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .worker-manual button {
   width: fit-content;
