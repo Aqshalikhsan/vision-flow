@@ -718,7 +718,11 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 async def enforce_workspace_role(request: Request, call_next):
     """Authenticate production sessions and enforce workspace role boundaries."""
     member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
-    if request.url.path.startswith("/api/training-workers/agent/") or request.url.path.startswith("/api/training-workers/setup/"):
+    if request.url.path.startswith((
+        "/api/training-workers/agent/",
+        "/api/training-workers/setup/",
+        "/api/deploy/",
+    )):
         return await call_next(request)
     if AUTH_REQUIRED and not member and request.url.path not in AUTH_PUBLIC_PATHS and not request.url.path.startswith("/assets/"):
         return JSONResponse(status_code=401, content={"detail": "Login required"})
@@ -2461,6 +2465,8 @@ def make_yolo_version(
     if project["type"] == "Keypoint Detection":
         keypoint_count = max((len(box.get("points") or []) for asset in assets for box in json.loads(asset["boxes"])), default=1)
         yaml_text += f"kpt_shape: [{keypoint_count}, 3]\n"
+        if keypoint_count == 17 and classes == ["person"]:
+            yaml_text += "flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]\n"
     (target / "data.yaml").write_text(yaml_text, encoding="utf-8")
     return target, sum(len(items) for items in written.values())
 
@@ -3106,7 +3112,7 @@ def create_training_worker(payload: TrainingWorkerPayload):
                 prefix,
                 "{}",
                 "offline",
-                now(),
+                "1970-01-01T00:00:00+00:00",
                 now(),
             ),
         )
@@ -3170,11 +3176,9 @@ def claim_training_job(request: Request):
         for stale in stale_workers:
             model = con.execute("SELECT status,config FROM models WHERE id=?", (stale["current_model_id"],)).fetchone()
             if model and model["status"] == "training" and json.loads(model["config"] or "{}").get("execution_target", "server") != "server":
-                config = json.loads(model["config"] or "{}")
-                config["queue_activated_at"] = now()
                 con.execute(
-                    "UPDATE models SET status='queued',worker_id=NULL,error='Remote worker disconnected; queued for retry',config=? WHERE id=?",
-                    (json.dumps(config), stale["current_model_id"]),
+                    "UPDATE models SET status='paused',worker_id=NULL,error='Remote worker disconnected; press Resume training to continue',training_detail=? WHERE id=?",
+                    (json.dumps({"stage": "Worker disconnected; waiting for user resume"}), stale["current_model_id"]),
                 )
             con.execute("UPDATE training_workers SET current_model_id=NULL,status='offline' WHERE id=?", (stale["id"],))
         current = con.execute("SELECT * FROM models WHERE id=? AND worker_id=?", (worker["current_model_id"], worker["id"])).fetchone() if worker["current_model_id"] else None
@@ -3185,7 +3189,14 @@ def claim_training_job(request: Request):
             con.execute("UPDATE training_workers SET current_model_id=NULL,status='online' WHERE id=?", (worker["id"],))
         capabilities = json.loads(worker["capabilities"] or "{}")
         selected = None
-        for candidate in con.execute("SELECT * FROM models WHERE status='queued' ORDER BY rowid").fetchall():
+        candidates = con.execute("SELECT * FROM models WHERE status='queued' ORDER BY rowid").fetchall()
+        candidates = sorted(
+            candidates,
+            key=lambda candidate: 0
+            if json.loads(candidate["config"] or "{}").get("worker_id") == worker["id"]
+            else 1,
+        )
+        for candidate in candidates:
             config = json.loads(candidate["config"] or "{}")
             target = config.get("execution_target", "server")
             if not str(target).startswith(("remote-", "colab-")):
@@ -3446,6 +3457,48 @@ async def complete_remote_training(model_id: str, request: Request):
     return {"status": "ready", "modelId": model_id, "bytes": size}
 
 
+@app.post("/api/training-workers/agent/jobs/{model_id}/artifacts")
+async def upload_remote_training_artifacts(model_id: str, request: Request):
+    """Persist the safe, downloadable evaluation output produced by a remote worker."""
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        if model["status"] not in {"training", "ready"}:
+            raise HTTPException(409, f"Training job is {model['status']}")
+    run_dir = RUNS / model_id
+    archive_path = run_dir / ".evaluation.upload.zip"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    received = 0
+    try:
+        with archive_path.open("wb") as output:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > 250 * 1024 * 1024:
+                    raise HTTPException(413, "Evaluation artifacts exceed 250 MB")
+                output.write(chunk)
+        extracted = []
+        with zipfile.ZipFile(archive_path) as archive:
+            members = [member for member in archive.infolist() if not member.is_dir()]
+            if sum(member.file_size for member in members) > 250 * 1024 * 1024:
+                raise HTTPException(413, "Expanded evaluation artifacts exceed 250 MB")
+            for member in members:
+                name = Path(member.filename).name
+                if member.filename != name or not evaluation_artifact_label(name):
+                    continue
+                with archive.open(member) as source, (run_dir / name).open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                extracted.append(name)
+        if not extracted:
+            raise HTTPException(400, "Archive contains no supported evaluation artifacts")
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(400, "Evaluation artifact archive is invalid") from exc
+    finally:
+        archive_path.unlink(missing_ok=True)
+    return {"status": "stored", "artifacts": sorted(extracted)}
+
+
 @app.post("/api/training-workers/agent/jobs/{model_id}/failed")
 def fail_remote_training(model_id: str, payload: WorkerFailurePayload, request: Request):
     worker = worker_from_request(request)
@@ -3673,9 +3726,10 @@ def start_training(project_id: str, payload: TrainPayload):
             if not worker:
                 raise HTTPException(404, "Selected laptop worker was not found")
             capabilities = json.loads(worker["capabilities"] or "{}")
+            selected_worker_online = worker_json(worker)["status"] in {"online", "busy"}
             if payload.execution_target.startswith("colab-") and capabilities.get("provider") != "google-colab":
                 raise HTTPException(400, "Selected worker is not running in Google Colab")
-            if payload.execution_target in {"remote-gpu", "colab-gpu"} and worker["last_seen"] and not capabilities.get("cuda"):
+            if payload.execution_target in {"remote-gpu", "colab-gpu"} and selected_worker_online and not capabilities.get("cuda"):
                 raise HTTPException(400, "Selected worker does not report a CUDA GPU")
         annotated = con.execute("SELECT boxes FROM assets WHERE project_id=?", (project_id,)).fetchall()
         if not any(json.loads(row["boxes"]) for row in annotated):
@@ -3900,6 +3954,15 @@ EVALUATION_ARTIFACTS = {
 def evaluation_artifact_label(name: str) -> str | None:
     if name in EVALUATION_ARTIFACTS:
         return EVALUATION_ARTIFACTS[name]
+    match = re.fullmatch(r"(Box|Mask|Pose)(F1|PR|P|R)_curve\.png", name)
+    if match:
+        kind = {
+            "Box": "bounding box",
+            "Mask": "segmentation mask",
+            "Pose": "keypoint pose",
+        }[match.group(1)]
+        metric = {"F1": "F1 confidence", "PR": "precision-recall", "P": "precision confidence", "R": "recall confidence"}[match.group(2)]
+        return f"{kind.title()} {metric} curve"
     match = re.fullmatch(r"train_batch(\d+)\.jpg", name)
     if match:
         return f"Training batch {match.group(1)}"

@@ -3728,6 +3728,167 @@
 .evaluation-artifacts[open] > summary > svg {
   transform: rotate(180deg);
 }
+.detailed-run .evaluation-artifacts {
+  margin-top: 12px;
+}
+.training-results-body {
+  border-top: 1px solid #e5dfee;
+  background: #fff;
+}
+.training-results-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 10px 0;
+  overflow-x: auto;
+}
+.training-results-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 31px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #776f81;
+  background: transparent;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.training-results-tabs button:hover {
+  color: #5c43b7;
+  background: #f5f1ff;
+}
+.training-results-tabs button.active {
+  border-color: #ddd2fa;
+  color: #583dbd;
+  background: #eee9ff;
+}
+.training-results-tabs button span {
+  min-width: 17px;
+  padding: 2px 4px;
+  border-radius: 8px;
+  color: #716585;
+  background: #e4deec;
+  font-size: 8px;
+  text-align: center;
+}
+.training-results-tabs button.active span {
+  color: #fff;
+  background: #7556dd;
+}
+.training-results-summary {
+  padding: 10px;
+}
+.training-result-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 7px;
+}
+.training-result-metrics > span {
+  display: flex;
+  min-width: 0;
+  min-height: 58px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 9px 10px;
+  border: 1px solid #e8e2ee;
+  border-radius: 8px;
+  background: #faf9fc;
+}
+.training-result-metrics small {
+  color: #847b8e;
+  font-size: 8px;
+  font-weight: 650;
+}
+.training-result-metrics b {
+  margin-top: 4px;
+  color: #342c40;
+  font-size: 15px;
+  letter-spacing: -0.25px;
+}
+.training-results-summary .metric-chart {
+  margin-top: 9px;
+}
+.epoch-results {
+  margin-top: 9px;
+  overflow: hidden;
+  border: 1px solid #e8e2ee;
+  border-radius: 8px;
+}
+.epoch-results > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px;
+  border-bottom: 1px solid #ebe6f0;
+  background: #faf9fc;
+}
+.epoch-results > header b {
+  color: #4b4254;
+  font-size: 9px;
+}
+.epoch-results > header small {
+  color: #908798;
+  font-size: 8px;
+}
+.epoch-results-table {
+  display: grid;
+  grid-template-columns: 0.65fr repeat(3, 1fr);
+  align-items: center;
+}
+.epoch-results-table > span {
+  padding: 7px 9px;
+  color: #847b8e;
+  background: #f6f4f8;
+  font-size: 8px;
+  font-weight: 700;
+}
+.epoch-results-row {
+  display: contents;
+}
+.epoch-results-row > b,
+.epoch-results-row > span {
+  padding: 7px 9px;
+  border-top: 1px solid #f0ecf3;
+  color: #625969;
+  font-size: 8px;
+  font-weight: 550;
+}
+.epoch-results-row > b {
+  color: #4e3d87;
+  font-weight: 750;
+}
+.training-results-gallery {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  padding-top: 10px;
+}
+.training-results-empty {
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 22px;
+  color: #8d8497;
+  text-align: center;
+}
+.training-results-empty svg {
+  width: 28px;
+  color: #a394c4;
+}
+.training-results-empty b {
+  margin-top: 8px;
+  color: #574f60;
+  font-size: 10px;
+}
+.training-results-empty span {
+  max-width: 320px;
+  margin-top: 4px;
+  font-size: 9px;
+  line-height: 1.5;
+}
 .evaluation-gallery {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5056,6 +5217,31 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 7px;
   margin-top: 14px;
+}
+.tour-project-context {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  margin: 13px 0 0;
+  padding: 10px 11px;
+  border: 1px solid #e7e0f2;
+  border-radius: 9px;
+  background: #f8f5fc;
+}
+.tour-project-context span {
+  color: #7259c7;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.55px;
+  text-transform: uppercase;
+}
+.tour-project-context b {
+  overflow: hidden;
+  color: #40364b;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tour-facts span {
   padding: 9px;

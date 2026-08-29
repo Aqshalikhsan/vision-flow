@@ -1005,72 +1005,140 @@ function AccountResume({
   );
 }
 
-const ONBOARDING_TOUR: Array<{
+const TOUR_PROJECTS = {
+  detection: { id: "e2e-coco8-detection-20260828-153649-2637" },
+  instance: { id: "e2e-coco8-instance-segmentation-20260829-tour-5af4" },
+  semantic: { id: "e2e-coco8-semantic-segmentation-20260829-175031-3006" },
+  obb: { id: "e2e-obb-20260829-181530-0418" },
+  keypoint: { id: "e2e-coco8-pose-20260829-182820-485e" },
+  single: { id: "e2e-single-label-20260829-181530-cc1b" },
+  multi: { id: "e2e-multi-label-20260829-182820-77f6" },
+} as const;
+type TourProjectKey = keyof typeof TOUR_PROJECTS;
+type TourStep = {
   page: Page;
+  projectKey?: TourProjectKey;
   eyebrow: string;
   title: string;
   description: string;
-}> = [
+};
+
+const ONBOARDING_TOUR: TourStep[] = [
+  {
+    page: "dashboard",
+    eyebrow: "1 · DASHBOARD",
+    title: "Selamat datang di Salnova",
+    description:
+      "Tutorial dimulai dari Dashboard dan akan membawa Anda melihat tujuh jenis project computer vision, dari dataset sampai hasil deployment.",
+  },
   {
     page: "project",
-    eyebrow: "1 · PROJECT",
-    title: "Kenali project E2E COCO8",
+    projectKey: "detection",
+    eyebrow: "2 · OBJECT DETECTION",
+    title: "Deteksi objek dengan bounding box",
     description:
       "Ini adalah project Object Detection lengkap yang sudah melewati import data, training, dan deployment.",
   },
   {
     page: "dataset",
-    eyebrow: "2 · DATASET",
+    projectKey: "detection",
+    eyebrow: "3 · DATASET",
     title: "Periksa gambar dan bounding box",
     description:
       "Dataset berisi delapan gambar COCO8 nyata dan anotasi objek yang menjadi sumber pembelajaran model.",
   },
   {
-    page: "versions",
-    eyebrow: "3 · VERSION",
-    title: "Dataset dibuat immutable",
+    page: "annotate",
+    projectKey: "instance",
+    eyebrow: "4 · INSTANCE SEGMENTATION",
+    title: "Pisahkan setiap objek dengan polygon mask",
     description:
-      "Version menyimpan snapshot gambar, label, class, resize, dan split agar eksperimen dapat direproduksi.",
+      "Instance Segmentation memberi mask terpisah pada setiap objek, sehingga dua objek dengan class sama tetap dapat dibedakan.",
+  },
+  {
+    page: "annotate",
+    projectKey: "semantic",
+    eyebrow: "5 · SEMANTIC SEGMENTATION",
+    title: "Petakan area gambar per class",
+    description:
+      "Semantic Segmentation mewarnai setiap pixel berdasarkan class area. Periksa mask, class, dan dataset version yang sudah dibuat.",
+  },
+  {
+    page: "annotate",
+    projectKey: "obb",
+    eyebrow: "6 · ORIENTED BOUNDING BOX",
+    title: "Deteksi objek yang berotasi",
+    description:
+      "OBB menggunakan empat titik sudut agar kotak mengikuti arah objek. Ini cocok untuk drone, dokumen, dan objek miring.",
+  },
+  {
+    page: "annotate",
+    projectKey: "keypoint",
+    eyebrow: "7 · KEYPOINT DETECTION",
+    title: "Temukan pose dan titik penting",
+    description:
+      "Keypoint Detection mempelajari titik yang berurutan, seperti 17 titik tubuh manusia pada COCO Pose.",
+  },
+  {
+    page: "annotate",
+    projectKey: "single",
+    eyebrow: "8 · SINGLE-LABEL CLASSIFICATION",
+    title: "Pilih satu class untuk setiap gambar",
+    description:
+      "Single-Label Classification menetapkan tepat satu class utama. Hasil training ditampilkan sebagai Top-1 accuracy.",
+  },
+  {
+    page: "annotate",
+    projectKey: "multi",
+    eyebrow: "9 · MULTI-LABEL CLASSIFICATION",
+    title: "Pilih beberapa label sekaligus",
+    description:
+      "Multi-Label Classification memungkinkan satu gambar memiliki beberapa label. Label tersimpan otomatis dan dataset dapat diekspor.",
   },
   {
     page: "train",
-    eyebrow: "4 · TRAINING",
-    title: "Ikuti epoch, batch, loss, dan checkpoint",
+    projectKey: "detection",
+    eyebrow: "10 · TRAINING RESULTS",
+    title: "Baca epoch, loss, F1, precision, dan recall",
     description:
-      "Halaman Training menunjukkan konfigurasi YOLO11s, progress run, serta best.pt yang sudah terbentuk.",
+      "Buka subbagian hasil training untuk melihat ringkasan metrik, kurva, confusion matrix, serta gambar train dan validation batch.",
   },
   {
     page: "registry",
-    eyebrow: "5 · MODEL",
-    title: "Periksa best.pt dan metrik",
+    projectKey: "detection",
+    eyebrow: "11 · MODEL REGISTRY",
+    title: "Kelola best.pt dan lifecycle model",
     description:
-      "Model Registry menyimpan mAP50, precision, recall, lifecycle, download weights, resume, dan fine-tuning.",
+      "Model Registry menyimpan checkpoint, metrik, download weights, resume, fine-tuning, export, dan status production.",
   },
   {
     page: "deploy",
-    eyebrow: "6 · DEPLOYMENT",
+    projectKey: "detection",
+    eyebrow: "12 · DEPLOYMENT",
     title: "Jalankan inference objek nyata",
     description:
-      "Model production dimuat dari best.pt. Contoh gambar di halaman ini diproses otomatis dan menampilkan bounding box, class, serta confidence.",
+      "Model production dimuat dari best.pt. Uji gambar, video, atau webcam untuk melihat bounding box, class, dan confidence.",
   },
 ];
 
 function OnboardingTour({
+  steps,
   step,
   project,
   next,
   previous,
   finish,
 }: {
+  steps: TourStep[];
   step: number;
-  project: Project;
+  project?: Project;
   next: () => void;
   previous: () => void;
   finish: () => Promise<void>;
 }) {
-  const item = ONBOARDING_TOUR[step];
-  const model = project.models.find((candidate) => candidate.stage === "production") ||
-    project.models.at(-1);
+  const item = steps[step];
+  const model = project?.models.find((candidate) => candidate.stage === "production") ||
+    project?.models.at(-1);
   return (
     <div className="onboarding-layer" role="dialog" aria-modal="true">
       <div className="onboarding-spotlight" />
@@ -1078,17 +1146,23 @@ function OnboardingTour({
         <header>
           <span>{item.eyebrow}</span>
           <small>
-            {step + 1}/{ONBOARDING_TOUR.length}
+            {step + 1}/{steps.length}
           </small>
         </header>
         <div className="tour-progress">
-          {ONBOARDING_TOUR.map((_, index) => (
+          {steps.map((_, index) => (
             <i className={index <= step ? "active" : ""} key={index} />
           ))}
         </div>
         <h2>{item.title}</h2>
         <p>{item.description}</p>
-        {step === 0 && (
+        {item.projectKey && project && (
+          <div className="tour-project-context">
+            <span>{project.type}</span>
+            <b>{project.name}</b>
+          </div>
+        )}
+        {item.page === "project" && project && (
           <div className="tour-facts">
             <span>
               <b>{project.assets.length}</b> images
@@ -1102,7 +1176,7 @@ function OnboardingTour({
             </span>
           </div>
         )}
-        {step === ONBOARDING_TOUR.length - 1 && model && (
+        {step === steps.length - 1 && model && (
           <div className="tour-deploy-result">
             <Rocket />
             <span>
@@ -1119,7 +1193,7 @@ function OnboardingTour({
           </button>
           <span>
             {step > 0 && <button onClick={previous}>Kembali</button>}
-            {step < ONBOARDING_TOUR.length - 1 ? (
+            {step < steps.length - 1 ? (
               <button className="primary" onClick={next}>
                 Lanjut <ChevronRight />
               </button>
@@ -1202,13 +1276,9 @@ function App() {
       .then((remote) => {
         if (cancelled) return;
         setProjects(remote);
-        const onboardingProject = remote.find((candidate) =>
-          candidate.name.startsWith("E2E COCO8 Detection 20260828-153649"),
-        );
-        if (auth.member?.onboardingCompleted === false && onboardingProject) {
-          setSelectedId(onboardingProject.id);
-          setPage("project");
-          window.location.hash = `/projects/${encodeURIComponent(onboardingProject.id)}/project`;
+        if (auth.member?.onboardingCompleted === false) {
+          setPage("dashboard");
+          window.location.hash = "/dashboard";
         } else {
           setSelectedId((current) =>
             remote.some((project) => project.id === current)
@@ -1294,21 +1364,42 @@ function App() {
     setToast(s);
     setTimeout(() => setToast(""), 2600);
   };
-  const tourProject =
-    projects.find((candidate) =>
-      candidate.name.startsWith("E2E COCO8 Detection 20260828-153649"),
-    ) || projects.find((candidate) => !candidate.archived);
+  const resolvedTourProjects = useMemo(() => {
+    const result = {} as Partial<Record<TourProjectKey, Project>>;
+    (Object.entries(TOUR_PROJECTS) as Array<
+      [TourProjectKey, (typeof TOUR_PROJECTS)[TourProjectKey]]
+    >).forEach(([key, target]) => {
+      result[key] = projects.find(
+        (candidate) => !candidate.archived && candidate.id === target.id,
+      );
+    });
+    return result;
+  }, [projects]);
+  const tourSteps = useMemo(
+    () =>
+      ONBOARDING_TOUR.filter(
+        (item) => !item.projectKey || Boolean(resolvedTourProjects[item.projectKey]),
+      ),
+    [resolvedTourProjects],
+  );
+  const activeTourStep = tourSteps[tourStep];
+  const tourProject = activeTourStep?.projectKey
+    ? resolvedTourProjects[activeTourStep.projectKey]
+    : undefined;
   const tourActive = Boolean(
     auth?.member &&
       (auth.member.onboardingCompleted === false || manualTour) &&
       backend === "online" &&
-      tourProject,
+      activeTourStep,
   );
   useEffect(() => {
-    if (!tourActive || !tourProject) return;
-    const target = ONBOARDING_TOUR[tourStep];
-    go(target.page, tourProject.id);
-  }, [tourActive, tourProject?.id, tourStep]);
+    if (!tourActive || !activeTourStep) return;
+    if (activeTourStep.page === "dashboard") {
+      go("dashboard");
+      return;
+    }
+    if (tourProject) go(activeTourStep.page, tourProject.id);
+  }, [tourActive, activeTourStep?.page, tourProject?.id, tourStep]);
   const finishTour = async () => {
     if (auth?.member?.onboardingCompleted === false) {
       const member = await api.completeOnboarding();
@@ -1318,12 +1409,16 @@ function App() {
     notify("Tutorial selesai. Anda dapat membukanya kembali dari Dashboard.");
   };
   const startTour = () => {
-    if (!tourProject) {
-      notify("Buat satu project terlebih dahulu untuk menjalankan tutorial");
+    const projectCount = Object.values(resolvedTourProjects).filter(Boolean).length;
+    if (!projectCount) {
+      notify("Project contoh belum tersedia untuk menjalankan tutorial");
       return;
     }
     setTourStep(0);
     setManualTour(true);
+    if (projectCount < Object.keys(TOUR_PROJECTS).length) {
+      notify(`Tutorial dimulai dengan ${projectCount} tipe project yang tersedia`);
+    }
   };
   const switchAccount = async () => {
     await api.logout().catch(() => undefined);
@@ -1653,14 +1748,15 @@ function App() {
         </div>
       )}
       <GeminiAssistant page={page} project={project} member={auth.member} />
-      {tourActive && tourProject && (
+      {tourActive && activeTourStep && (
         <OnboardingTour
+          steps={tourSteps}
           step={tourStep}
           project={tourProject}
           previous={() => setTourStep((current) => Math.max(0, current - 1))}
           next={() =>
             setTourStep((current) =>
-              Math.min(ONBOARDING_TOUR.length - 1, current + 1),
+              Math.min(tourSteps.length - 1, current + 1),
             )
           }
           finish={finishTour}
@@ -2294,7 +2390,7 @@ function Dashboard({
         <div className="dashboard-welcome-actions">
           <button className="secondary dashboard-tour-button" onClick={startTour}>
             <BookOpen size={16} />
-            Mulai tutorial
+            Tutorial 7 project
           </button>
           <button className="primary" onClick={create}>
             <Plus size={17} />
@@ -3776,16 +3872,22 @@ function ClassificationAnnotate({
   return (
     <div className="annotator classification-annotator">
       <div className="annotator-head">
-        <div>
-          <b>{multi ? "Multi-label" : "Single-label"} Classification</b>
-          <span>{asset.name}</span>
+        <div className="classification-title">
+          <span className="classification-title-icon">
+            <Tag />
+          </span>
+          <div>
+            <b>{multi ? "Multi-Label" : "Single-Label"} Classification</b>
+            <span title={asset.name}>{asset.name}</span>
+          </div>
         </div>
         <div className="image-nav">
           <button
             disabled={!index}
             onClick={() => setIndex((value) => value - 1)}
+            aria-label="Gambar sebelumnya"
           >
-            ‹
+            <ArrowLeft />
           </button>
           <span>
             {index + 1} / {project.assets.length}
@@ -3793,18 +3895,21 @@ function ClassificationAnnotate({
           <button
             disabled={index === project.assets.length - 1}
             onClick={() => setIndex((value) => value + 1)}
+            aria-label="Gambar berikutnya"
           >
-            ›
+            <ChevronRight />
           </button>
         </div>
         <button className="primary small" onClick={() => go("versions")}>
           <Check />
-          Saved · Generate Version
+          Tersimpan. Buat version
         </button>
       </div>
       <div className="classification-workspace">
         <section className="classification-image">
-          <img src={asset.src} />
+          <div className="classification-image-frame">
+            <img src={asset.src} alt={asset.name} />
+          </div>
           <div className="classification-tags">
             {asset.boxes.map((box, i) => (
               <span
@@ -3818,57 +3923,71 @@ function ClassificationAnnotate({
         </section>
         <aside className="classification-panel">
           <div className="classes-head">
-            <span className="eyebrow">IMAGE LABELS</span>
-            <button onClick={addClass}>
+            <div>
+              <span className="eyebrow">LABEL GAMBAR</span>
+              <strong>{asset.boxes.length} dipilih</strong>
+            </div>
+            <button onClick={addClass} title="Tambah class" aria-label="Tambah class">
               <Plus />
             </button>
           </div>
-          <p>
+          <p className="classification-instruction">
             {multi
-              ? "Choose every class present in this image."
-              : "Choose exactly one class for this image."}
+              ? "Pilih semua class yang terlihat pada gambar ini. Perubahan langsung tersimpan."
+              : "Pilih tepat satu class yang paling sesuai. Perubahan langsung tersimpan."}
           </p>
-          {project.classes.map((name, i) => {
-            const selected = asset.boxes.some((box) => box.label === name);
-            return (
-              <div
-                className={
-                  "classification-choice " + (selected ? "selected" : "")
-                }
-                key={name}
-              >
-                <button onClick={() => apply(name)}>
-                  <i style={{ background: classColor(project, name, i) }} />
-                  {name}
-                  <span>{selected ? <Check /> : null}</span>
-                </button>
-                <input
-                  type="color"
-                  value={classColor(project, name, i)}
-                  onChange={async (e) => {
-                    const saved = await api.renameClass(
-                      project.id,
-                      name,
-                      name,
-                      e.target.value,
-                    );
-                    update(() => saved);
-                  }}
-                />
-                <button
-                  title="Rename class"
-                  onClick={() => renameClass(name, i)}
+          <div className="classification-options">
+            {project.classes.map((name, i) => {
+              const selected = asset.boxes.some((box) => box.label === name);
+              return (
+                <div
+                  className={
+                    "classification-choice " + (selected ? "selected" : "")
+                  }
+                  key={name}
                 >
-                  Rename
-                </button>
-              </div>
-            );
-          })}
+                  <button onClick={() => apply(name)}>
+                    <i style={{ background: classColor(project, name, i) }} />
+                    <span className="classification-choice-name">{name}</span>
+                    <span className="classification-check">
+                      {selected ? <Check /> : null}
+                    </span>
+                  </button>
+                  <label className="classification-color" title="Ubah warna class">
+                    <input
+                      type="color"
+                      value={classColor(project, name, i)}
+                      onChange={async (e) => {
+                        const saved = await api.renameClass(
+                          project.id,
+                          name,
+                          name,
+                          e.target.value,
+                        );
+                        update(() => saved);
+                      }}
+                    />
+                  </label>
+                  <button
+                    className="classification-rename"
+                    title="Ubah nama class"
+                    aria-label={`Ubah nama class ${name}`}
+                    onClick={() => renameClass(name, i)}
+                  >
+                    <Pencil />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
           <div className="classification-shortcuts">
-            <b>Instant save</b>
-            <span>
-              Choose labels, then use the arrows above to review the next image.
-            </span>
+            <span className="classification-shortcut-icon"><Check /></span>
+            <div>
+              <b>Tersimpan otomatis</b>
+              <span>
+                Gunakan tombol panah di atas untuk memeriksa gambar berikutnya.
+              </span>
+            </div>
           </div>
         </aside>
       </div>
@@ -7293,6 +7412,8 @@ function DatasetTrain({
   update: (fn: (p: Project) => Project) => void;
   notify: (s: string) => void;
 }) {
+  const multiLabelExportOnly = project.type === "Multi-Label Classification";
+  const classificationMetrics = project.type === "Single-Label Classification";
   const trainingTask: "detect" | "segment" | "pose" | "obb" | "cls" =
     project.type.includes("Segmentation")
       ? "segment"
@@ -7501,13 +7622,16 @@ function DatasetTrain({
   const downloadWorkerSetup = () => {
     if (!workerToken) return;
     const quote = (value: string) => value.replace(/'/g, "''");
-    const script = `# Salnova laptop worker setup
-# This file was generated by Salnova. Keep it private because it contains a one-time worker token.
+    const script = `# Salnova Windows training worker bootstrap
+# Generated by Salnova. Keep this file private because it contains a worker token.
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 $server = '${quote(workerServer)}'
 $token = '${quote(workerToken)}'
 $workerRoot = if ($env:SALNOVA_WORKER_HOME) {
   $env:SALNOVA_WORKER_HOME
+} elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "VisionFlowWorker")) {
+  Join-Path $env:USERPROFILE "VisionFlowWorker"
 } elseif (Test-Path -LiteralPath 'F:\') {
   'F:\SalnovaWorker'
 } else {
@@ -7521,30 +7645,123 @@ if ($serverUri.Host -in @('localhost', '127.0.0.1', '0.0.0.0')) {
 }
 $rawBase = "$server/api/training-workers/setup"
 
+function Write-Step([string]$message) {
+  Write-Host "[Salnova setup] $message" -ForegroundColor Cyan
+}
+
+function Test-Python([string]$command, [string[]]$prefix) {
+  try {
+    & $command @prefix -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)"
+    return $LASTEXITCODE -eq 0
+  } catch {
+    return $false
+  }
+}
+
+$pythonCommand = $null
+$pythonPrefix = @()
+if ((Get-Command py -ErrorAction SilentlyContinue) -and (Test-Python "py" @("-3"))) {
+  $pythonCommand = "py"
+  $pythonPrefix = @("-3")
+} elseif ((Get-Command python -ErrorAction SilentlyContinue) -and (Test-Python "python" @())) {
+  $pythonCommand = "python"
+}
+
+if (-not $pythonCommand) {
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    throw "Python 3.10+ tidak ditemukan dan winget tidak tersedia. Install Python dari python.org, aktifkan Add Python to PATH, lalu jalankan setup.ps1 lagi."
+  }
+  Write-Step "Python 3.12 belum tersedia. Memasang Python untuk user ini..."
+  & winget install --exact --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements --silent
+  $installedPython = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs/Python/Python*/python.exe") -File -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending | Select-Object -First 1
+  if (-not $installedPython -or -not (Test-Python $installedPython.FullName @())) {
+    throw "Instalasi Python selesai tetapi executable belum ditemukan. Buka PowerShell baru lalu jalankan setup.ps1 lagi."
+  }
+  $pythonCommand = $installedPython.FullName
+}
+
+$venvPython = Join-Path $workerRoot ".venv/Scripts/python.exe"
+if (!(Test-Path -LiteralPath $venvPython)) {
+  $driveName = (Split-Path -Qualifier $workerRoot).TrimEnd('\\').TrimEnd(':')
+  $driveInfo = Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue
+  if ($driveInfo -and $driveInfo.Free -lt 6GB) {
+    throw "Drive $driveName membutuhkan minimal 6 GB kosong. Set SALNOVA_WORKER_HOME ke drive lain lalu jalankan ulang."
+  }
+}
+
 New-Item -ItemType Directory -Force -Path (Join-Path $workerRoot "worker") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $workerRoot ".tmp") | Out-Null
+$env:TEMP = Join-Path $workerRoot ".tmp"
+$env:TMP = $env:TEMP
+$env:PIP_NO_CACHE_DIR = "1"
+
+Write-Step "Mengunduh worker terbaru dari $server"
 Invoke-WebRequest -UseBasicParsing "$rawBase/visionflow_worker.py" -OutFile (Join-Path $workerRoot "worker/visionflow_worker.py")
 Invoke-WebRequest -UseBasicParsing "$rawBase/requirements.txt" -OutFile (Join-Path $workerRoot "worker/requirements.txt")
 
-$venvPython = Join-Path $workerRoot ".venv/Scripts/python.exe"
 if (!(Test-Path $venvPython)) {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    & py -3 -m venv (Join-Path $workerRoot ".venv")
-  } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    & python -m venv (Join-Path $workerRoot ".venv")
-  } else {
-    throw "Python 3 tidak ditemukan. Install Python 3.10+ dari python.org lalu jalankan ulang file ini."
+  Write-Step "Membuat virtual environment terisolasi"
+  & $pythonCommand @pythonPrefix -m venv (Join-Path $workerRoot ".venv")
+  if ($LASTEXITCODE -ne 0 -or !(Test-Path $venvPython)) { throw "Gagal membuat Python virtual environment." }
+}
+
+Write-Step "Memperbarui pip dan package build"
+& $venvPython -m pip install --upgrade pip setuptools wheel
+$cudaProbe = "import sys,torch,torchvision; sys.exit(1) if not torch.cuda.is_available() else torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]],device='cuda'),torch.tensor([1.],device='cuda'),0.5)"
+$cpuProbe = "import torch,torchvision; torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]]),torch.tensor([1.]),0.5)"
+$hasNvidia = $null -ne (Get-Command nvidia-smi -ErrorAction SilentlyContinue)
+$gpuReady = $false
+if ($hasNvidia) {
+  & $venvPython -c $cudaProbe 2>$null
+  $gpuReady = $LASTEXITCODE -eq 0
+  if (-not $gpuReady) {
+    $cudaText = (& nvidia-smi 2>$null | Out-String)
+    $match = [regex]::Match($cudaText, "CUDA Version:[ ]*([0-9]+)[.]([0-9]+)")
+    $cudaLevel = if ($match.Success) { ([int]$match.Groups[1].Value * 10) + [int]$match.Groups[2].Value } else { 126 }
+    $cudaCandidates = @()
+    if ($cudaLevel -ge 128) { $cudaCandidates += "cu128" }
+    if ($cudaLevel -ge 126) { $cudaCandidates += "cu126" }
+    if ($cudaLevel -ge 124) { $cudaCandidates += "cu124" }
+    if ($cudaLevel -ge 121) { $cudaCandidates += "cu121" }
+    if ($cudaLevel -ge 118) { $cudaCandidates += "cu118" }
+    foreach ($cudaBuild in $cudaCandidates) {
+      Write-Step "Mencoba runtime NVIDIA $cudaBuild yang cocok dengan driver"
+      & $venvPython -m pip install --upgrade --force-reinstall torch torchvision --index-url "https://download.pytorch.org/whl/$cudaBuild"
+      if ($LASTEXITCODE -eq 0) {
+        & $venvPython -c $cudaProbe 2>$null
+        if ($LASTEXITCODE -eq 0) {
+          $gpuReady = $true
+          Write-Host "Runtime GPU $cudaBuild siap." -ForegroundColor Green
+          break
+        }
+      }
+    }
+  }
+  if (-not $gpuReady) {
+    Write-Warning "Tidak ada runtime CUDA yang lolos pengujian. Worker otomatis menggunakan CPU."
   }
 }
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -r (Join-Path $workerRoot "worker/requirements.txt")
-if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-  & $venvPython -c "import sys,torch; sys.exit(0 if torch.cuda.is_available() else 1)"
+if (-not $gpuReady) {
+  & $venvPython -c $cpuProbe 2>$null
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "NVIDIA GPU ditemukan, memasang PyTorch CUDA..." -ForegroundColor Yellow
-    & $venvPython -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126
+    Write-Step "Memasang runtime CPU yang kompatibel"
+    & $venvPython -m pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
+    if ($LASTEXITCODE -ne 0) { throw "PyTorch CPU gagal dipasang. Periksa internet dan ruang disk." }
+    & $venvPython -c $cpuProbe
+    if ($LASTEXITCODE -ne 0) { throw "Runtime CPU terpasang tetapi gagal menjalankan operasi training." }
   }
 }
-Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
+
+Write-Step "Memasang requests, Ultralytics, dan dependency training"
+& $venvPython -m pip install --prefer-binary -r (Join-Path $workerRoot "worker/requirements.txt")
+if ($LASTEXITCODE -ne 0) { throw "Instalasi requirements gagal. Periksa internet dan ruang disk." }
+
+Write-Step "Memverifikasi Python, Ultralytics, PyTorch, CPU, dan GPU"
+& $venvPython -c "import requests,torch,ultralytics; print('Python packages: OK'); print('PyTorch:',torch.__version__); print('CUDA:',torch.version.cuda); print('GPU available:',torch.cuda.is_available()); print('Device:',torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+if ($LASTEXITCODE -ne 0) { throw "Verifikasi package gagal." }
+
+Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor Green
 & $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token
 `;
     const url = URL.createObjectURL(
@@ -7552,7 +7769,7 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
     );
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "visionflow-worker-setup.ps1";
+    anchor.download = "setup.ps1";
     anchor.click();
     URL.revokeObjectURL(url);
     notify(
@@ -7564,22 +7781,54 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
     const quote = (value: string) => value.replace(/'/g, "'\"'\"'");
     const script = [
       "#!/usr/bin/env bash",
-      "# Salnova laptop worker setup - keep this file private.",
+      "# Salnova Linux training worker bootstrap. Keep this file private.",
       "set -euo pipefail",
       "server='" + quote(workerServer) + "'",
       "token='" + quote(workerToken) + "'",
-      'worker_root="$HOME/VisionFlowWorker"',
+      'worker_root="${SALNOVA_WORKER_HOME:-$HOME/SalnovaWorker}"',
       'case "$server" in http://localhost*|http://127.0.0.1*|http://0.0.0.0*) read -r -p "Server masih localhost. Masukkan URL Salnova LAN/HTTPS, atau Enter jika worker ada di device ini: " entered_server; [ -n "$entered_server" ] && server="${entered_server%/}" ;; esac',
       'raw_base="$server/api/training-workers/setup"',
+      'step() { printf "\\n[Salnova setup] %s\\n" "$1"; }',
+      'as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; elif command -v sudo >/dev/null 2>&1; then sudo "$@"; else echo "sudo/root diperlukan untuk memasang package sistem"; exit 1; fi; }',
+      'install_system_dependencies() {',
+      '  if command -v apt-get >/dev/null 2>&1; then as_root apt-get update; as_root apt-get install -y python3 python3-pip python3-venv curl ca-certificates;',
+      '  elif command -v dnf >/dev/null 2>&1; then as_root dnf install -y python3 python3-pip curl ca-certificates;',
+      '  elif command -v yum >/dev/null 2>&1; then as_root yum install -y python3 python3-pip curl ca-certificates;',
+      '  elif command -v pacman >/dev/null 2>&1; then as_root pacman -Sy --needed --noconfirm python python-pip curl ca-certificates;',
+      '  elif command -v zypper >/dev/null 2>&1; then as_root zypper --non-interactive install python3 python3-pip curl ca-certificates;',
+      '  elif command -v brew >/dev/null 2>&1; then brew install python curl;',
+      '  else echo "Package manager tidak dikenali. Install Python 3.10+, python3-venv, dan curl lalu jalankan setup.sh lagi."; exit 1; fi',
+      '}',
+      'if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then step "Memasang Python, venv, pip, curl, dan sertifikat"; install_system_dependencies; fi',
+      'python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" || { echo "Python 3.10+ diperlukan."; exit 1; }',
+      'available_kb=$(df -Pk "${worker_root%/*}" 2>/dev/null | awk "NR==2 {print \\$4}" || echo 0)',
+      'if [ "$available_kb" -gt 0 ] && [ "$available_kb" -lt 6291456 ]; then echo "Minimal 6 GB ruang kosong diperlukan. Set SALNOVA_WORKER_HOME ke drive lain."; exit 1; fi',
       'mkdir -p "$worker_root/worker"',
+      'mkdir -p "$worker_root/.tmp"',
+      'export TMPDIR="$worker_root/.tmp" PIP_NO_CACHE_DIR=1',
+      'step "Mengunduh worker terbaru dari $server"',
       'curl -fsSL "$raw_base/visionflow_worker.py" -o "$worker_root/worker/visionflow_worker.py"',
       'curl -fsSL "$raw_base/requirements.txt" -o "$worker_root/worker/requirements.txt"',
-      'command -v python3 >/dev/null 2>&1 || { echo "Python 3.10+ tidak ditemukan."; exit 1; }',
-      'if [ ! -x "$worker_root/.venv/bin/python" ]; then python3 -m venv "$worker_root/.venv"; fi',
-      '"$worker_root/.venv/bin/python" -m pip install --upgrade pip',
-      '"$worker_root/.venv/bin/python" -m pip install -r "$worker_root/worker/requirements.txt"',
-      'if command -v nvidia-smi >/dev/null 2>&1 && ! "$worker_root/.venv/bin/python" -c "import sys,torch; sys.exit(0 if torch.cuda.is_available() else 1)"; then echo "NVIDIA GPU ditemukan, memasang PyTorch CUDA..."; "$worker_root/.venv/bin/python" -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126; fi',
-      'echo "Worker siap. Menghubungkan ke $server ..."',
+      'if [ ! -x "$worker_root/.venv/bin/python" ]; then step "Membuat virtual environment"; if ! python3 -m venv "$worker_root/.venv"; then install_system_dependencies; python3 -m venv "$worker_root/.venv"; fi; fi',
+      'venv_python="$worker_root/.venv/bin/python"',
+      'step "Memperbarui pip dan package build"',
+      '"$venv_python" -m pip install --upgrade pip setuptools wheel',
+      'cuda_probe="import sys,torch,torchvision; sys.exit(1) if not torch.cuda.is_available() else torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]],device=\\\"cuda\\\"),torch.tensor([1.],device=\\\"cuda\\\"),0.5)"',
+      'cpu_probe="import torch,torchvision; torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]]),torch.tensor([1.]),0.5)"',
+      'has_nvidia=0; gpu_ready=0; command -v nvidia-smi >/dev/null 2>&1 && has_nvidia=1',
+      'if [ "$has_nvidia" -eq 1 ] && "$venv_python" -c "$cuda_probe" 2>/dev/null; then gpu_ready=1; fi',
+      'if [ "$has_nvidia" -eq 1 ] && [ "$gpu_ready" -eq 0 ]; then',
+      '  cuda_version="$(nvidia-smi | sed -n "s/.*CUDA Version: \\([0-9][0-9]*\\.[0-9][0-9]*\\).*/\\1/p" | head -n 1)"',
+      '  cuda_level="$(printf "%s" "${cuda_version:-12.6}" | awk -F. "{print (\\$1 * 10) + \\$2}")"',
+      '  cuda_candidates=""; [ "$cuda_level" -ge 128 ] && cuda_candidates="$cuda_candidates cu128"; [ "$cuda_level" -ge 126 ] && cuda_candidates="$cuda_candidates cu126"; [ "$cuda_level" -ge 124 ] && cuda_candidates="$cuda_candidates cu124"; [ "$cuda_level" -ge 121 ] && cuda_candidates="$cuda_candidates cu121"; [ "$cuda_level" -ge 118 ] && cuda_candidates="$cuda_candidates cu118"',
+      '  for cuda_build in $cuda_candidates; do step "Mencoba runtime NVIDIA $cuda_build yang cocok dengan driver"; if "$venv_python" -m pip install --upgrade --force-reinstall torch torchvision --index-url "https://download.pytorch.org/whl/$cuda_build" && "$venv_python" -c "$cuda_probe" 2>/dev/null; then gpu_ready=1; echo "Runtime GPU $cuda_build siap."; break; fi; done',
+      'fi',
+      'if [ "$gpu_ready" -eq 0 ]; then echo "CUDA tidak tersedia atau tidak kompatibel. Worker otomatis menggunakan CPU."; if ! "$venv_python" -c "$cpu_probe" 2>/dev/null; then step "Memasang runtime CPU yang kompatibel"; "$venv_python" -m pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu; "$venv_python" -c "$cpu_probe"; fi; fi',
+      'step "Memasang requests, Ultralytics, dan dependency training"',
+      '"$venv_python" -m pip install --prefer-binary -r "$worker_root/worker/requirements.txt"',
+      'step "Memverifikasi Python, Ultralytics, PyTorch, CPU, dan GPU"',
+      '"$venv_python" -c "import requests,torch,ultralytics; print(\"Python packages: OK\"); print(\"PyTorch:\",torch.__version__); print(\"CUDA:\",torch.version.cuda); print(\"GPU available:\",torch.cuda.is_available()); print(\"Device:\",torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\")"',
+      'echo "Setup lengkap. Worker menghubungkan ke $server ..."',
       'exec "$worker_root/.venv/bin/python" "$worker_root/worker/visionflow_worker.py" --server "$server" --token "$token"',
       "",
     ].join("\n");
@@ -7588,10 +7837,10 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
     );
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "visionflow-worker-setup.sh";
+    anchor.download = "setup.sh";
     anchor.click();
     URL.revokeObjectURL(url);
-    notify("Setup Linux/macOS diunduh");
+    notify("Setup Linux/macOS diunduh. Script akan memasang dependency yang belum tersedia.");
   };
   const start = async () => {
     if (!versionId) {
@@ -7749,13 +7998,48 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
     note: model.note,
     tone: ["purple", "blue", "green"][index % 3],
   }));
+  if (multiLabelExportOnly) {
+    return (
+      <div className="content train-page">
+        <ProjectTabs active="train" go={go} />
+        <div className="project-title">
+          <div>
+            <span className="eyebrow">MULTI-LABEL DATASET</span>
+            <h1>Training belum tersedia untuk proyek multi-label</h1>
+            <p>
+              Anotasi, immutable dataset version, dan export tetap dapat digunakan
+              secara penuh.
+            </p>
+          </div>
+        </div>
+        <section className="panel">
+          <div className="config-guide-note">
+            <b>Mengapa tidak ada tombol Start training?</b> Checkpoint klasifikasi
+            YOLO memakai satu label eksklusif per gambar. Dataset proyek ini dapat
+            memiliki beberapa label pada gambar yang sama, sehingga memaksakan
+            training akan menghasilkan model yang salah. Gunakan export untuk
+            trainer multi-label berbasis sigmoid/BCE, atau buat proyek Single-Label
+            Classification jika setiap gambar hanya memiliki satu kelas.
+          </div>
+          <div className="train-actions">
+            <button className="secondary" onClick={() => go("dataset")}>
+              Buka dataset
+            </button>
+            <button className="primary" onClick={() => go("versions")}>
+              Buat atau export version
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
   return (
     <div className="content train-page">
       <ProjectTabs active="train" go={go} />
       <div className="project-title">
         <div>
           <span className="eyebrow">LOCAL MODEL TRAINING</span>
-          <h1>Train a detection model</h1>
+          <h1>Train a {project.type.toLowerCase()} model</h1>
           <p>Select an immutable dataset version and tune the training run.</p>
         </div>
         {active && (
@@ -8200,8 +8484,10 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                       <code>{workerServer}</code>, bukan localhost.
                     </li>
                     <li>
-                      Download setup sesuai sistem operasi. Python 3.10+ dan
-                      internet diperlukan pada proses pertama.
+                      Download setup sesuai sistem operasi. Script memeriksa
+                      Python, CPU/GPU, ruang disk, CUDA, dan seluruh dependency.
+                      Komponen yang belum tersedia akan dipasang otomatis. Jika
+                      CUDA tidak didukung, setup tetap selesai memakai CPU.
                       <span className="worker-downloads">
                         <button onClick={() => downloadWorkerSetup()}>
                           <Download /> Windows (.ps1)
@@ -8222,12 +8508,12 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                           </code>
                           <small>2. Buka blokir file hasil download:</small>
                           <code className="worker-command">
-                            Unblock-File '.\visionflow-worker-setup.ps1'
+                            Unblock-File '.\setup.ps1'
                           </code>
                           <small>3. Jalankan setup:</small>
                           <code className="worker-command">
                             powershell.exe -NoProfile -ExecutionPolicy Bypass -File
-                            '.\visionflow-worker-setup.ps1'
+                            '.\setup.ps1'
                           </code>
                           <small>
                             Jika nama file memiliki akhiran, misalnya <code>(2)</code>,
@@ -8242,11 +8528,11 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                           </code>
                           <small>2. Berikan izin eksekusi:</small>
                           <code className="worker-command">
-                            chmod +x visionflow-worker-setup.sh
+                            chmod +x setup.sh
                           </code>
                           <small>3. Jalankan setup:</small>
                           <code className="worker-command">
-                            ./visionflow-worker-setup.sh
+                            ./setup.sh
                           </code>
                         </div>
                       </div>
@@ -8450,16 +8736,20 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                   <div className="metrics">
                     <span>
                       <b>{model.map}%</b>
-                      <small>mAP50</small>
+                      <small>{classificationMetrics ? "Top-1 accuracy" : "mAP50"}</small>
                     </span>
-                    <span>
-                      <b>{model.precision}%</b>
-                      <small>Precision</small>
-                    </span>
-                    <span>
-                      <b>{model.recall}%</b>
-                      <small>Recall</small>
-                    </span>
+                    {!classificationMetrics && (
+                      <>
+                        <span>
+                          <b>{model.precision}%</b>
+                          <small>Precision</small>
+                        </span>
+                        <span>
+                          <b>{model.recall}%</b>
+                          <small>Recall</small>
+                        </span>
+                      </>
+                    )}
                   </div>
                   <a
                     className="download-best"
@@ -8472,6 +8762,13 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                 </>
               )}
               {model.error && <p className="run-error">{model.error}</p>}
+              {modelCanDeploy(model) && (
+                <ModelEvaluationArtifacts
+                  projectId={project.id}
+                  model={model}
+                  classification={classificationMetrics}
+                />
+              )}
             </div>
           ))}
           {!project.models.length && (
@@ -9239,12 +9536,15 @@ function MetricSparkline({ model }: { model: Model }) {
 function ModelEvaluationArtifacts({
   projectId,
   model,
+  classification = false,
 }: {
   projectId: string;
   model: Model;
+  classification?: boolean;
 }) {
   const [artifacts, setArtifacts] = useState<EvaluationArtifact[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"summary" | "curves" | "batches">("summary");
   useEffect(() => {
     let cancelled = false;
     api
@@ -9260,22 +9560,97 @@ function ModelEvaluationArtifacts({
       cancelled = true;
     };
   }, [projectId, model.id, model.status]);
-  if (!loading && !artifacts.length) return null;
+  const f1 =
+    model.precision + model.recall > 0
+      ? (2 * model.precision * model.recall) / (model.precision + model.recall)
+      : 0;
+  const curves = artifacts.filter((artifact) =>
+    /(curve|results|confusion_matrix)/i.test(artifact.name),
+  );
+  const batches = artifacts.filter((artifact) =>
+    /^(train_batch|val_batch)|labels/i.test(artifact.name),
+  );
+  const visibleArtifacts = tab === "curves" ? curves : batches;
+  const history = (model.metricsHistory || []).slice(-8);
+  const historyMetric = (entry: Record<string, number>, names: string[]) => {
+    const found = Object.entries(entry).find(([key]) =>
+      names.some((name) => key.toLowerCase().includes(name)),
+    );
+    return found ? Number(found[1]) : null;
+  };
   return (
     <details className="evaluation-artifacts">
       <summary>
         <span>
           <BarChart3 />
-          <b>YOLO data check</b>
+          <b>Lihat hasil training</b>
           <small>
-            {loading ? "Checking artifacts..." : `${artifacts.length} artifacts available`}
+            {loading
+              ? "Memeriksa grafik dan gambar..."
+              : `${artifacts.length} grafik dan gambar tersedia`}
           </small>
         </span>
         <ChevronDown />
       </summary>
-      {!!artifacts.length && (
-        <div className="evaluation-gallery">
-          {artifacts.map((artifact) => {
+      <div className="training-results-body">
+        <nav className="training-results-tabs" aria-label="Bagian hasil training">
+          <button className={tab === "summary" ? "active" : ""} onClick={() => setTab("summary")}>
+            Ringkasan
+          </button>
+          <button className={tab === "curves" ? "active" : ""} onClick={() => setTab("curves")}>
+            Grafik & kurva <span>{curves.length}</span>
+          </button>
+          <button className={tab === "batches" ? "active" : ""} onClick={() => setTab("batches")}>
+            Train & validation <span>{batches.length}</span>
+          </button>
+        </nav>
+        {tab === "summary" && (
+          <div className="training-results-summary">
+            <div className="training-result-metrics">
+              <span>
+                <small>{classification ? "Top-1 accuracy" : "mAP50"}</small>
+                <b>{model.map.toFixed(1)}%</b>
+              </span>
+              {!classification && (
+                <>
+                  <span><small>F1 score</small><b>{f1.toFixed(1)}%</b></span>
+                  <span><small>Precision</small><b>{model.precision.toFixed(1)}%</b></span>
+                  <span><small>Recall</small><b>{model.recall.toFixed(1)}%</b></span>
+                </>
+              )}
+            </div>
+            <MetricSparkline model={model} />
+            {!!history.length && (
+              <div className="epoch-results">
+                <header>
+                  <b>Epoch terakhir</b>
+                  <small>{history.length} baris terbaru</small>
+                </header>
+                <div className="epoch-results-table">
+                  <span>Epoch</span><span>Box loss</span><span>Class loss</span><span>{classification ? "Accuracy" : "mAP50"}</span>
+                  {history.map((entry, index) => {
+                    const boxLoss = historyMetric(entry, ["train/box_loss", "box_loss"]);
+                    const classLoss = historyMetric(entry, ["train/cls_loss", "train/loss", "cls_loss"]);
+                    const score = historyMetric(entry, classification
+                      ? ["accuracy_top1"]
+                      : ["map50(b)", "map50(m)", "map50"]);
+                    return (
+                      <div className="epoch-results-row" key={index}>
+                        <b>{model.metricsHistory!.length - history.length + index + 1}</b>
+                        <span>{boxLoss === null ? "-" : boxLoss.toFixed(4)}</span>
+                        <span>{classLoss === null ? "-" : classLoss.toFixed(4)}</span>
+                        <span>{score === null ? "-" : `${(score * 100).toFixed(1)}%`}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {tab !== "summary" && !!visibleArtifacts.length && (
+          <div className="evaluation-gallery training-results-gallery">
+          {visibleArtifacts.map((artifact) => {
             const url = api.modelEvaluationArtifactUrl(
               projectId,
               model.id,
@@ -9304,8 +9679,16 @@ function ModelEvaluationArtifacts({
               </article>
             );
           })}
-        </div>
-      )}
+          </div>
+        )}
+        {tab !== "summary" && !loading && !visibleArtifacts.length && (
+          <div className="training-results-empty">
+            <BarChart3 />
+            <b>Belum ada artefak pada bagian ini</b>
+            <span>Artefak akan muncul setelah trainer selesai mengunggah hasil evaluasi.</span>
+          </div>
+        )}
+      </div>
     </details>
   );
 }
@@ -9327,6 +9710,7 @@ function ModelRegistry({
   update: (fn: (project: Project) => Project) => void;
   notify: (message: string) => void;
 }) {
+  const classificationMetrics = project.type === "Single-Label Classification";
   const [exporting, setExporting] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [importProgress, setImportProgress] = useState<number | null>(null);
@@ -9495,14 +9879,19 @@ function ModelRegistry({
               <article key={model.id}>
                 <b>{model.alias || model.name}</b>
                 <span>
-                  mAP50 <strong>{model.map}%</strong>
+                  {classificationMetrics ? "Top-1 accuracy" : "mAP50"}{" "}
+                  <strong>{model.map}%</strong>
                 </span>
-                <span>
-                  Precision <strong>{model.precision}%</strong>
-                </span>
-                <span>
-                  Recall <strong>{model.recall}%</strong>
-                </span>
+                {!classificationMetrics && (
+                  <>
+                    <span>
+                      Precision <strong>{model.precision}%</strong>
+                    </span>
+                    <span>
+                      Recall <strong>{model.recall}%</strong>
+                    </span>
+                  </>
+                )}
               </article>
             ))}
           </div>
@@ -9556,16 +9945,20 @@ function ModelRegistry({
               <div className="registry-metrics">
                 <span>
                   <b>{model.map}%</b>
-                  <small>mAP50</small>
+                  <small>{classificationMetrics ? "Top-1 accuracy" : "mAP50"}</small>
                 </span>
-                <span>
-                  <b>{model.precision}%</b>
-                  <small>Precision</small>
-                </span>
-                <span>
-                  <b>{model.recall}%</b>
-                  <small>Recall</small>
-                </span>
+                {!classificationMetrics && (
+                  <>
+                    <span>
+                      <b>{model.precision}%</b>
+                      <small>Precision</small>
+                    </span>
+                    <span>
+                      <b>{model.recall}%</b>
+                      <small>Recall</small>
+                    </span>
+                  </>
+                )}
               </div>
             )}
             {model.status === "training" && (
@@ -9576,9 +9969,12 @@ function ModelRegistry({
                 <progress max="100" value={model.progress} />
               </div>
             )}
-            <MetricSparkline model={model} />
             {modelCanDeploy(model) && (
-              <ModelEvaluationArtifacts projectId={project.id} model={model} />
+              <ModelEvaluationArtifacts
+                projectId={project.id}
+                model={model}
+                classification={classificationMetrics}
+              />
             )}
             <div className="registry-config">
               <span>

@@ -13,7 +13,7 @@ export default defineConfig({
     host: true,
     watch: {
       // Training artifacts can be several GB and are not frontend sources.
-      ignored: ["**/local_data/**", "**/dist/**"],
+      ignored: ["**/local_data/**", "**/dist/**", "**/.runtime/**"],
     },
     proxy: {
       "/api": "http://127.0.0.1:8000",
