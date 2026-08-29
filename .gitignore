@@ -13,6 +13,8 @@ tsconfig.tsbuildinfo
 .user-cache-legacy/
 .pip-cache/
 local_data/
+.env
+.env.local
 Ultralytics/
 *.pt
 __pycache__/

@@ -35,6 +35,7 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  MessageCircle,
   MoreHorizontal,
   Network,
   Pencil,
@@ -44,6 +45,7 @@ import {
   Redo2,
   Rocket,
   Search,
+  Send,
   Settings,
   SlidersHorizontal,
   Sparkles,
@@ -70,6 +72,9 @@ import type {
   AnnotationJob,
   AuthStatus,
   DatasetHealth,
+  DatasetHealthProgress,
+  EvaluationArtifact,
+  ProjectCollaboration,
   TrainingWorker,
   WorkflowNode,
   WorkflowRun,
@@ -100,6 +105,28 @@ const PROJECT_PAGES: Page[] = [
   "registry",
   "deploy",
 ];
+const modelCanDeploy = (model: Model) =>
+  model.deployable ?? model.status === "ready";
+const copyText = async (value: string) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall through to the HTTP/LAN-compatible copy method below.
+  }
+  const input = document.createElement("textarea");
+  input.value = value;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand("copy");
+  input.remove();
+  return copied;
+};
 const parseRoute = (): { page: Page; projectId?: string } => {
   const parts = window.location.hash
     .replace(/^#\/?/, "")
@@ -554,9 +581,15 @@ function AuthGate({
   setup: boolean;
   onAuthenticated: () => Promise<void>;
 }) {
-  const [name, setName] = useState("Local Owner");
-  const [email, setEmail] = useState("owner@visionflow.local");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [mode, setMode] = useState<"otp" | "password">("password");
+  const [setupStep, setSetupStep] = useState<"email" | "profile">("email");
+  const [otpSent, setOtpSent] = useState(false);
+  const [devCode, setDevCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const submit = async (event: FormEvent) => {
@@ -564,8 +597,33 @@ function AuthGate({
     setBusy(true);
     setError("");
     try {
-      if (setup) await api.bootstrapAuth({ name, email, password });
-      await api.login(email, password);
+      if (authMode === "signup") await api.register(name, email, password);
+      else await api.login(email, password);
+      await onAuthenticated();
+      return;
+      /* Legacy OTP flow retained behind the API for compatibility. */
+      if (mode === "otp" && setup && setupStep === "profile") {
+        await api.bootstrapAuth({ name, email, password });
+        await onAuthenticated();
+        return;
+      }
+      if (mode === "otp") {
+        if (!otpSent) {
+          const response = await api.requestOtp(email, setup ? name : undefined);
+          setOtpSent(true);
+          setDevCode(response.devCode || "");
+          return;
+        }
+        await api.verifyOtp(email, code, setup ? name : undefined);
+        if (setup) {
+          setSetupStep("profile");
+          setPassword("");
+          return;
+        }
+      } else {
+        if (setup) await api.bootstrapAuth({ name, email, password });
+        await api.login(email, password);
+      }
       await onAuthenticated();
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : "Login gagal");
@@ -579,48 +637,501 @@ function AuthGate({
         <span className="brand-mark">
           <Boxes />
         </span>
-        <span className="eyebrow">VISIONFLOW SECURE WORKSPACE</span>
-        <h1>{setup ? "Configure workspace owner" : "Welcome back"}</h1>
+        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
+        <h1>{authMode === "signup" ? "Buat akun baru" : "Selamat datang kembali"}</h1>
         <p>
-          {setup
-            ? "Create the first protected owner account."
-            : "Sign in to datasets, models, and deployments."}
+          {authMode === "signup"
+            ? "Daftarkan username, email, dan password untuk menggunakan Salnova."
+            : "Sign In memakai akun yang sudah pernah didaftarkan."}
         </p>
-        {setup && (
+        {authMode === "signup" && (
           <label>
-            Name
+            Username akun
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
+              minLength={2}
+              maxLength={80}
               required
+              autoFocus
             />
           </label>
         )}
+        {false && <div className="auth-methods">
+          <button
+            type="button"
+            className={mode === "otp" ? "active" : ""}
+            onClick={() => {
+              setMode("otp");
+              setError("");
+            }}
+          >
+            Gmail OTP
+          </button>
+          <button
+            type="button"
+            className={mode === "password" ? "active" : ""}
+            onClick={() => {
+              setMode("password");
+              setError("");
+            }}
+          >
+            Password
+          </button>
+        </div>}
         <label>
           Email
           <input
             type="email"
             value={email}
+            disabled={mode === "otp" && otpSent}
+             placeholder="nama@example.com"
             onChange={(event) => setEmail(event.target.value)}
             required
           />
         </label>
-        <label>
-          Password
-          <input
-            type="password"
-            minLength={8}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-          />
-        </label>
+        {setup && setupStep === "profile" ? (
+          <label>
+            Password akun
+            <input
+              type="password"
+              minLength={8}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete={authMode === "signup" ? "new-password" : "current-password"}
+              required
+              autoFocus
+            />
+          </label>
+        ) : mode === "otp" && otpSent ? (
+          <>
+            <label>
+              Kode OTP 6 digit
+              <input
+                className="otp-input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={code}
+                placeholder="000000"
+                onChange={(event) =>
+                  setCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                }
+                required
+                autoFocus
+              />
+            </label>
+            <p className="otp-delivery">
+              Kode dikirim ke <b>{email}</b> dan berlaku selama 10 menit.
+              {devCode && <small>Development OTP: {devCode}</small>}
+            </p>
+            <button
+              type="button"
+              className="auth-back"
+              onClick={() => {
+                setOtpSent(false);
+                setCode("");
+                setDevCode("");
+              }}
+            >
+              Ganti email atau kirim ulang
+            </button>
+          </>
+        ) : mode === "password" ? (
+          <label>
+            Password
+            <input
+              type="password"
+              minLength={8}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </label>
+        ) : (
+          <p className="otp-hint">
+            Kami akan mengirim kode sekali pakai melalui Gmail. Tidak perlu
+            mengingat password.
+          </p>
+        )}
         {error && <p className="auth-error">{error}</p>}
         <button className="primary" disabled={busy}>
-          {busy ? "Please wait…" : setup ? "Secure workspace" : "Sign in"}
+          {busy
+            ? "Mohon tunggu…"
+            : authMode === "signup"
+              ? "Daftar & masuk"
+              : "Sign In"}
         </button>
+        <p className="auth-switch">
+          {authMode === "signin" ? "Belum memiliki akun?" : "Sudah memiliki akun?"}{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode((current) => current === "signin" ? "signup" : "signin");
+              setError("");
+              setPassword("");
+            }}
+          >
+            {authMode === "signin" ? "Buat akun baru" : "Kembali ke Sign In"}
+          </button>
+        </p>
       </form>
     </main>
+  );
+}
+
+type AssistantUiMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+function GeminiAssistant({
+  page,
+  project,
+  member,
+}: {
+  page: Page;
+  project?: Project;
+  member?: AuthStatus["member"];
+}) {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [messages, setMessages] = useState<AssistantUiMessage[]>([
+    {
+      role: "assistant",
+      content:
+        "Halo! Saya siap membantu memakai Salnova. Tanyakan tentang dataset, training, deployment, atau inference.",
+    },
+  ]);
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [open, messages, busy]);
+  const sendMessage = async (event: FormEvent) => {
+    event.preventDefault();
+    const content = input.trim();
+    if (!content || busy) return;
+    const nextMessages = [...messages, { role: "user" as const, content }];
+    setMessages(nextMessages);
+    setInput("");
+    setBusy(true);
+    try {
+      const response = await api.assistantChat(
+        nextMessages.slice(-12),
+        [
+          `halaman=${page}`,
+          project ? `project=${project.name}` : "project=tidak dipilih",
+          member ? `pengguna=${member.name}, role=${member.role}` : "pengguna=unknown",
+        ].join("; "),
+      );
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: response.reply },
+      ]);
+    } catch (chatError) {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content:
+            chatError instanceof Error
+              ? chatError.message
+              : "Chatbot sedang tidak dapat dihubungi.",
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={`gemini-assistant ${open ? "open" : ""}`}>
+      {open && (
+        <section className="gemini-panel" aria-label="Salnova AI Assistant">
+          <header>
+            <span className="gemini-avatar"><Sparkles /></span>
+            <div>
+              <b>Salnova Assistant</b>
+              <small>Powered by Gemini</small>
+            </div>
+            <button
+              type="button"
+              aria-label="Tutup chatbot"
+              onClick={() => setOpen(false)}
+            >
+              <X />
+            </button>
+          </header>
+          <div className="gemini-messages" aria-live="polite">
+            {messages.map((message, index) => (
+              <div className={`gemini-message ${message.role}`} key={index}>
+                {message.content}
+              </div>
+            ))}
+            {busy && (
+              <div className="gemini-message assistant typing">
+                <i /><i /><i />
+              </div>
+            )}
+            <div ref={endRef} />
+          </div>
+          <form onSubmit={sendMessage}>
+            <textarea
+              value={input}
+              maxLength={4000}
+              rows={2}
+              placeholder="Tanyakan cara menggunakan Salnova..."
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+            <button type="submit" disabled={busy || !input.trim()} aria-label="Kirim pesan">
+              <Send />
+            </button>
+          </form>
+          <small className="gemini-note">Gemini dapat membuat kesalahan. Periksa kembali konfigurasi penting.</small>
+        </section>
+      )}
+      <button
+        type="button"
+        className="gemini-launcher"
+        aria-label={open ? "Tutup chatbot" : "Buka chatbot"}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? <X /> : <MessageCircle />}
+      </button>
+    </div>
+  );
+}
+
+function WorkspaceBoot({
+  member,
+  failed,
+  progress,
+  retry,
+  switchAccount,
+}: {
+  member?: AuthStatus["member"];
+  failed?: boolean;
+  progress: number;
+  retry: () => void;
+  switchAccount: () => void;
+}) {
+  return (
+    <main className="workspace-boot">
+      <section className="workspace-boot-card">
+        <span className="brand-mark"><Boxes /></span>
+        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
+        {failed ? (
+          <>
+            <h1>Workspace belum siap</h1>
+            <p>
+              Backend belum dapat memuat project. Pastikan API sudah aktif lalu
+              coba kembali.
+            </p>
+          </>
+        ) : (
+          <>
+            <LoaderCircle className="workspace-boot-spinner" />
+            <h1>Menyiapkan workspace{member?.name ? ` ${member.name}` : ""}</h1>
+            <p>
+              Memuat project, dataset, model, deployment, dan tutorial. Halaman
+              akan terbuka otomatis setelah semuanya siap.
+            </p>
+          </>
+        )}
+        <div className="workspace-boot-steps">
+          <span className="done"><Check /> Sesi login terverifikasi</span>
+          <span className={failed ? "failed" : "active"}>
+            {failed ? <X /> : <LoaderCircle />} Memuat data dari backend
+          </span>
+          <span><CircleHelp /> Menyiapkan tutorial dan halaman project</span>
+        </div>
+        {!failed && (
+          <div className="workspace-boot-progress">
+            <div><i style={{ width: `${progress}%` }} /></div>
+            <b>{progress}%</b>
+          </div>
+        )}
+        {failed && (
+          <button className="primary" type="button" onClick={retry}>
+            Coba lagi
+          </button>
+        )}
+        <button className="workspace-switch-account" type="button" onClick={switchAccount}>
+          Gunakan akun lain
+        </button>
+      </section>
+    </main>
+  );
+}
+
+function AccountResume({
+  member,
+  proceed,
+  switchAccount,
+}: {
+  member: NonNullable<AuthStatus["member"]>;
+  proceed: () => void;
+  switchAccount: () => void;
+}) {
+  return (
+    <main className="auth-page">
+      <section className="auth-card account-resume-card">
+        <span className="brand-mark"><Boxes /></span>
+        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
+        <h1>Lanjutkan sesi?</h1>
+        <p>Pilih akun sebelum Salnova memuat workspace.</p>
+        <div className="account-resume-identity">
+          <span>{member.name.slice(0, 2).toUpperCase()}</span>
+          <div>
+            <b>{member.name}</b>
+            <small>{member.email}</small>
+          </div>
+        </div>
+        <button className="primary" type="button" onClick={proceed}>
+          Lanjut sebagai {member.name}
+        </button>
+        <button className="workspace-switch-account" type="button" onClick={switchAccount}>
+          Gunakan akun lain
+        </button>
+      </section>
+    </main>
+  );
+}
+
+const ONBOARDING_TOUR: Array<{
+  page: Page;
+  eyebrow: string;
+  title: string;
+  description: string;
+}> = [
+  {
+    page: "project",
+    eyebrow: "1 · PROJECT",
+    title: "Kenali project E2E COCO8",
+    description:
+      "Ini adalah project Object Detection lengkap yang sudah melewati import data, training, dan deployment.",
+  },
+  {
+    page: "dataset",
+    eyebrow: "2 · DATASET",
+    title: "Periksa gambar dan bounding box",
+    description:
+      "Dataset berisi delapan gambar COCO8 nyata dan anotasi objek yang menjadi sumber pembelajaran model.",
+  },
+  {
+    page: "versions",
+    eyebrow: "3 · VERSION",
+    title: "Dataset dibuat immutable",
+    description:
+      "Version menyimpan snapshot gambar, label, class, resize, dan split agar eksperimen dapat direproduksi.",
+  },
+  {
+    page: "train",
+    eyebrow: "4 · TRAINING",
+    title: "Ikuti epoch, batch, loss, dan checkpoint",
+    description:
+      "Halaman Training menunjukkan konfigurasi YOLO11s, progress run, serta best.pt yang sudah terbentuk.",
+  },
+  {
+    page: "registry",
+    eyebrow: "5 · MODEL",
+    title: "Periksa best.pt dan metrik",
+    description:
+      "Model Registry menyimpan mAP50, precision, recall, lifecycle, download weights, resume, dan fine-tuning.",
+  },
+  {
+    page: "deploy",
+    eyebrow: "6 · DEPLOYMENT",
+    title: "Jalankan inference objek nyata",
+    description:
+      "Model production dimuat dari best.pt. Contoh gambar di halaman ini diproses otomatis dan menampilkan bounding box, class, serta confidence.",
+  },
+];
+
+function OnboardingTour({
+  step,
+  project,
+  next,
+  previous,
+  finish,
+}: {
+  step: number;
+  project: Project;
+  next: () => void;
+  previous: () => void;
+  finish: () => Promise<void>;
+}) {
+  const item = ONBOARDING_TOUR[step];
+  const model = project.models.find((candidate) => candidate.stage === "production") ||
+    project.models.at(-1);
+  return (
+    <div className="onboarding-layer" role="dialog" aria-modal="true">
+      <div className="onboarding-spotlight" />
+      <aside className="onboarding-card">
+        <header>
+          <span>{item.eyebrow}</span>
+          <small>
+            {step + 1}/{ONBOARDING_TOUR.length}
+          </small>
+        </header>
+        <div className="tour-progress">
+          {ONBOARDING_TOUR.map((_, index) => (
+            <i className={index <= step ? "active" : ""} key={index} />
+          ))}
+        </div>
+        <h2>{item.title}</h2>
+        <p>{item.description}</p>
+        {step === 0 && (
+          <div className="tour-facts">
+            <span>
+              <b>{project.assets.length}</b> images
+            </span>
+            <span>
+              <b>{project.assets.reduce((total, asset) => total + asset.boxes.length, 0)}</b>{" "}
+              boxes
+            </span>
+            <span>
+              <b>{project.classes.length}</b> classes
+            </span>
+          </div>
+        )}
+        {step === ONBOARDING_TOUR.length - 1 && model && (
+          <div className="tour-deploy-result">
+            <Rocket />
+            <span>
+              <b>{model.alias || model.name}</b>
+              <small>
+                Production · mAP50 {model.map}% · precision {model.precision}%
+              </small>
+            </span>
+          </div>
+        )}
+        <footer>
+          <button className="ghost" onClick={() => void finish()}>
+            Lewati tutorial
+          </button>
+          <span>
+            {step > 0 && <button onClick={previous}>Kembali</button>}
+            {step < ONBOARDING_TOUR.length - 1 ? (
+              <button className="primary" onClick={next}>
+                Lanjut <ChevronRight />
+              </button>
+            ) : (
+              <button className="primary" onClick={() => void finish()}>
+                Selesai <Check />
+              </button>
+            )}
+          </span>
+        </footer>
+      </aside>
+    </div>
   );
 }
 
@@ -648,8 +1159,14 @@ function App() {
   const [backend, setBackend] = useState<"checking" | "online" | "offline">(
     "checking",
   );
+  const [workspaceReload, setWorkspaceReload] = useState(0);
+  const [bootProgress, setBootProgress] = useState(20);
   const [toast, setToast] = useState("");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [sessionConfirmed, setSessionConfirmed] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+  const [manualTour, setManualTour] = useState(false);
+  const inviteHandled = useRef("");
   useEffect(() => {
     try {
       const snapshot = JSON.stringify(projects);
@@ -667,23 +1184,71 @@ function App() {
     api
       .authStatus()
       .then(setAuth)
-      .catch(() => setAuth({ required: false, setupRequired: false }));
+      // Never fall through to the workspace when the auth backend is
+      // unreachable. A failed status check must remain a locked state.
+      .catch(() => setAuth({ required: true, setupRequired: false, member: null }));
   }, []);
   useEffect(() => {
-    if (!auth || (auth.required && !auth.member)) return;
+    if (!auth || (auth.required && (!auth.member || !sessionConfirmed))) return;
+    let cancelled = false;
+    setBackend("checking");
+    setBootProgress(24);
+    const progressTimer = window.setInterval(
+      () => setBootProgress((current) => Math.min(92, current + 3)),
+      280,
+    );
     api
       .projects()
       .then((remote) => {
+        if (cancelled) return;
         setProjects(remote);
-        setBackend("online");
-        setSelectedId((current) =>
-          remote.some((project) => project.id === current)
-            ? current
-            : remote[0]?.id || "",
+        const onboardingProject = remote.find((candidate) =>
+          candidate.name.startsWith("E2E COCO8 Detection 20260828-153649"),
         );
+        if (auth.member?.onboardingCompleted === false && onboardingProject) {
+          setSelectedId(onboardingProject.id);
+          setPage("project");
+          window.location.hash = `/projects/${encodeURIComponent(onboardingProject.id)}/project`;
+        } else {
+          setSelectedId((current) =>
+            remote.some((project) => project.id === current)
+              ? current
+              : remote[0]?.id || "",
+          );
+        }
+        setBootProgress(100);
+        window.setTimeout(() => {
+          if (!cancelled) setBackend("online");
+        }, 280);
       })
-      .catch(() => setBackend("offline"));
-  }, [auth?.required, auth?.member?.id]);
+      .catch(() => {
+        if (!cancelled) setBackend("offline");
+      })
+      .finally(() => window.clearInterval(progressTimer));
+    return () => {
+      cancelled = true;
+      window.clearInterval(progressTimer);
+    };
+  }, [auth?.required, auth?.member?.id, sessionConfirmed, workspaceReload]);
+  useEffect(() => {
+    if (backend !== "online" || !auth?.member) return;
+    const url = new URL(window.location.href);
+    const inviteCode = (url.searchParams.get("invite") || "").toUpperCase();
+    if (!/^[A-Z0-9]{8}$/.test(inviteCode) || inviteHandled.current === inviteCode) return;
+    inviteHandled.current = inviteCode;
+    api.requestProjectJoin(inviteCode).then((result) => {
+        notify(
+          result.status === "accepted"
+            ? "Anda sudah menjadi kolaborator project"
+            : "Permintaan bergabung dikirim. Tunggu persetujuan kolaborator.",
+        );
+        url.searchParams.delete("invite");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      }).catch((joinError) => {
+        inviteHandled.current = "";
+        notify(joinError instanceof Error ? joinError.message : "Undangan tidak dapat diproses");
+      });
+  }, [backend, auth?.member?.id]);
   useEffect(() => {
     const sync = () => {
       const route = parseRoute();
@@ -729,21 +1294,97 @@ function App() {
     setToast(s);
     setTimeout(() => setToast(""), 2600);
   };
-  if (!auth) return <div className="auth-loading">Loading VisionFlow…</div>;
+  const tourProject =
+    projects.find((candidate) =>
+      candidate.name.startsWith("E2E COCO8 Detection 20260828-153649"),
+    ) || projects.find((candidate) => !candidate.archived);
+  const tourActive = Boolean(
+    auth?.member &&
+      (auth.member.onboardingCompleted === false || manualTour) &&
+      backend === "online" &&
+      tourProject,
+  );
+  useEffect(() => {
+    if (!tourActive || !tourProject) return;
+    const target = ONBOARDING_TOUR[tourStep];
+    go(target.page, tourProject.id);
+  }, [tourActive, tourProject?.id, tourStep]);
+  const finishTour = async () => {
+    if (auth?.member?.onboardingCompleted === false) {
+      const member = await api.completeOnboarding();
+      setAuth((current) => (current ? { ...current, member } : current));
+    }
+    setManualTour(false);
+    notify("Tutorial selesai. Anda dapat membukanya kembali dari Dashboard.");
+  };
+  const startTour = () => {
+    if (!tourProject) {
+      notify("Buat satu project terlebih dahulu untuk menjalankan tutorial");
+      return;
+    }
+    setTourStep(0);
+    setManualTour(true);
+  };
+  const switchAccount = async () => {
+    await api.logout().catch(() => undefined);
+    setSessionConfirmed(false);
+    setBackend("checking");
+    setBootProgress(20);
+    setAuth(await api.authStatus());
+  };
+  if (!auth) return <div className="auth-loading">Loading Salnova...</div>;
   if (auth.required && !auth.member)
     return (
       <AuthGate
         setup={auth.setupRequired}
-        onAuthenticated={() => api.authStatus().then(setAuth)}
+        onAuthenticated={async () => {
+          setAuth(await api.authStatus());
+          setSessionConfirmed(true);
+        }}
+      />
+    );
+  if (auth.required && auth.member && !sessionConfirmed)
+    return (
+      <AccountResume
+        member={auth.member}
+        proceed={() => setSessionConfirmed(true)}
+        switchAccount={switchAccount}
+      />
+    );
+  if (backend === "checking")
+    return (
+      <WorkspaceBoot
+        member={auth.member}
+        progress={bootProgress}
+        retry={() => setWorkspaceReload((current) => current + 1)}
+        switchAccount={switchAccount}
+      />
+    );
+  if (backend === "offline")
+    return (
+      <WorkspaceBoot
+        member={auth.member}
+        failed
+        progress={bootProgress}
+        retry={() => setWorkspaceReload((current) => current + 1)}
+        switchAccount={switchAccount}
       />
     );
   return (
     <div className="app">
-      <Sidebar page={page} go={go} onHelp={() => setHelp(true)} />
+      <Sidebar
+        page={page}
+        go={go}
+        onHelp={() => setHelp(true)}
+        onProfile={() => setProfile((value) => !value)}
+        member={auth.member}
+      />
       <main>
         <Topbar
+          page={page}
           project={PROJECT_PAGES.includes(page) ? project : undefined}
           backend={backend}
+          member={auth.member}
           onBack={() => go(page === "project" ? "dashboard" : "project")}
           onSearch={() => setPalette(true)}
           onHelp={() => setHelp(true)}
@@ -754,6 +1395,7 @@ function App() {
             projects={projects}
             go={go}
             create={() => setModal(true)}
+            startTour={startTour}
             duplicate={async (id) => {
               try {
                 const saved = await api.duplicateProject(id);
@@ -978,6 +1620,15 @@ function App() {
           backend={backend}
           projects={projects.length}
           member={auth.member}
+          uploadPhoto={async (file) => {
+            try {
+              const member = await api.uploadProfilePhoto(file);
+              setAuth((current) => (current ? { ...current, member } : current));
+              notify("Foto profil berhasil diperbarui");
+            } catch (error) {
+              notify(error instanceof Error ? error.message : "Foto profil gagal diunggah");
+            }
+          }}
           settings={() => {
             setProfile(false);
             go("settings");
@@ -1001,7 +1652,45 @@ function App() {
           {toast}
         </div>
       )}
+      <GeminiAssistant page={page} project={project} member={auth.member} />
+      {tourActive && tourProject && (
+        <OnboardingTour
+          step={tourStep}
+          project={tourProject}
+          previous={() => setTourStep((current) => Math.max(0, current - 1))}
+          next={() =>
+            setTourStep((current) =>
+              Math.min(ONBOARDING_TOUR.length - 1, current + 1),
+            )
+          }
+          finish={finishTour}
+        />
+      )}
     </div>
+  );
+}
+
+function MemberAvatar({
+  member,
+  className = "",
+}: {
+  member?: AuthStatus["member"];
+  className?: string;
+}) {
+  const initials = (member?.name || "Salnova User")
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+  return (
+    <span className={`member-profile-avatar ${className}`.trim()}>
+      {member?.avatarUrl ? (
+        <img src={member.avatarUrl} alt={`Foto profil ${member.name}`} />
+      ) : (
+        initials
+      )}
+    </span>
   );
 }
 
@@ -1009,10 +1698,14 @@ function Sidebar({
   page,
   go,
   onHelp,
+  onProfile,
+  member,
 }: {
   page: Page;
   go: (p: Page) => void;
   onHelp: () => void;
+  onProfile: () => void;
+  member?: AuthStatus["member"];
 }) {
   const nav = [
     ["dashboard", LayoutDashboard, "Projects"],
@@ -1026,17 +1719,23 @@ function Sidebar({
           <Boxes />
         </span>
         <span>
-          roboflow <small>LOCAL</small>
+          salnova <small>LOCAL</small>
         </span>
       </div>
-      <div className="workspace">
-        <span className="avatar">AK</span>
+      <button
+        className="workspace"
+        type="button"
+        onClick={onProfile}
+        aria-label={`Buka menu akun ${member?.name || "Salnova User"}`}
+        title="Buka menu akun dan ganti akun"
+      >
+        <MemberAvatar member={member} className="avatar" />
         <div>
-          <b>Arunika Labs</b>
-          <small>Personal workspace</small>
+          <b>{member?.name || "Salnova User"}</b>
+          <small>{member?.email || "Personal workspace"}</small>
         </div>
         <ChevronDown size={15} />
-      </div>
+      </button>
       <nav>
         <p>WORKSPACE</p>
         {nav.map(([id, I, l]) => (
@@ -1093,15 +1792,19 @@ function Sidebar({
 }
 
 function Topbar({
+  page,
   project,
   backend,
+  member,
   onBack,
   onSearch,
   onHelp,
   onProfile,
 }: {
+  page: Page;
   project?: Project;
   backend: "checking" | "online" | "offline";
+  member?: AuthStatus["member"];
   onBack: () => void;
   onSearch: () => void;
   onHelp: () => void;
@@ -1121,7 +1824,15 @@ function Topbar({
           </>
         ) : (
           <>
-            <h2>Dashboard</h2>
+            <h2>
+              {({
+                dashboard: "Projects",
+                workflows: "Workflows",
+                models: "Model Library",
+                templates: "Templates",
+                settings: "Settings",
+              } as Partial<Record<Page, string>>)[page] || "Salnova"}
+            </h2>
           </>
         )}
       </div>
@@ -1142,8 +1853,13 @@ function Topbar({
         >
           <CircleHelp size={18} />
         </button>
-        <button className="user" onClick={onProfile}>
-          AK
+        <button
+          className="user"
+          onClick={onProfile}
+          title={`Akun ${member?.name || "Salnova User"}`}
+          aria-label="Buka menu akun"
+        >
+          <MemberAvatar member={member} className="topbar-profile-avatar" />
         </button>
       </div>
     </header>
@@ -1304,7 +2020,7 @@ function HelpCenter({ close }: { close: () => void }) {
             <BookOpen />
           </span>
           <div>
-            <h2>Roboflow Local help</h2>
+            <h2>Salnova help</h2>
             <p>Quick reference for the complete model workflow.</p>
           </div>
           <button className="icon ghost" onClick={close}>
@@ -1387,6 +2103,7 @@ function ProfileMenu({
   backend,
   projects,
   member,
+  uploadPhoto,
   settings,
   logout,
   close,
@@ -1394,33 +2111,57 @@ function ProfileMenu({
   backend: "checking" | "online" | "offline";
   projects: number;
   member?: AuthStatus["member"];
+  uploadPhoto: (file: File) => Promise<void>;
   settings: () => void;
   logout?: () => Promise<void>;
   close: () => void;
 }) {
+  const avatarInput = useRef<HTMLInputElement>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   return (
     <div className="profile-popover">
       <button className="profile-close" onClick={close}>
         <X />
       </button>
       <div className="profile-identity">
-        <span>
-          {(member?.name || "Arunika Labs")
-            .split(/\s+/)
-            .slice(0, 2)
-            .map((part) => part[0])
-            .join("")
-            .toUpperCase()}
-        </span>
+        <MemberAvatar member={member} className="profile-menu-avatar" />
         <div>
-          <b>{member?.name || "Arunika Labs"}</b>
+          <b>{member?.name || "Salnova User"}</b>
           <small>
             {member
-              ? `${member.role} · ${member.email}`
+              ? `Full access | ${member.email}`
               : "Local workspace owner"}
           </small>
         </div>
       </div>
+      <button
+        className="profile-photo-upload"
+        disabled={uploadingAvatar}
+        onClick={() => avatarInput.current?.click()}
+      >
+        <Upload />
+        <span>
+          <b>{uploadingAvatar ? "Mengunggah foto..." : "Ganti foto profil"}</b>
+          <small>JPG, PNG, atau WEBP, maksimum 5 MB</small>
+        </span>
+      </button>
+      <input
+        ref={avatarInput}
+        hidden
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={async (event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (!file) return;
+          setUploadingAvatar(true);
+          try {
+            await uploadPhoto(file);
+          } finally {
+            setUploadingAvatar(false);
+          }
+        }}
+      />
       <div className={"profile-backend " + backend}>
         {backend === "offline" ? <WifiOff /> : <Wifi />}
         <span>
@@ -1428,15 +2169,18 @@ function ProfileMenu({
           <small>{projects} projects available</small>
         </span>
       </div>
-      <button onClick={settings}>
+      <button className="profile-action" onClick={settings}>
         <Settings />
-        Workspace settings
+        <span>
+          <b>Workspace settings</b>
+          <small>Members, collaboration, backup and restore</small>
+        </span>
         <ChevronRight />
       </button>
       {logout && (
         <button className="profile-logout" onClick={() => void logout()}>
           <LogOut />
-          Sign out
+          Ganti akun
         </button>
       )}
     </div>
@@ -1517,12 +2261,14 @@ function Dashboard({
   projects,
   go,
   create,
+  startTour,
   duplicate,
   archive,
 }: {
   projects: Project[];
   go: (p: Page, id?: string) => void;
   create: () => void;
+  startTour: () => void;
   duplicate: (id: string) => void;
   archive: (id: string, archived: boolean) => void;
 }) {
@@ -1541,14 +2287,20 @@ function Dashboard({
           <span className="eyebrow">ROBOFLOW LOCAL</span>
           <h1>Build computer vision models faster.</h1>
           <p>
-            Upload data, annotate, generate a version, train, and deploy—all on
+            Upload data, annotate, generate a version, train, and deploy, all on
             this machine.
           </p>
         </div>
-        <button className="primary" onClick={create}>
-          <Plus size={17} />
-          Create New Project
-        </button>
+        <div className="dashboard-welcome-actions">
+          <button className="secondary dashboard-tour-button" onClick={startTour}>
+            <BookOpen size={16} />
+            Mulai tutorial
+          </button>
+          <button className="primary" onClick={create}>
+            <Plus size={17} />
+            Create New Project
+          </button>
+        </div>
       </section>
       <div className="stats">
         <Stat
@@ -1567,7 +2319,7 @@ function Dashboard({
           icon={BrainCircuit}
           val={projects.reduce(
             (a, p) =>
-              a + p.models.filter((model) => model.status === "ready").length,
+              a + p.models.filter(modelCanDeploy).length,
             0,
           )}
           label="Trained models"
@@ -1609,13 +2361,28 @@ function Dashboard({
           </div>
         </div>
         <div className="project-grid">
-          {filtered.map((p, i) => (
+          {filtered.map((p, i) => {
+            const coverImage = p.assets[0]?.src;
+            return (
             <article className="project-card" key={p.id}>
               <button
                 className="project-card-main"
                 onClick={() => go("project", p.id)}
               >
-                <div className={"project-cover cover-" + (i % 4)}>
+                <div
+                  className={
+                    "project-cover cover-" +
+                    (i % 4) +
+                    (coverImage ? " has-dataset-cover" : "")
+                  }
+                  style={
+                    coverImage
+                      ? {
+                          backgroundImage: `linear-gradient(180deg, rgba(20, 15, 34, 0.08), rgba(20, 15, 34, 0.58)), url(${JSON.stringify(coverImage)})`,
+                        }
+                      : undefined
+                  }
+                >
                   <Boxes />
                   <span className="project-type-pill">{p.type}</span>
                   {p.archived && (
@@ -1680,7 +2447,8 @@ function Dashboard({
                 </div>
               )}
             </article>
-          ))}
+            );
+          })}
           <button className="new-card" onClick={create}>
             <span>
               <Plus />
@@ -1801,6 +2569,61 @@ function ProjectHome({
   const [draggingUpload, setDraggingUpload] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStage, setUploadStage] = useState<TransferStage>("uploading");
+  const [collaboration, setCollaboration] = useState<ProjectCollaboration>({
+    invites: [],
+    requests: [],
+    collaborators: [],
+  });
+  const [joinCode, setJoinCode] = useState("");
+  const loadCollaboration = () =>
+    api.projectCollaboration(project.id).then(setCollaboration).catch(() => undefined);
+  useEffect(() => {
+    void loadCollaboration();
+    const refresh = window.setInterval(() => void loadCollaboration(), 5000);
+    return () => window.clearInterval(refresh);
+  }, [project.id]);
+  const createInvite = async () => {
+    try {
+      const invite = await api.createProjectInvite(project.id);
+      await loadCollaboration();
+      const link = `${window.location.origin}${window.location.pathname}?invite=${invite.code}#/dashboard`;
+      const copied = await copyText(link);
+      notify(
+        copied
+          ? "Link undangan disalin. Berlaku selama 7 hari."
+          : `Undangan dibuat. Bagikan kode ${invite.code}.`,
+      );
+    } catch (inviteError) {
+      notify(inviteError instanceof Error ? inviteError.message : "Gagal membuat undangan");
+    }
+  };
+  const joinWithCode = async () => {
+    const code = joinCode.trim().toUpperCase();
+    if (!/^[A-Z0-9]{8}$/.test(code)) {
+      notify("Kode undangan harus terdiri dari 8 karakter");
+      return;
+    }
+    try {
+      const result = await api.requestProjectJoin(code);
+      setJoinCode("");
+      notify(
+        result.status === "accepted"
+          ? "Anda sudah menjadi kolaborator project"
+          : "Join request terkirim. Pengundang akan melihatnya otomatis.",
+      );
+    } catch (joinError) {
+      notify(joinError instanceof Error ? joinError.message : "Kode undangan gagal diproses");
+    }
+  };
+  const reviewJoin = async (requestId: string, action: "accept" | "reject") => {
+    try {
+      await api.reviewProjectJoin(project.id, requestId, action);
+      await loadCollaboration();
+      notify(action === "accept" ? "Kolaborator diterima" : "Permintaan ditolak");
+    } catch (reviewError) {
+      notify(reviewError instanceof Error ? reviewError.message : "Gagal memproses permintaan");
+    }
+  };
   const upload = async (files: FileList | null) => {
     if (!files) return;
     try {
@@ -2017,6 +2840,89 @@ function ProjectHome({
                 <dd>{project.classes.length}</dd>
               </div>
             </dl>
+          </section>
+          <section className="panel compact project-collaboration-card">
+            <div className="collaboration-title">
+              <div>
+                <h3>Collaborators</h3>
+                <small>Semua kolaborator memiliki fungsi project yang sama.</small>
+              </div>
+              <button className="primary small" onClick={createInvite}>
+                <Plus /> Invite
+              </button>
+            </div>
+            {collaboration.invites[0] && (
+              <div className="active-invite">
+                <span>
+                  <small>Kode aktif</small>
+                  <b>{collaboration.invites[0].code}</b>
+                </span>
+                <button
+                  onClick={async () => {
+                    const code = collaboration.invites[0].code;
+                    const link = `${window.location.origin}${window.location.pathname}?invite=${code}#/dashboard`;
+                    const copied = await copyText(link);
+                    notify(copied ? "Link undangan disalin" : `Bagikan kode ${code}`);
+                  }}
+                >
+                  <Copy /> Copy link
+                </button>
+              </div>
+            )}
+            <div className="join-code-form">
+              <span>
+                <b>Punya kode undangan?</b>
+                <small>Masukkan kode dari project lain untuk mengirim join request.</small>
+              </span>
+              <input
+                value={joinCode}
+                maxLength={8}
+                placeholder="8 karakter"
+                onChange={(event) =>
+                  setJoinCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void joinWithCode();
+                }}
+              />
+              <button onClick={() => void joinWithCode()} disabled={joinCode.length !== 8}>
+                Join project
+              </button>
+            </div>
+            {!!collaboration.requests.length && (
+              <div className="join-request-list">
+                <b>Menunggu persetujuan</b>
+                {collaboration.requests.map((request) => (
+                  <div key={request.id}>
+                    <span>
+                      <b>{request.name}</b>
+                      <small>{request.email}</small>
+                    </span>
+                    <button className="accept" onClick={() => reviewJoin(request.id, "accept")}>
+                      <Check />
+                    </button>
+                    <button className="reject" onClick={() => reviewJoin(request.id, "reject")}>
+                      <X />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="collaborator-list">
+              {collaboration.collaborators.map((collaborator) => (
+                <div key={collaborator.id}>
+                  <span>{collaborator.name.slice(0, 2).toUpperCase()}</span>
+                  <div>
+                    <b>{collaborator.name}</b>
+                    <small>{collaborator.email}</small>
+                  </div>
+                  <em>Full access</em>
+                </div>
+              ))}
+              {!collaboration.collaborators.length && (
+                <p>Belum ada kolaborator yang disetujui.</p>
+              )}
+            </div>
           </section>
           <section className="panel compact">
             <h3>Classes</h3>
@@ -3164,7 +4070,7 @@ function Train({
   update: (fn: (p: Project) => Project) => void;
   notify: (s: string) => void;
 }) {
-  const [arch, setArch] = useState("VisionFlow Detect Fast");
+  const [arch, setArch] = useState("Salnova Detect Fast");
   const [epochs, setEpochs] = useState(10);
   const start = async () => {
     if (!project.versions.length) {
@@ -3211,8 +4117,8 @@ function Train({
             Select the best balance of speed and accuracy.
           </p>
           {[
-            "VisionFlow Detect Fast",
-            "VisionFlow Detect Accurate",
+            "Salnova Detect Fast",
+            "Salnova Detect Accurate",
             "YOLO-compatible Local",
           ].map((a, i) => (
             <button
@@ -3334,7 +4240,7 @@ function Train({
 }
 
 function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
-  const ready = project.models.filter((m) => m.status === "ready");
+  const ready = project.models.filter(modelCanDeploy);
   const deployedModel =
     ready.find((model) => model.stage === "production") || ready.at(-1);
   const [tab, setTab] = useState("image");
@@ -3371,7 +4277,11 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     sampledFrames: number;
     durationSeconds: number;
     totals: Record<string, number>;
+    timeline?: Array<{ second: number; counts: Record<string, number> }>;
+    annotatedVideoUrl: string;
+    annotatedVideoName: string;
   } | null>(null);
+  const [videoSource, setVideoSource] = useState<{ url: string; name: string } | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [keys, setKeys] = useState<
     Array<{
@@ -3400,7 +4310,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   const timer = useRef<number | null>(null);
   const busy = useRef(false);
   const selectedImageFile = useRef<File | null>(null);
+  const exampleRequested = useRef(false);
+  const exampleProjectId = useRef("");
   const thresholdTimer = useRef<number | null>(null);
+  const videoSourceUrl = useRef("");
   const thresholdRequest = useRef(0);
   const viewerDragOrigin = useRef({ x: 0, y: 0 });
   const resetViewer = () => {
@@ -3472,6 +4385,56 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
       }
     }
   };
+  useEffect(() => {
+    if (exampleProjectId.current !== project.id) {
+      exampleProjectId.current = project.id;
+      exampleRequested.current = false;
+    }
+    if (
+      exampleRequested.current ||
+      !project.name.startsWith("E2E COCO8 Detection") ||
+      !deployedModel
+    )
+      return;
+    const example =
+      project.assets.find((asset) => asset.name === "000000000049.jpg") ||
+      project.assets.find((asset) => asset.split === "valid") ||
+      project.assets[0];
+    if (!example) return;
+    exampleRequested.current = true;
+    // Show the tutorial image immediately; bounding boxes are overlaid as soon
+    // as the inference response arrives.
+    setPreview(example.src);
+    setRunning(true);
+    setError("");
+    fetch(example.src)
+      .then((response) => {
+        if (!response.ok) throw new Error("Gambar contoh deployment tidak tersedia");
+        return response.blob();
+      })
+      .then((blob) =>
+        test(
+          new File([blob], example.name, {
+            type: blob.type || "image/jpeg",
+          }),
+        ),
+      )
+      .catch((exampleError) => {
+        exampleRequested.current = false;
+        setRunning(false);
+        setError(
+          exampleError instanceof Error
+            ? exampleError.message
+            : "Gagal menjalankan contoh deployment",
+        );
+      });
+  }, [
+    project.id,
+    project.name,
+    project.assets.length,
+    project.assets[0]?.src,
+    deployedModel?.id,
+  ]);
   const changeImageThreshold = (value: number) => {
     setThreshold(value);
     if (tab !== "image" || !selectedImageFile.current) return;
@@ -3538,20 +4501,39 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     }
     setRunning(false);
   };
-  const downloadBatch = () => {
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(batchResults, null, 2)], {
-        type: "application/json",
-      }),
-    );
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "visionflow-batch-results.json";
+    anchor.download = filename;
     anchor.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+  const downloadJson = (value: unknown, filename: string) =>
+    downloadBlob(
+      new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }),
+      filename,
+    );
+  const downloadBatch = (format: "json" | "csv") => {
+    if (format === "csv") {
+      const csv = [
+        "file,predictions,error",
+        ...batchResults.map((item) =>
+          [item.file, item.predictions, item.error || ""]
+            .map((value) => `"${String(value).replaceAll('"', '""')}"`)
+            .join(","),
+        ),
+      ].join("\n");
+      downloadBlob(new Blob([csv], { type: "text/csv" }), "salnova-batch-results.csv");
+      return;
+    }
+    downloadJson(batchResults, "salnova-batch-results.json");
   };
   const testVideo = async (file?: File) => {
     if (!file) return;
+    if (videoSourceUrl.current) URL.revokeObjectURL(videoSourceUrl.current);
+    videoSourceUrl.current = URL.createObjectURL(file);
+    setVideoSource({ url: videoSourceUrl.current, name: file.name });
     setRunning(true);
     setTransferProgress(0);
     setTransferStage("uploading");
@@ -3578,7 +4560,8 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
       setTransferProgress(null);
     }
   };
-  const endpoint = `http://localhost:8000/api/projects/${project.id}/infer`;
+  const endpoint = `${window.location.origin}/api/projects/${project.id}/infer`;
+  const secureEndpoint = `${window.location.origin}/api/deploy/${project.id}/infer`;
   const pythonSnippet = `import requests\n\nresponse = requests.post(\n  "${endpoint}",\n  files={"file": open("image.jpg", "rb")},\n  params={"confidence": 0.5}\n)\n\nprint(response.json())`;
   const boxes = result?.predictions.map((p, i) => (
     <div
@@ -3641,6 +4624,11 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   };
   const startCamera = async () => {
     try {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          "Webcam diblokir browser pada koneksi HTTP LAN. Buka Salnova melalui HTTPS atau localhost pada komputer ini.",
+        );
+      }
       stream.current = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false,
@@ -3659,6 +4647,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     () => () => {
       stopCamera();
       if (thresholdTimer.current) window.clearTimeout(thresholdTimer.current);
+      if (videoSourceUrl.current) URL.revokeObjectURL(videoSourceUrl.current);
     },
     [],
   );
@@ -3713,6 +4702,76 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
         }, {}),
       ).sort((a, b) => b[1] - a[1])
     : [];
+  const drawResult = (
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+  ) => {
+    if (!result) return;
+    const scaleX = width / Math.max(1, result.image.width);
+    const scaleY = height / Math.max(1, result.image.height);
+    context.lineWidth = Math.max(2, width / 420);
+    context.font = `600 ${Math.max(12, width / 55)}px sans-serif`;
+    result.predictions.forEach((prediction) => {
+      context.strokeStyle = "#7052e4";
+      context.fillStyle = "#7052e4";
+      if (prediction.points?.length) {
+        context.beginPath();
+        prediction.points.forEach((point, index) => {
+          const x = point.x * scaleX;
+          const y = point.y * scaleY;
+          if (index === 0) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        });
+        context.closePath();
+        context.stroke();
+      } else {
+        context.strokeRect(
+          prediction.x1 * scaleX,
+          prediction.y1 * scaleY,
+          (prediction.x2 - prediction.x1) * scaleX,
+          (prediction.y2 - prediction.y1) * scaleY,
+        );
+      }
+      const label = `${prediction.class} ${Math.round(prediction.confidence * 100)}%`;
+      const x = prediction.x1 * scaleX;
+      const y = Math.max(18, prediction.y1 * scaleY);
+      const textWidth = context.measureText(label).width + 10;
+      context.fillRect(x, y - 18, textWidth, 20);
+      context.fillStyle = "#fff";
+      context.fillText(label, x + 5, y - 4);
+    });
+  };
+  const downloadAnnotatedImage = () => {
+    if (!preview) return;
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      drawResult(context, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (blob) downloadBlob(blob, "salnova-detection.png");
+      }, "image/png");
+    };
+    image.src = preview;
+  };
+  const downloadWebcamSnapshot = () => {
+    if (!video.current?.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.current.videoWidth;
+    canvas.height = video.current.videoHeight;
+    const context = canvas.getContext("2d")!;
+    context.drawImage(video.current, 0, 0);
+    drawResult(context, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (blob) downloadBlob(blob, "salnova-webcam-detection.png");
+    }, "image/png");
+  };
+  const cameraRequiresHttps =
+    !window.isSecureContext || !navigator.mediaDevices?.getUserMedia;
   return (
     <div className="content deploy-page">
       <ProjectTabs active="deploy" go={go} />
@@ -3810,6 +4869,13 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                       <ZoomIn />
                     </button>
                     <button onClick={resetViewer}>Fit</button>
+                    <button
+                      title="Download hasil dengan bounding box"
+                      disabled={!result}
+                      onClick={downloadAnnotatedImage}
+                    >
+                      <Download />
+                    </button>
                   </div>
                   <small className="inference-viewer-hint">
                     Drag untuk menggeser · scroll untuk zoom · klik dua kali untuk reset
@@ -3847,6 +4913,18 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
               )
             ) : tab === "webcam" ? (
               <div>
+                {cameraRequiresHttps && (
+                  <div className="camera-security-note">
+                    <WifiOff />
+                    <span>
+                      <b>Webcam memerlukan koneksi aman</b>
+                      <small>
+                        Alamat HTTP LAN seperti {window.location.hostname} diblokir browser.
+                        Gunakan HTTPS, atau buka localhost jika Salnova berjalan di komputer ini.
+                      </small>
+                    </span>
+                  </div>
+                )}
                 <div className="preview webcam-preview">
                   <video ref={video} muted playsInline />
                   {boxes}
@@ -3861,10 +4939,16 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   className={
                     cameraOn ? "danger camera-button" : "primary camera-button"
                   }
+                  disabled={!cameraOn && cameraRequiresHttps}
                   onClick={cameraOn ? stopCamera : startCamera}
                 >
                   {cameraOn ? "Stop camera" : "Start camera"}
                 </button>
+                {cameraOn && result && (
+                  <button className="secondary media-download" onClick={downloadWebcamSnapshot}>
+                    <Download /> Download snapshot
+                  </button>
+                )}
               </div>
             ) : tab === "batch" ? (
               <div className="batch-inference">
@@ -3893,8 +4977,11 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   <div className="batch-results">
                     <header>
                       <b>{batchResults.length} files processed</b>
-                      <button onClick={downloadBatch}>
+                      <button onClick={() => downloadBatch("json")}>
                         <Download /> JSON
+                      </button>
+                      <button onClick={() => downloadBatch("csv")}>
+                        <Download /> CSV
                       </button>
                     </header>
                     {batchResults.map((item) => (
@@ -3920,6 +5007,32 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                     onChange={(event) => testVideo(event.target.files?.[0])}
                   />
                 </label>
+                {videoSource && (
+                  <div className="video-preview-card">
+                    <video
+                      key={videoResult?.annotatedVideoUrl || videoSource.url}
+                      src={videoResult?.annotatedVideoUrl || videoSource.url}
+                      controls
+                      playsInline
+                      preload="metadata"
+                    />
+                    <footer>
+                      <span>
+                        {videoResult
+                          ? `Detection result · ${videoResult.annotatedVideoName}`
+                          : `Original preview · ${videoSource.name}`}
+                      </span>
+                      {videoResult && (
+                        <a
+                          href={`${videoResult.annotatedVideoUrl}?download=true`}
+                          download={videoResult.annotatedVideoName}
+                        >
+                          <Download /> Download detected video
+                        </a>
+                      )}
+                    </footer>
+                  </div>
+                )}
                 {running && transferProgress === null && (
                   <p className="infer-result">Processing video frames…</p>
                 )}
@@ -3927,7 +5040,16 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   <div className="video-results">
                     <header>
                       <b>{videoResult.sampledFrames} frames analyzed</b>
-                      <span>{videoResult.durationSeconds}s video</span>
+                      <span>
+                        {videoResult.durationSeconds}s video
+                        <button
+                          onClick={() =>
+                            downloadJson(videoResult, "salnova-video-analysis.json")
+                          }
+                        >
+                          <Download /> Download report
+                        </button>
+                      </span>
                     </header>
                     {Object.entries(videoResult.totals).map(([name, count]) => (
                       <span key={name}>
@@ -3990,9 +5112,9 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             <h2>Use the local API</h2>
             <p>Connect your app to this model using HTTP.</p>
             <div className="endpoint">
-              <span>POST</span> http://localhost:8000/api/projects/{project.id}
-              /infer
-              <button onClick={() => navigator.clipboard.writeText(endpoint)}>
+              <span>POST</span>
+              <code>{endpoint}</code>
+              <button onClick={() => void copyText(endpoint)} title="Copy endpoint">
                 <Copy />
               </button>
             </div>
@@ -4056,7 +5178,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
           )}
           <div className="secure-endpoint">
             <span>POST</span>
-            <code>http://localhost:8000/api/deploy/{project.id}/infer</code>
+            <code>{secureEndpoint}</code>
             <small>Header: X-API-Key</small>
           </div>
           <div className="deployment-summary">
@@ -4149,7 +5271,7 @@ function Workflows({
       title: "Object Detection",
       subtitle: "Latest ready model",
       projectId: projects.find((p) =>
-        p.models.some((m) => m.status === "ready"),
+        p.models.some(modelCanDeploy),
       )?.id,
     },
     {
@@ -4401,7 +5523,7 @@ function Workflows({
         subtitle,
         projectId:
           type === "model"
-            ? projects.find((p) => p.models.some((m) => m.status === "ready"))
+            ? projects.find((p) => p.models.some(modelCanDeploy))
                 ?.id
             : undefined,
         config,
@@ -4698,7 +5820,7 @@ function Workflows({
           >
             <option value="">Latest ready model</option>
             {projects
-              .filter((p) => p.models.some((m) => m.status === "ready"))
+              .filter((p) => p.models.some(modelCanDeploy))
               .map((p) => (
                 <option value={p.id} key={p.id}>
                   {p.name}
@@ -4836,7 +5958,7 @@ function Workflows({
                     <option value="">Latest ready model</option>
                     {projects
                       .filter((item) =>
-                        item.models.some((model) => model.status === "ready"),
+                        item.models.some(modelCanDeploy),
                       )
                       .map((item) => (
                         <option key={item.id} value={item.id}>
@@ -5055,7 +6177,19 @@ function ProjectInsights({
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [queue, setQueue] = useState<ActiveLearningItem[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [activeLearningProgress, setActiveLearningProgress] = useState<
+    Partial<DatasetHealthProgress>
+  >({});
   const [loadingHealth, setLoadingHealth] = useState(false);
+  const [healthProgress, setHealthProgress] = useState<DatasetHealthProgress>({
+    scanning: false,
+    progress: 0,
+    processed: 0,
+    total: 0,
+    stage: "Ready to scan",
+    etaSeconds: 0,
+  });
+  const healthProgressTimer = useRef<number | null>(null);
   const load = async () => {
     const [jobItems, memberItems, active] = await Promise.all([
       api.annotationJobs(project.id),
@@ -5066,20 +6200,42 @@ function ProjectInsights({
     setMembers(memberItems);
     setQueue(active.items);
     setScanning(active.scanning);
+    setActiveLearningProgress(active.progress || {});
   };
   const scanHealth = async () => {
     setLoadingHealth(true);
+    setHealthProgress((current) => ({
+      ...current,
+      scanning: true,
+      progress: 1,
+      stage: "Preparing dataset scan",
+    }));
+    const pollProgress = () =>
+      api
+        .datasetHealthProgress(project.id)
+        .then(setHealthProgress)
+        .catch(() => {});
+    await pollProgress();
+    healthProgressTimer.current = window.setInterval(pollProgress, 500);
     try {
       setHealth(await api.datasetHealth(project.id));
+      await pollProgress();
     } catch (error) {
       notify(error instanceof Error ? error.message : "Dataset scan gagal");
     } finally {
+      if (healthProgressTimer.current)
+        window.clearInterval(healthProgressTimer.current);
+      healthProgressTimer.current = null;
       setLoadingHealth(false);
     }
   };
   useEffect(() => {
     load().catch(() => {});
     scanHealth();
+    return () => {
+      if (healthProgressTimer.current)
+        window.clearInterval(healthProgressTimer.current);
+    };
   }, [project.id]);
   useEffect(() => {
     if (!scanning) return;
@@ -5132,6 +6288,27 @@ function ProjectInsights({
           <Activity /> {loadingHealth ? "Scanning…" : "Rescan dataset"}
         </button>
       </div>
+      {loadingHealth && (
+        <section className="panel health-scan-progress" aria-live="polite">
+          <header>
+            <span>
+              <LoaderCircle />
+              <b>Scanning dataset</b>
+            </span>
+            <strong>{healthProgress.progress}%</strong>
+          </header>
+          <progress max="100" value={healthProgress.progress} />
+          <footer>
+            <span>{healthProgress.stage}</span>
+            <span>
+              {healthProgress.processed}/{healthProgress.total || project.assets.length} files
+              {healthProgress.etaSeconds > 0
+                ? ` · sekitar ${Math.ceil(healthProgress.etaSeconds / 60)} menit lagi`
+                : ""}
+            </span>
+          </footer>
+        </section>
+      )}
       {health && (
         <div className="health-summary">
           <section className="panel health-score">
@@ -5148,7 +6325,7 @@ function ProjectInsights({
             <small>Duplicate groups</small>
           </section>
           <section className="panel">
-            <b>{health.imbalanceRatio || "—"}</b>
+            <b>{health.imbalanceRatio || "N/A"}</b>
             <small>Class imbalance ratio</small>
           </section>
           <section className="panel">
@@ -5250,7 +6427,7 @@ function ProjectInsights({
             className="primary small"
             disabled={
               scanning ||
-              !project.models.some((model) => model.status === "ready")
+              !project.models.some(modelCanDeploy)
             }
             onClick={async () => {
               try {
@@ -5269,6 +6446,22 @@ function ProjectInsights({
             {scanning ? "Scanning…" : "Scan uncertain images"}
           </button>
         </div>
+        {scanning && (
+          <div className="active-learning-progress" aria-live="polite">
+            <span>
+              <b>{activeLearningProgress.stage || "Scanning uncertain images"}</b>
+              <strong>{activeLearningProgress.progress || 1}%</strong>
+            </span>
+            <progress max="100" value={activeLearningProgress.progress || 1} />
+            <small>
+              {activeLearningProgress.processed || 0}/
+              {activeLearningProgress.total || 100} images
+              {(activeLearningProgress.etaSeconds || 0) > 0
+                ? ` · sekitar ${Math.ceil((activeLearningProgress.etaSeconds || 0) / 60)} menit lagi`
+                : ""}
+            </small>
+          </div>
+        )}
         <div className="active-learning-list">
           {queue
             .filter((item) => item.status === "pending")
@@ -5301,6 +6494,57 @@ function ProjectInsights({
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function SquareResizePreview({ src, size }: { src: string; size: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [loading, setLoading] = useState(true);
+  const [sourceSize, setSourceSize] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    context?.clearRect(0, 0, size, size);
+    setLoading(true);
+
+    const image = new Image();
+    image.onload = () => {
+      if (!active || !context) return;
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(image, 0, 0, size, size);
+      setSourceSize(`${image.naturalWidth} x ${image.naturalHeight}`);
+      setLoading(false);
+    };
+    image.onerror = () => {
+      if (active) setLoading(false);
+    };
+    image.src = src;
+    return () => {
+      active = false;
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [src, size]);
+
+  return (
+    <div
+      className={"square-resize-stage" + (loading ? " is-loading" : "")}
+      aria-label={`Square resize preview ${size} x ${size} pixels`}
+    >
+      <canvas
+        ref={canvasRef}
+        className="square-resize-canvas"
+        style={{ "--preview-scale": `${(size / 1280) * 100}%` } as CSSProperties}
+      />
+      {loading && <LoaderCircle className="spin" />}
+      <span>{sourceSize ? `${sourceSize} to ${size} x ${size}` : `${size} x ${size}`}</span>
     </div>
   );
 }
@@ -5619,7 +6863,7 @@ function DatasetVersions({
               Total: {splits.reduce((a, b) => a + b, 0)}%{" "}
               {splits.reduce((a, b) => a + b, 0) === 100
                 ? "✓"
-                : "— must equal 100%"}
+                : "N/A, must equal 100%"}
             </p>
           </section>
           <section className="panel version-section">
@@ -5658,13 +6902,13 @@ function DatasetVersions({
             {previewAsset && (
               <div className="preprocess-preview">
                 <figure>
-                  <img src={previewAsset.src} />
+                  <img src={previewAsset.src} alt={`${previewAsset.name} original`} />
                   <figcaption>Original</figcaption>
                 </figure>
                 <figure className="square-preview">
-                  <img src={previewAsset.src} />
+                  <SquareResizePreview src={previewAsset.src} size={resize} />
                   <figcaption>
-                    {resize} × {resize} preview
+                    {resize} x {resize} preview, relative resolution scale
                   </figcaption>
                 </figure>
               </div>
@@ -6073,14 +7317,36 @@ function DatasetTrain({
   const [optimizer, setOptimizer] = useState("auto");
   const [learningRate, setLearningRate] = useState(0.01);
   const [patience, setPatience] = useState(50);
+  const [baseModelId, setBaseModelId] = useState(
+    () => sessionStorage.getItem(`visionflow-finetune-${project.id}`) || "",
+  );
+  const [freezeLayers, setFreezeLayers] = useState(0);
+  const [weightDecay, setWeightDecay] = useState(0.0005);
+  const [cosLr, setCosLr] = useState(false);
+  const [closeMosaic, setCloseMosaic] = useState(10);
+  const [amp, setAmp] = useState(true);
   const [device, setDevice] = useState("auto");
   const [executionTarget, setExecutionTarget] = useState<
-    "server" | "remote-auto" | "remote-gpu" | "remote-cpu"
+    | "server"
+    | "remote-auto"
+    | "remote-gpu"
+    | "remote-cpu"
+    | "colab-auto"
+    | "colab-gpu"
+    | "colab-cpu"
   >("server");
   const [workerId, setWorkerId] = useState("");
   const [workers, setWorkers] = useState<TrainingWorker[]>([]);
   const [workerToken, setWorkerToken] = useState("");
   const [starting, setStarting] = useState(false);
+  const colabTarget = executionTarget.startsWith("colab-");
+  const gpuTarget = executionTarget === "remote-gpu" || executionTarget === "colab-gpu";
+  const selectableWorkers = workers.filter(
+    (worker) =>
+      !worker.revoked &&
+      (!colabTarget || worker.capabilities.provider === "google-colab") &&
+      (!gpuTarget || worker.capabilities.cuda),
+  );
   // Use the browser origin so laptop workers go through the same Vite/NAS
   // proxy as the UI. The API itself remains private on localhost in dev mode.
   const workerServer = window.location.origin;
@@ -6094,6 +7360,18 @@ function DatasetTrain({
     (model) => model.status === "training" || model.status === "queued",
   );
   useEffect(() => {
+    let cancelled = false;
+    api
+      .project(project.id)
+      .then((fresh) => {
+        if (!cancelled) update(() => fresh);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+  useEffect(() => {
     if (!active) return;
     const poll = window.setInterval(async () => {
       try {
@@ -6104,11 +7382,10 @@ function DatasetTrain({
     return () => window.clearInterval(poll);
   }, [active, project.id]);
   useEffect(() => {
-    if (
-      versionId &&
-      !project.versions.some((version) => version.id === versionId)
-    )
-      setVersionId(project.versions.at(-1)?.id || "");
+    const latestVersionId = project.versions.at(-1)?.id || "";
+    if (!versionId || !project.versions.some((version) => version.id === versionId)) {
+      setVersionId(latestVersionId);
+    }
   }, [project.versions, versionId]);
   useEffect(() => {
     const refresh = () =>
@@ -6136,16 +7413,113 @@ function DatasetTrain({
       notify(error instanceof Error ? error.message : "Gagal membuat worker");
     }
   };
+  const downloadColabNotebook = async () => {
+    const requestedTarget = colabTarget ? executionTarget : "colab-gpu";
+    const suggested = window.location.protocol === "https:" ? workerServer : "https://";
+    const entered = prompt(
+      "URL HTTPS publik Salnova yang dapat diakses Google Colab",
+      suggested,
+    )?.trim();
+    if (!entered) return;
+    let publicServer: URL;
+    try {
+      publicServer = new URL(entered);
+    } catch {
+      notify("URL server tidak valid");
+      return;
+    }
+    if (
+      publicServer.protocol !== "https:" ||
+      ["localhost", "127.0.0.1", "0.0.0.0"].includes(publicServer.hostname)
+    ) {
+      notify("Google Colab memerlukan URL HTTPS publik, bukan localhost");
+      return;
+    }
+    try {
+      const worker = await api.createTrainingWorker("Google Colab");
+      const colabWorker: TrainingWorker = {
+        ...worker,
+        capabilities: { ...worker.capabilities, provider: "google-colab" },
+      };
+      setWorkers((current) => [colabWorker, ...current]);
+      setWorkerId(worker.id);
+      setWorkerToken(worker.token);
+      setExecutionTarget(requestedTarget);
+      const server = publicServer.toString().replace(/\/$/, "");
+      const source = [
+        "import subprocess, sys, urllib.request",
+        `SERVER = ${JSON.stringify(server)}`,
+        `TOKEN = ${JSON.stringify(worker.token)}`,
+        `REQUESTED_TARGET = ${JSON.stringify(requestedTarget)}`,
+        'print("Installing Salnova worker dependencies...")',
+        'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/visionflow_worker.py", "visionflow_worker.py")',
+        'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/requirements.txt", "requirements.txt")',
+        'subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])',
+        'import torch',
+        'CUDA_READY = torch.cuda.is_available()',
+        'print("PyTorch:", torch.__version__, "| CUDA runtime:", torch.version.cuda, "| GPU ready:", CUDA_READY)',
+        'if CUDA_READY: print("GPU:", torch.cuda.get_device_name(0))',
+        'if REQUESTED_TARGET == "colab-gpu" and not CUDA_READY: raise RuntimeError("GPU Colab belum aktif. Pilih Runtime > Change runtime type > T4 GPU, lalu restart dan Run all.")',
+        'print("Connecting Colab runtime to", SERVER)',
+        'subprocess.check_call([sys.executable, "visionflow_worker.py", "--server", SERVER, "--token", TOKEN, "--provider", "google-colab"])',
+      ].map((line) => line + "\n");
+      const notebook = {
+        nbformat: 4,
+        nbformat_minor: 0,
+        metadata: {
+          colab: { name: "Salnova-Colab-Worker.ipynb" },
+          kernelspec: { name: "python3", display_name: "Python 3" },
+          accelerator: "GPU",
+        },
+        cells: [
+          {
+            cell_type: "markdown",
+            metadata: {},
+            source: [
+              "# Salnova Google Colab Worker\n",
+              "Keep this notebook private because it contains a worker token. For GPU training select **Runtime > Change runtime type > T4 GPU**, save it, then choose **Runtime > Run all**. The setup cell now stops with a clear message when CUDA is unavailable.\n",
+            ],
+          },
+          { cell_type: "code", execution_count: null, metadata: {}, outputs: [], source },
+        ],
+      };
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(notebook, null, 2)], {
+          type: "application/x-ipynb+json",
+        }),
+      );
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "Salnova-Colab-Worker.ipynb";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      notify("Notebook Colab dibuat. Jangan bagikan karena berisi token worker.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Gagal membuat notebook Colab");
+    }
+  };
   const downloadWorkerSetup = () => {
     if (!workerToken) return;
     const quote = (value: string) => value.replace(/'/g, "''");
-    const script = `# VisionFlow laptop worker setup
-# This file was generated by VisionFlow. Keep it private because it contains a one-time worker token.
+    const script = `# Salnova laptop worker setup
+# This file was generated by Salnova. Keep it private because it contains a one-time worker token.
 $ErrorActionPreference = "Stop"
 $server = '${quote(workerServer)}'
 $token = '${quote(workerToken)}'
-$workerRoot = Join-Path $env:USERPROFILE "VisionFlowWorker"
-$rawBase = "${workerServer}/api/training-workers/setup"
+$workerRoot = if ($env:SALNOVA_WORKER_HOME) {
+  $env:SALNOVA_WORKER_HOME
+} elseif (Test-Path -LiteralPath 'F:\') {
+  'F:\SalnovaWorker'
+} else {
+  Join-Path $env:USERPROFILE "SalnovaWorker"
+}
+
+$serverUri = [Uri]$server
+if ($serverUri.Host -in @('localhost', '127.0.0.1', '0.0.0.0')) {
+  $enteredServer = Read-Host "Server masih localhost. Untuk device lain, masukkan URL Salnova LAN/HTTPS (Enter jika worker ada di PC ini)"
+  if ($enteredServer.Trim()) { $server = $enteredServer.Trim().TrimEnd('/') }
+}
+$rawBase = "$server/api/training-workers/setup"
 
 New-Item -ItemType Directory -Force -Path (Join-Path $workerRoot "worker") | Out-Null
 Invoke-WebRequest -UseBasicParsing "$rawBase/visionflow_worker.py" -OutFile (Join-Path $workerRoot "worker/visionflow_worker.py")
@@ -6163,6 +7537,13 @@ if (!(Test-Path $venvPython)) {
 }
 & $venvPython -m pip install --upgrade pip
 & $venvPython -m pip install -r (Join-Path $workerRoot "worker/requirements.txt")
+if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+  & $venvPython -c "import sys,torch; sys.exit(0 if torch.cuda.is_available() else 1)"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "NVIDIA GPU ditemukan, memasang PyTorch CUDA..." -ForegroundColor Yellow
+    & $venvPython -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126
+  }
+}
 Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
 & $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token
 `;
@@ -6183,12 +7564,13 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
     const quote = (value: string) => value.replace(/'/g, "'\"'\"'");
     const script = [
       "#!/usr/bin/env bash",
-      "# VisionFlow laptop worker setup - keep this file private.",
+      "# Salnova laptop worker setup - keep this file private.",
       "set -euo pipefail",
       "server='" + quote(workerServer) + "'",
       "token='" + quote(workerToken) + "'",
       'worker_root="$HOME/VisionFlowWorker"',
-      'raw_base="' + workerServer + '/api/training-workers/setup"',
+      'case "$server" in http://localhost*|http://127.0.0.1*|http://0.0.0.0*) read -r -p "Server masih localhost. Masukkan URL Salnova LAN/HTTPS, atau Enter jika worker ada di device ini: " entered_server; [ -n "$entered_server" ] && server="${entered_server%/}" ;; esac',
+      'raw_base="$server/api/training-workers/setup"',
       'mkdir -p "$worker_root/worker"',
       'curl -fsSL "$raw_base/visionflow_worker.py" -o "$worker_root/worker/visionflow_worker.py"',
       'curl -fsSL "$raw_base/requirements.txt" -o "$worker_root/worker/requirements.txt"',
@@ -6196,6 +7578,7 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
       'if [ ! -x "$worker_root/.venv/bin/python" ]; then python3 -m venv "$worker_root/.venv"; fi',
       '"$worker_root/.venv/bin/python" -m pip install --upgrade pip',
       '"$worker_root/.venv/bin/python" -m pip install -r "$worker_root/worker/requirements.txt"',
+      'if command -v nvidia-smi >/dev/null 2>&1 && ! "$worker_root/.venv/bin/python" -c "import sys,torch; sys.exit(0 if torch.cuda.is_available() else 1)"; then echo "NVIDIA GPU ditemukan, memasang PyTorch CUDA..."; "$worker_root/.venv/bin/python" -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu126; fi',
       'echo "Worker siap. Menghubungkan ke $server ..."',
       'exec "$worker_root/.venv/bin/python" "$worker_root/worker/visionflow_worker.py" --server "$server" --token "$token"',
       "",
@@ -6215,12 +7598,25 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
       notify("Buat dan pilih dataset version terlebih dahulu");
       return;
     }
-    if (
-      executionTarget !== "server" &&
-      !workers.some((worker) => !worker.revoked)
-    ) {
-      notify("Buat token laptop worker terlebih dahulu");
-      return;
+    if (executionTarget !== "server") {
+      const compatibleOnlineWorkers = workers.filter(
+        (worker) =>
+          !worker.revoked &&
+          worker.status !== "offline" &&
+          (!colabTarget || worker.capabilities.provider === "google-colab") &&
+          (!gpuTarget || worker.capabilities.cuda),
+      );
+      const selectedWorker = workerId
+        ? compatibleOnlineWorkers.find((worker) => worker.id === workerId)
+        : undefined;
+      if (!compatibleOnlineWorkers.length || (workerId && !selectedWorker)) {
+        notify(
+          gpuTarget
+            ? "Worker GPU belum online atau CUDA tidak terdeteksi. Aktifkan GPU, jalankan ulang worker, lalu tunggu status online."
+            : "Worker yang kompatibel belum online. Jalankan worker lalu coba lagi.",
+        );
+        return;
+      }
     }
     setStarting(true);
     try {
@@ -6236,6 +7632,12 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
         device,
         execution_target: executionTarget,
         worker_id: workerId || undefined,
+        base_model_id: baseModelId || undefined,
+        freeze_layers: freezeLayers,
+        weight_decay: weightDecay,
+        cos_lr: cosLr,
+        close_mosaic: closeMosaic,
+        amp,
       });
       update(() => saved);
       notify("Training dimulai menggunakan dataset version yang dipilih");
@@ -6271,7 +7673,7 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
       !optimizers.length ||
       rates.length * optimizers.length > 8
     ) {
-      notify("Sweep membutuhkan 1–8 kombinasi valid");
+      notify("Sweep membutuhkan 1-8 kombinasi valid");
       return;
     }
     setStarting(true);
@@ -6289,6 +7691,12 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
           device,
           execution_target: executionTarget,
           worker_id: workerId || undefined,
+          base_model_id: baseModelId || undefined,
+          freeze_layers: freezeLayers,
+          weight_decay: weightDecay,
+          cos_lr: cosLr,
+          close_mosaic: closeMosaic,
+          amp,
         },
         learning_rates: rates,
         optimizers,
@@ -6322,6 +7730,15 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
       notify(`Version v${selected.number} dihapus`);
     } catch (e) {
       notify(e instanceof Error ? e.message : "Gagal menghapus version");
+    }
+  };
+  const resumeTraining = async (modelId: string) => {
+    try {
+      const saved = await api.retryTraining(project.id, modelId);
+      update(() => saved);
+      notify("Training dilanjutkan dari checkpoint terakhir yang tersedia");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Resume training gagal");
     }
   };
   const architectures = YOLO_MODELS.filter(
@@ -6391,6 +7808,34 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                     {version.resize}px
                   </option>
                 ))}
+              </select>
+            </label>
+            <label>
+              Initial weights / fine-tune
+              <select
+                value={baseModelId}
+                onChange={(event) => {
+                  setBaseModelId(event.target.value);
+                  if (event.target.value) {
+                    sessionStorage.setItem(
+                      `visionflow-finetune-${project.id}`,
+                      event.target.value,
+                    );
+                  } else {
+                    sessionStorage.removeItem(
+                      `visionflow-finetune-${project.id}`,
+                    );
+                  }
+                }}
+              >
+                <option value="">Official pretrained checkpoint</option>
+                {project.models
+                  .filter(modelCanDeploy)
+                  .map((model) => (
+                    <option value={model.id} key={model.id}>
+                      {model.alias || model.name} · v{model.version} · {model.status}
+                    </option>
+                  ))}
               </select>
             </label>
             <label>
@@ -6464,19 +7909,74 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
               />
             </label>
             <label>
+              Freeze first layers
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={freezeLayers}
+                onChange={(event) => setFreezeLayers(+event.target.value)}
+              />
+            </label>
+            <label>
+              Weight decay
+              <input
+                type="number"
+                min="0"
+                max=".1"
+                step=".0001"
+                value={weightDecay}
+                onChange={(event) => setWeightDecay(+event.target.value)}
+              />
+            </label>
+            <label>
+              Close mosaic epochs
+              <input
+                type="number"
+                min="0"
+                max="50"
+                value={closeMosaic}
+                onChange={(event) => setCloseMosaic(+event.target.value)}
+              />
+            </label>
+            <label>
+              Learning schedule
+              <select
+                value={cosLr ? "cosine" : "linear"}
+                onChange={(event) => setCosLr(event.target.value === "cosine")}
+              >
+                <option value="linear">Linear/default</option>
+                <option value="cosine">Cosine LR</option>
+              </select>
+            </label>
+            <label>
+              Precision
+              <select
+                value={amp ? "amp" : "fp32"}
+                onChange={(event) => setAmp(event.target.value === "amp")}
+              >
+                <option value="amp">AMP / mixed precision</option>
+                <option value="fp32">FP32</option>
+              </select>
+            </label>
+            <label>
               Training location
               <select
                 value={executionTarget}
-                onChange={(event) =>
+                onChange={(event) => {
                   setExecutionTarget(
                     event.target.value as typeof executionTarget,
-                  )
-                }
+                  );
+                  setWorkerId("");
+                }}
               >
                 <option value="server">NAS / web server</option>
                 <option value="remote-auto">Laptop · Automatic</option>
                 <option value="remote-gpu">Laptop · CUDA GPU</option>
                 <option value="remote-cpu">Laptop · CPU</option>
+                <option value="colab-auto">Google Colab · Automatic</option>
+                <option value="colab-gpu">Google Colab · GPU</option>
+                <option value="colab-cpu">Google Colab · CPU</option>
               </select>
             </label>
             {executionTarget === "server" ? (
@@ -6493,15 +7993,13 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
               </label>
             ) : (
               <label>
-                Laptop worker
+                External worker
                 <select
                   value={workerId}
                   onChange={(event) => setWorkerId(event.target.value)}
                 >
                   <option value="">Any compatible worker</option>
-                  {workers
-                    .filter((worker) => !worker.revoked)
-                    .map((worker) => (
+                  {selectableWorkers.map((worker) => (
                       <option value={worker.id} key={worker.id}>
                         {worker.name} · {worker.status}
                         {worker.capabilities.cuda ? " · CUDA" : ""}
@@ -6511,6 +8009,124 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
               </label>
             )}
           </div>
+          <details className="training-config-guide" open>
+            <summary>
+              <span>
+                <CircleHelp />
+                <b>Panduan dataset & configuration</b>
+              </span>
+              <small>Klik untuk sembunyikan atau tampilkan penjelasan</small>
+            </summary>
+            <p className="config-guide-intro">
+              Konfigurasi menentukan sumber data, kebutuhan memori, kecepatan,
+              dan cara model memperbarui bobot selama training.
+            </p>
+            <div className="config-guide-grid">
+              <article>
+                <b>Dataset version</b>
+                <p>
+                  Snapshot dataset yang akan dilatih. Isi gambar, anotasi, class,
+                  resize, dan pembagian train/valid tidak berubah selama run.
+                </p>
+              </article>
+              <article>
+                <b>Initial weights / fine-tune</b>
+                <p>
+                  Pilih pretrained resmi untuk run baru, atau best.pt sebelumnya
+                  agar pengetahuan model lama dilanjutkan ke dataset/config baru.
+                </p>
+              </article>
+              <article>
+                <b>Epochs</b>
+                <p>
+                  Jumlah putaran model membaca seluruh data train. Lebih banyak
+                  dapat meningkatkan hasil, tetapi lebih lama dan bisa overfit.
+                </p>
+              </article>
+              <article>
+                <b>Image size</b>
+                <p>
+                  Resolusi input training. Ukuran besar membantu objek kecil,
+                  tetapi memakai VRAM/RAM dan waktu komputasi lebih banyak.
+                </p>
+              </article>
+              <article>
+                <b>Batch size</b>
+                <p>
+                  Jumlah gambar yang diproses sekali update. Batch besar lebih
+                  stabil tetapi membutuhkan memori lebih besar; turunkan jika OOM.
+                </p>
+              </article>
+              <article>
+                <b>Optimizer</b>
+                <p>
+                  Algoritma pembaruan bobot. Auto paling aman; SGD cenderung stabil,
+                  sedangkan Adam/AdamW sering lebih cepat untuk fine-tuning.
+                </p>
+              </article>
+              <article>
+                <b>Learning rate</b>
+                <p>
+                  Besar langkah setiap pembaruan bobot. Terlalu tinggi dapat tidak
+                  stabil, terlalu rendah membuat proses belajar sangat lambat.
+                </p>
+              </article>
+              <article>
+                <b>Patience</b>
+                <p>
+                  Training berhenti lebih awal jika metrik tidak membaik selama
+                  sejumlah epoch ini. Nilai 0 menonaktifkan early stopping.
+                </p>
+              </article>
+              <article>
+                <b>Freeze first layers</b>
+                <p>
+                  Mengunci layer awal agar tidak diperbarui. Berguna untuk dataset
+                  kecil atau fine-tuning cepat; nilai 0 melatih semua layer.
+                </p>
+              </article>
+              <article>
+                <b>Weight decay</b>
+                <p>
+                  Regularisasi untuk menahan bobot agar tidak terlalu besar dan
+                  mengurangi overfitting. Default 0.0005 cocok sebagai titik awal.
+                </p>
+              </article>
+              <article>
+                <b>Close mosaic epochs</b>
+                <p>
+                  Menonaktifkan augmentasi mosaic pada beberapa epoch terakhir agar
+                  model beradaptasi kembali dengan tampilan gambar normal.
+                </p>
+              </article>
+              <article>
+                <b>Learning schedule</b>
+                <p>
+                  Mengatur perubahan learning rate. Cosine menurunkannya secara
+                  halus; linear/default mengikuti jadwal standar trainer.
+                </p>
+              </article>
+              <article>
+                <b>Precision</b>
+                <p>
+                  AMP lebih cepat dan hemat VRAM pada GPU. FP32 lebih presisi dan
+                  kompatibel, tetapi biasanya lebih berat dan lambat.
+                </p>
+              </article>
+              <article>
+                <b>Training location & device</b>
+                <p>
+                  Menentukan mesin eksekusi dan CPU/GPU. Worker harus online dan
+                  server harus dapat diakses oleh laptop atau Google Colab.
+                </p>
+              </article>
+            </div>
+            <div className="config-guide-note">
+              <b>Resume berbeda dengan fine-tune.</b> Resume dari last.pt memakai
+              kembali konfigurasi dan state optimizer run lama. Fine-tune membuat
+              run baru dari best.pt sehingga konfigurasi di atas dapat diubah.
+            </div>
+          </details>
           <div className="train-actions">
             <button
               className="danger-link"
@@ -6555,13 +8171,22 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                 <b>Laptop workers</b>
                 <small>Run jobs outside the NAS and return best.pt.</small>
               </div>
-              <button className="secondary" onClick={createWorker}>
-                <Plus /> Add laptop
-              </button>
+              <span className="worker-downloads">
+                <button className="secondary" onClick={downloadColabNotebook}>
+                  <Download /> Google Colab
+                </button>
+                <button className="secondary" onClick={createWorker}>
+                  <Plus /> Add worker
+                </button>
+              </span>
             </header>
+            <p className="muted">
+              Google Colab requires a public HTTPS Salnova URL; localhost and
+              LAN-only addresses cannot be reached from a Colab runtime.
+            </p>
             {workerToken && (
               <div className="worker-token">
-                <b>Hubungkan laptop training</b>
+                <b>Hubungkan worker training</b>
                 <small>
                   Untuk laptop baru, unduh setup otomatis di bawah. Script akan
                   membuat virtual environment, memasang dependensi, lalu
@@ -6716,8 +8341,10 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                 <strong>
                   {model.status === "ready"
                     ? "Ready"
-                    : model.status === "failed"
+                   : model.status === "failed"
                       ? "Failed"
+                      : model.status === "paused"
+                        ? "Paused"
                       : model.status === "cancelled"
                         ? "Cancelled"
                         : model.status === "queued"
@@ -6732,20 +8359,47 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                   </div>
                   <div className="run-progress">
                     <span>
-                      {model.status === "queued"
-                        ? String(
-                            model.config?.execution_target || "server",
-                          ).startsWith("remote-")
-                          ? "Waiting for laptop worker"
-                          : "Waiting for server compute"
-                        : String(
-                              model.config?.execution_target || "server",
-                            ).startsWith("remote-")
-                          ? `Training on ${workers.find((worker) => worker.id === model.workerId)?.name || "laptop"}`
-                          : "Training on server"}
+                      {model.trainingDetail?.stage ||
+                        (model.status === "queued"
+                          ? String(model.config?.execution_target || "server") !==
+                            "server"
+                            ? "Waiting for external worker"
+                            : "Waiting for server compute"
+                          : String(model.config?.execution_target || "server") !==
+                              "server"
+                            ? `Training on ${workers.find((worker) => worker.id === model.workerId)?.name || "laptop"}`
+                            : "Training on server")}
                     </span>
                     <b>{model.progress}%</b>
                   </div>
+                  {model.trainingDetail && (
+                    <div className="training-detail">
+                      {model.trainingDetail.archivePercent !== undefined && (
+                        <span>
+                          Archive {model.trainingDetail.archivePercent}%
+                          {model.trainingDetail.totalFiles
+                            ? ` · ${model.trainingDetail.processedFiles || 0}/${model.trainingDetail.totalFiles} files`
+                            : ""}
+                        </span>
+                      )}
+                      {model.trainingDetail.epoch !== undefined && (
+                        <span>
+                          Epoch {model.trainingDetail.epoch}/
+                          {model.trainingDetail.totalEpochs || "?"}
+                        </span>
+                      )}
+                      {model.trainingDetail.batch !== undefined && (
+                        <span>
+                          Batch {model.trainingDetail.batch}/
+                          {model.trainingDetail.totalBatches || "?"}
+                        </span>
+                      )}
+                      {model.trainingDetail.loss !== undefined &&
+                        model.trainingDetail.loss !== null && (
+                          <span>Loss {model.trainingDetail.loss.toFixed(4)}</span>
+                        )}
+                    </div>
+                  )}
                   <button
                     className="cancel-job"
                     onClick={async () => {
@@ -6759,9 +8413,37 @@ Write-Host "Worker siap. Menghubungkan ke $server ..." -ForegroundColor Green
                       }
                     }}
                   >
-                    Cancel training
+                    {model.status === "queued" ? "Cancel queued job" : "Pause training"}
                   </button>
                 </>
+              )}
+              {(["paused", "failed", "cancelled"] as const).includes(
+                model.status as "paused" | "failed" | "cancelled",
+              ) && (
+                <div className="train-actions">
+                  {(model.resumable || modelCanDeploy(model)) && (
+                    <button
+                      className="resume-training"
+                      onClick={() => resumeTraining(model.id)}
+                    >
+                      <Redo2 /> Resume training
+                    </button>
+                  )}
+                  {modelCanDeploy(model) && (
+                    <>
+                      <a
+                        className="download-best"
+                        href={api.modelWeightsUrl(project.id, model.id)}
+                        download
+                      >
+                        Download partial best.pt
+                      </a>
+                      <button className="secondary" onClick={() => go("deploy")}>
+                        <Rocket /> Use partial best.pt
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
               {model.status === "ready" && (
                 <>
@@ -6829,7 +8511,7 @@ function WorkflowNext({
             page: "train" as Page,
           }
         : page === "train" &&
-            project.models.some((model) => model.status === "ready")
+            project.models.some(modelCanDeploy)
           ? {
               label: "Model ready",
               action: "Open deployment",
@@ -7554,6 +9236,80 @@ function MetricSparkline({ model }: { model: Model }) {
   );
 }
 
+function ModelEvaluationArtifacts({
+  projectId,
+  model,
+}: {
+  projectId: string;
+  model: Model;
+}) {
+  const [artifacts, setArtifacts] = useState<EvaluationArtifact[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .modelEvaluationArtifacts(projectId, model.id)
+      .then((items) => {
+        if (!cancelled) setArtifacts(items);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, model.id, model.status]);
+  if (!loading && !artifacts.length) return null;
+  return (
+    <details className="evaluation-artifacts">
+      <summary>
+        <span>
+          <BarChart3 />
+          <b>YOLO data check</b>
+          <small>
+            {loading ? "Checking artifacts..." : `${artifacts.length} artifacts available`}
+          </small>
+        </span>
+        <ChevronDown />
+      </summary>
+      {!!artifacts.length && (
+        <div className="evaluation-gallery">
+          {artifacts.map((artifact) => {
+            const url = api.modelEvaluationArtifactUrl(
+              projectId,
+              model.id,
+              artifact.name,
+            );
+            return (
+              <article key={artifact.name}>
+                {artifact.preview ? (
+                  <a href={url} target="_blank" rel="noreferrer">
+                    <img src={url} alt={artifact.label} loading="lazy" />
+                  </a>
+                ) : (
+                  <div className="evaluation-file-icon">
+                    <BarChart3 />
+                  </div>
+                )}
+                <footer>
+                  <span>
+                    <b>{artifact.label}</b>
+                    <small>{Math.max(1, Math.round(artifact.size / 1024))} KB</small>
+                  </span>
+                  <a href={url} download={artifact.name} title={`Download ${artifact.label}`}>
+                    <Download />
+                  </a>
+                </footer>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </details>
+  );
+}
+
 const cleanTerminalError = (message: string) =>
   message
     .replace(/(?:\u001b|\u241b)\[[0-?]*[ -/]*[@-~]/g, "")
@@ -7771,7 +9527,7 @@ function ModelRegistry({
               </div>
               <em>{model.status}</em>
             </div>
-            {model.status === "ready" && (
+            {modelCanDeploy(model) && (
               <div className="registry-model-controls">
                 <label title="Pilih maksimal dua model untuk dibandingkan">
                   <input
@@ -7796,7 +9552,7 @@ function ModelRegistry({
                 )}
               </div>
             )}
-            {model.status === "ready" && (
+            {modelCanDeploy(model) && (
               <div className="registry-metrics">
                 <span>
                   <b>{model.map}%</b>
@@ -7821,40 +9577,21 @@ function ModelRegistry({
               </div>
             )}
             <MetricSparkline model={model} />
-            {model.status === "ready" && (
-              <div className="evaluation-links">
-                <a
-                  href={`/api/projects/${project.id}/models/${model.id}/evaluation/results.png`}
-                  target="_blank"
-                >
-                  Training curves
-                </a>
-                <a
-                  href={`/api/projects/${project.id}/models/${model.id}/evaluation/confusion_matrix.png`}
-                  target="_blank"
-                >
-                  Confusion matrix
-                </a>
-                <a
-                  href={`/api/projects/${project.id}/models/${model.id}/evaluation/PR_curve.png`}
-                  target="_blank"
-                >
-                  PR curve
-                </a>
-              </div>
+            {modelCanDeploy(model) && (
+              <ModelEvaluationArtifacts projectId={project.id} model={model} />
             )}
             <div className="registry-config">
               <span>
-                Epochs <b>{String(model.config?.epochs || "—")}</b>
+                Epochs <b>{String(model.config?.epochs || "N/A")}</b>
               </span>
               <span>
-                Image <b>{String(model.config?.image_size || "—")}</b>
+                Image <b>{String(model.config?.image_size || "N/A")}</b>
               </span>
               <span>
-                Batch <b>{String(model.config?.batch_size || "—")}</b>
+                Batch <b>{String(model.config?.batch_size || "N/A")}</b>
               </span>
               <span>
-                Optimizer <b>{String(model.config?.optimizer || "—")}</b>
+                Optimizer <b>{String(model.config?.optimizer || "N/A")}</b>
               </span>
             </div>
             <div className="model-lifecycle">
@@ -7862,7 +9599,7 @@ function ModelRegistry({
                 Stage
                 <select
                   value={model.stage || "development"}
-                  disabled={model.status !== "ready"}
+                  disabled={!modelCanDeploy(model)}
                   onChange={(event) =>
                     updateLifecycle(
                       model.id,
@@ -7878,7 +9615,7 @@ function ModelRegistry({
                 </select>
               </label>
               <button
-                disabled={model.status !== "ready"}
+                disabled={!modelCanDeploy(model)}
                 onClick={() => {
                   const alias = prompt(
                     "Alias model",
@@ -7895,7 +9632,7 @@ function ModelRegistry({
                 Set alias
               </button>
             </div>
-            {model.status === "ready" && (
+            {modelCanDeploy(model) && (
               <div className="registry-exports">
                 <a href={api.modelWeightsUrl(project.id, model.id)} download>
                   BEST.PT
@@ -7916,9 +9653,30 @@ function ModelRegistry({
               </div>
             )}
             <div className="registry-actions">
-              {(model.status === "failed" || model.status === "cancelled") && (
+              {(model.status === "paused" ||
+                model.status === "failed" ||
+                model.status === "cancelled") && (
                 <button onClick={() => retry(model.id)}>
-                  <Redo2 /> Retry
+                  <Redo2 />
+                  {model.resumable
+                    ? "Resume from last.pt"
+                    : modelCanDeploy(model)
+                      ? "Recover from best.pt"
+                      : "Retry"}
+                </button>
+              )}
+              {modelCanDeploy(model) && (
+                <button
+                  onClick={() => {
+                    sessionStorage.setItem(
+                      `visionflow-finetune-${project.id}`,
+                      model.id,
+                    );
+                    go("train");
+                    notify(`${model.name} dipilih sebagai base fine-tuning`);
+                  }}
+                >
+                  <BrainCircuit /> Fine-tune
                 </button>
               )}
               <button onClick={() => rename(model.id, model.name)}>
@@ -8789,7 +10547,7 @@ function LocalSettings({
       const created = await api.createMember({
         name,
         email,
-        role: "annotator",
+        role: "owner",
         password,
       });
       setMembers((current) => [...current, created]);
@@ -8800,17 +10558,11 @@ function LocalSettings({
   };
   const activateMember = (member: WorkspaceMember) => {
     localStorage.setItem("vf-active-member", member.id);
-    localStorage.setItem("vf-active-role", member.role);
+    localStorage.setItem("vf-active-role", "owner");
     localStorage.setItem("vf-active-name", member.name);
     setActiveMemberId(member.id);
-    notify(`Active account: ${member.name} (${member.role})`);
+    notify(`Active account: ${member.name} (full access)`);
   };
-  const permissionRows = [
-    ["View projects & reports", true, true, true, true],
-    ["Upload & annotate data", true, true, true, false],
-    ["Versions, training & deploy", true, true, false, false],
-    ["Members & recovery", true, true, false, false],
-  ];
   return (
     <div className="content settings-page">
       <div className="project-title">
@@ -8909,8 +10661,8 @@ function LocalSettings({
           <div>
             <h2>Workspace members</h2>
             <p>
-              Local roles prepare datasets for owner, admin, annotator, and
-              viewer workflows.
+              Semua anggota memiliki fungsi workspace yang sama. Label akun
+              hanya digunakan sebagai identitas kolaborator.
             </p>
           </div>
           <button className="primary small" onClick={addMember}>
@@ -8928,34 +10680,7 @@ function LocalSettings({
                 <b>{member.name}</b>
                 <small>{member.email}</small>
               </span>
-              <select
-                value={member.role}
-                onChange={async (e) => {
-                  try {
-                    const updated = await api.updateMember(member.id, {
-                      name: member.name,
-                      email: member.email,
-                      role: e.target.value,
-                    });
-                    setMembers((current) =>
-                      current.map((item) =>
-                        item.id === member.id ? updated : item,
-                      ),
-                    );
-                  } catch (error) {
-                    notify(
-                      error instanceof Error
-                        ? error.message
-                        : "Gagal mengubah role",
-                    );
-                  }
-                }}
-              >
-                <option value="owner">Owner</option>
-                <option value="admin">Admin</option>
-                <option value="annotator">Annotator</option>
-                <option value="viewer">Viewer</option>
-              </select>
+              <span className="member-access"><Check /> Full access</span>
               <button
                 className={activeMemberId === member.id ? "active-member" : ""}
                 onClick={() => activateMember(member)}
@@ -9015,32 +10740,7 @@ function LocalSettings({
           ))}
         </div>
       </section>
-      <div className="workspace-governance">
-        <section className="panel permission-panel">
-          <div className="panel-head">
-            <div>
-              <h2>Role permissions</h2>
-              <p>Mutation requests are enforced by the local API.</p>
-            </div>
-          </div>
-          <div className="permission-table">
-            <div>
-              <b>Capability</b>
-              <b>Owner</b>
-              <b>Admin</b>
-              <b>Annotator</b>
-              <b>Viewer</b>
-            </div>
-            {permissionRows.map(([label, ...roles]) => (
-              <div key={String(label)}>
-                <span>{String(label)}</span>
-                {roles.map((allowed, index) => (
-                  <span key={index}>{allowed ? <Check /> : "—"}</span>
-                ))}
-              </div>
-            ))}
-          </div>
-        </section>
+      <div className="workspace-governance single">
         <section className="panel activity-panel">
           <div className="panel-head">
             <div>

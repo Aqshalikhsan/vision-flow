@@ -15,16 +15,20 @@ import random
 import re
 import secrets
 import shutil
+import smtplib
 import socket
 import sqlite3
+import subprocess
 import threading
 import time
 import uuid
 import zipfile
+import urllib.error
 import urllib.request
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,26 +36,40 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+try:
+    import firebase_admin
+    from firebase_admin import auth as firebase_auth
+except ImportError:  # optional until Firebase credentials are configured
+    firebase_admin = None
+    firebase_auth = None
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "local_data"
+DATA = Path(os.getenv("VISIONFLOW_DATA_DIR", str(ROOT / "local_data"))).resolve()
 UPLOADS = DATA / "uploads"
 VERSIONS = DATA / "versions"
 RUNS = DATA / "runs"
 EXPORTS = DATA / "exports"
+AVATARS = DATA / "avatars"
 DB_PATH = DATA / "visionflow.db"
 LOGGER = logging.getLogger("visionflow")
 TRAIN_CANCEL: dict[str, threading.Event] = {}
 TRAIN_SCHEDULER_LOCK = threading.Lock()
 VERSION_GENERATION_PROGRESS: dict[str, dict[str, Any]] = {}
 VERSION_GENERATION_LOCK = threading.Lock()
+VERSION_EXPORT_LOCK = threading.Lock()
 ACTIVE_LEARNING_SCANS: set[str] = set()
+ACTIVE_LEARNING_PROGRESS: dict[str, dict[str, Any]] = {}
+DATASET_HEALTH_PROGRESS: dict[str, dict[str, Any]] = {}
+DATASET_HEALTH_PROGRESS_LOCK = threading.Lock()
 WORKFLOW_SCHEDULER_STARTED = False
 DEPLOY_RATE_LIMIT = max(1, int(os.getenv("VISIONFLOW_RATE_LIMIT", "120")))
 DEPLOY_REQUESTS: dict[str, deque[float]] = defaultdict(deque)
-for folder in (DATA, UPLOADS, VERSIONS, RUNS, EXPORTS):
+REMOTE_QUEUE_TTL_MINUTES = max(
+    5, int(os.getenv("VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES", "120"))
+)
+for folder in (DATA, UPLOADS, VERSIONS, RUNS, EXPORTS, AVATARS):
     folder.mkdir(parents=True, exist_ok=True)
 
 
@@ -167,6 +185,11 @@ def init_db() -> None:
               token_hash TEXT PRIMARY KEY, member_id TEXT NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
               created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS auth_otp_challenges (
+              id TEXT PRIMARY KEY, email TEXT NOT NULL, code_hash TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS annotation_jobs (
               id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
               name TEXT NOT NULL, assignee_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
@@ -202,6 +225,24 @@ def init_db() -> None:
               status TEXT NOT NULL DEFAULT 'offline', current_model_id TEXT,
               last_seen TEXT, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS project_invites (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              code TEXT NOT NULL UNIQUE, created_by TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
+              created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS project_join_requests (
+              id TEXT PRIMARY KEY, invite_id TEXT REFERENCES project_invites(id) ON DELETE SET NULL,
+              project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              member_id TEXT NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+              status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+              reviewed_at TEXT, reviewed_by TEXT REFERENCES workspace_members(id) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS project_collaborators (
+              project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              member_id TEXT NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+              added_at TEXT NOT NULL, added_by TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
+              PRIMARY KEY(project_id,member_id)
+            );
             """
         )
         columns = {row["name"] for row in con.execute("PRAGMA table_info(projects)")}
@@ -219,6 +260,8 @@ def init_db() -> None:
             con.execute("ALTER TABLE models ADD COLUMN created_at TEXT")
         if "metrics_history" not in model_columns:
             con.execute("ALTER TABLE models ADD COLUMN metrics_history TEXT NOT NULL DEFAULT '[]'")
+        if "training_detail" not in model_columns:
+            con.execute("ALTER TABLE models ADD COLUMN training_detail TEXT NOT NULL DEFAULT '{}'")
         asset_columns = {row["name"] for row in con.execute("PRAGMA table_info(assets)")}
         if "review_status" not in asset_columns:
             con.execute("ALTER TABLE assets ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'")
@@ -258,6 +301,15 @@ def init_db() -> None:
             con.execute("ALTER TABLE workspace_members ADD COLUMN password_hash TEXT")
         if "password_salt" not in member_columns:
             con.execute("ALTER TABLE workspace_members ADD COLUMN password_salt TEXT")
+        if "email_verified" not in member_columns:
+            con.execute("ALTER TABLE workspace_members ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+        if "onboarding_completed" not in member_columns:
+            con.execute("ALTER TABLE workspace_members ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0")
+        if "avatar_path" not in member_columns:
+            con.execute("ALTER TABLE workspace_members ADD COLUMN avatar_path TEXT")
+        # Salnova has one permission level. Upgrade accounts made by older
+        # releases so annotator/admin metadata cannot block any operation.
+        con.execute("UPDATE workspace_members SET role='owner' WHERE role IS NULL OR role!='owner'")
         # Jobs survive an application restart. The scheduler resumes from last.pt
         # when Ultralytics has already written a checkpoint for the run.
         for training in con.execute("SELECT id,config FROM models WHERE status='training'").fetchall():
@@ -295,7 +347,10 @@ def project_dict(con: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
             "status": m["status"], "progress": m["progress"], "map": m["map"],
             "precision": m["precision"], "recall": m["recall"], "error": m["error"]
             , "config": json.loads(m["config"] or "{}"), "createdAt": m["created_at"], "metricsHistory": json.loads(m["metrics_history"] or "[]"),
-            "alias": m["alias"], "stage": m["stage"] or "development", "workerId": m["worker_id"]
+            "alias": m["alias"], "stage": m["stage"] or "development", "workerId": m["worker_id"],
+            "trainingDetail": json.loads(m["training_detail"] or "{}"),
+            "deployable": bool(m["weights_path"] and Path(m["weights_path"]).is_file()),
+            "resumable": (RUNS / m["id"] / "weights" / "last.pt").is_file()
         } for m in models]
     }
 
@@ -399,8 +454,14 @@ class TrainPayload(BaseModel):
     learning_rate: float = Field(default=0.01, gt=0, le=1)
     patience: int = Field(default=50, ge=0, le=300)
     device: str = Field(default="auto", pattern=r"^(auto|cpu|0)$")
-    execution_target: str = Field(default="server", pattern=r"^(server|remote-auto|remote-gpu|remote-cpu)$")
+    execution_target: str = Field(default="server", pattern=r"^(server|remote-auto|remote-gpu|remote-cpu|colab-auto|colab-gpu|colab-cpu)$")
     worker_id: str | None = None
+    base_model_id: str | None = None
+    freeze_layers: int = Field(default=0, ge=0, le=100)
+    weight_decay: float = Field(default=0.0005, ge=0, le=0.1)
+    cos_lr: bool = False
+    close_mosaic: int = Field(default=10, ge=0, le=50)
+    amp: bool = True
 
 
 class TrainingSweepPayload(BaseModel):
@@ -420,6 +481,11 @@ class WorkerHeartbeatPayload(BaseModel):
 class WorkerProgressPayload(BaseModel):
     progress: int = Field(ge=1, le=99)
     epoch: int | None = Field(default=None, ge=0)
+    total_epochs: int | None = Field(default=None, ge=1)
+    batch: int | None = Field(default=None, ge=0)
+    total_batches: int | None = Field(default=None, ge=0)
+    stage: str = Field(default="Training", max_length=120)
+    loss: float | None = None
     metrics: dict[str, float] = Field(default_factory=dict)
 
 
@@ -473,12 +539,43 @@ class MemberPayload(BaseModel):
 
 
 class LoginPayload(BaseModel):
-    email: str = Field(max_length=160)
+    email: str = Field(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", max_length=160)
     password: str = Field(min_length=1, max_length=200)
+
+
+class FirebaseLoginPayload(BaseModel):
+    id_token: str = Field(min_length=20, max_length=10000)
+
+
+class AssistantMessage(BaseModel):
+    role: str = Field(pattern=r"^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class AssistantChatPayload(BaseModel):
+    messages: list[AssistantMessage] = Field(min_length=1, max_length=20)
+    context: str | None = Field(default=None, max_length=1000)
+
+
+class ProjectJoinPayload(BaseModel):
+    code: str = Field(pattern=r"^[A-Z0-9]{8}$")
+
+
+class ProjectJoinReviewPayload(BaseModel):
+    action: str = Field(pattern=r"^(accept|reject)$")
 
 
 class BootstrapPayload(LoginPayload):
     name: str = Field(default="Local Owner", min_length=1, max_length=80)
+
+
+class OtpRequestPayload(BaseModel):
+    email: str = Field(pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$", max_length=160)
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class OtpVerifyPayload(OtpRequestPayload):
+    code: str = Field(pattern=r"^\d{6}$")
 
 
 class AnnotationJobPayload(BaseModel):
@@ -510,15 +607,23 @@ class AnnotationCommentPayload(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
 
 
-AUTH_REQUIRED = os.getenv("VISIONFLOW_REQUIRE_AUTH", "0").lower() in {"1", "true", "yes"}
+# Authentication is on by default. Set VISIONFLOW_REQUIRE_AUTH=0 only for
+# explicitly isolated local development or automated fixtures.
+AUTH_REQUIRED = os.getenv("VISIONFLOW_REQUIRE_AUTH", "1").lower() in {"1", "true", "yes"}
+OTP_SECRET = os.getenv("VISIONFLOW_OTP_SECRET") or secrets.token_hex(32)
+OTP_DEV_CODE = os.getenv("VISIONFLOW_OTP_DEV_CODE", "").strip()
 AUTH_PUBLIC_PATHS = {
     "/",
     "/favicon.svg",
     "/api/health",
     "/api/auth/status",
     "/api/auth/login",
+    "/api/auth/register",
     "/api/auth/logout",
     "/api/auth/bootstrap",
+    "/api/auth/otp/request",
+    "/api/auth/otp/verify",
+    "/api/auth/firebase",
     "/docs",
     "/openapi.json",
 }
@@ -528,6 +633,67 @@ def password_digest(password: str, salt_hex: str | None = None) -> tuple[str, st
     salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 310_000)
     return digest.hex(), salt.hex()
+
+
+def otp_digest(email: str, code: str) -> str:
+    return hmac.new(OTP_SECRET.encode(), f"{email}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def account_name_from_email(email: str) -> str:
+    """Use the verified account identifier as the canonical display name."""
+    local = email.split("@", 1)[0].strip()
+    return local or email
+
+
+def send_login_otp(email: str, code: str) -> None:
+    if OTP_DEV_CODE:
+        LOGGER.warning("Development OTP for %s: %s", email, code)
+        return
+    username = os.getenv("VISIONFLOW_SMTP_USERNAME", "").strip()
+    password = os.getenv("VISIONFLOW_SMTP_PASSWORD", "").replace(" ", "")
+    sender = os.getenv("VISIONFLOW_SMTP_FROM", username).strip()
+    if not username or not password or not sender:
+        raise HTTPException(
+            503,
+            "Gmail OTP belum dikonfigurasi. Isi VISIONFLOW_SMTP_USERNAME dan VISIONFLOW_SMTP_PASSWORD (Google App Password).",
+        )
+    host = os.getenv("VISIONFLOW_SMTP_HOST", "smtp.gmail.com")
+    port = int(os.getenv("VISIONFLOW_SMTP_PORT", "587"))
+    message = EmailMessage()
+    message["Subject"] = f"{code} adalah kode login Salnova"
+    message["From"] = sender
+    message["To"] = email
+    message.set_content(
+        "Gunakan kode berikut untuk login ke Salnova:\n\n"
+        f"{code}\n\nKode berlaku selama 10 menit dan hanya dapat digunakan satu kali."
+    )
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=20) as smtp:
+                smtp.login(username, password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(host, port, timeout=20) as smtp:
+                smtp.starttls()
+                smtp.login(username, password)
+                smtp.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        LOGGER.exception("Could not send login OTP to %s", email)
+        raise HTTPException(502, "Gmail tidak dapat mengirim OTP. Periksa alamat Gmail dan App Password.") from exc
+
+
+def create_member_session(member: sqlite3.Row) -> JSONResponse:
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now(timezone.utc) + timedelta(days=30)
+    with db() as con:
+        con.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (now(),))
+        con.execute(
+            "INSERT INTO auth_sessions (token_hash,member_id,created_at,expires_at) VALUES (?,?,?,?)",
+            (hashlib.sha256(token.encode("utf-8")).hexdigest(), member["id"], now(), expires.isoformat()),
+        )
+    response = JSONResponse({"token": token, "member": member_json(member)})
+    response.set_cookie("vf_session", token, max_age=30 * 86400, httponly=True, samesite="lax", secure=False)
+    return response
 
 
 def session_member(authorization: str | None, cookie_token: str | None = None) -> sqlite3.Row | None:
@@ -544,7 +710,7 @@ def session_member(authorization: str | None, cookie_token: str | None = None) -
         ).fetchone()
 
 
-app = FastAPI(title="Roboflow Local API", version="0.3.0")
+app = FastAPI(title="Salnova API", version="0.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -563,29 +729,9 @@ async def enforce_workspace_role(request: Request, call_next):
     else:
         request.state.actor = "Local Owner"
         role = request.headers.get("X-Workspace-Role", "owner").lower()
-    if request.url.path.startswith("/api/auth/"):
-        return await call_next(request)
-    if request.method in {"GET", "HEAD", "OPTIONS"}:
-        return await call_next(request)
-    if role in {"owner", "admin"}:
-        return await call_next(request)
-    path = request.url.path
-    annotator_paths = (
-        "/assets",
-        "/annotations",
-        "/review",
-        "/metadata",
-        "/bulk",
-        "/auto-label",
-    )
-    if role == "annotator" and path.startswith("/api/projects/") and any(
-        marker in path for marker in annotator_paths
-    ):
-        return await call_next(request)
-    return JSONResponse(
-        status_code=403,
-        content={"detail": f"Role {role} tidak memiliki izin untuk aksi ini"},
-    )
+    # Authentication still protects the workspace, but every signed-in or
+    # local-mode account has full access to all Salnova capabilities.
+    return await call_next(request)
 init_db()
 
 
@@ -628,7 +774,113 @@ def health():
     return {"status": "ok", "database": str(DB_PATH), "mlReady": ml_ready}
 
 
+@app.post("/api/assistant/chat")
+def assistant_chat(payload: AssistantChatPayload):
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(
+            503,
+            "Gemini belum dikonfigurasi. Set GEMINI_API_KEY lalu restart Salnova.",
+        )
+    preferred_model = os.getenv("VISIONFLOW_GEMINI_MODEL", "gemini-3.6-flash").strip()
+    model_candidates = list(
+        dict.fromkeys(
+            [
+                preferred_model,
+                "gemini-3.6-flash",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash",
+            ]
+        )
+    )
+    system_prompt = (
+        "Anda adalah asisten Salnova berbahasa Indonesia. Bantu pengguna memakai "
+        "workspace computer vision lokal: project, dataset, annotation, version, training "
+        "YOLO, registry, deployment, dan inference. Berikan jawaban praktis, singkat, dan "
+        "jangan mengarang status proses atau data yang tidak diberikan."
+    )
+    if payload.context:
+        system_prompt += f"\nKonteks halaman saat ini: {payload.context}"
+    contents: list[dict[str, Any]] = [
+        {"role": "user", "parts": [{"text": system_prompt}]},
+        {
+            "role": "model",
+            "parts": [{"text": "Siap, saya akan membantu menggunakan Salnova."}],
+        },
+    ]
+    contents.extend(
+        {
+            "role": "model" if message.role == "assistant" else "user",
+            "parts": [{"text": message.content}],
+        }
+        for message in payload.messages
+    )
+    body = json.dumps(
+        {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.35,
+                "maxOutputTokens": 900,
+            },
+        }
+    ).encode("utf-8")
+    result: dict[str, Any] | None = None
+    selected_model = preferred_model
+    last_detail = "Semua model Gemini sedang tidak tersedia"
+    for model in model_candidates:
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{urllib.parse.quote(model, safe='')}:generateContent"
+        )
+        request = urllib.request.Request(
+            endpoint,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=35) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            selected_model = model
+            break
+        except urllib.error.HTTPError as exc:
+            detail = "Gemini API menolak permintaan"
+            try:
+                error_body = json.loads(exc.read().decode("utf-8"))
+                detail = error_body.get("error", {}).get("message") or detail
+            except Exception:
+                pass
+            last_detail = detail
+            # Missing, throttled, overloaded, or temporarily unavailable:
+            # immediately try the next fast stable model.
+            if exc.code in {404, 429, 500, 502, 503, 504}:
+                LOGGER.warning("Gemini model %s unavailable (%s); trying fallback", model, exc.code)
+                continue
+            raise HTTPException(502, detail) from exc
+        except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+            raise HTTPException(502, "Gemini API tidak dapat dihubungi") from exc
+    if result is None:
+        raise HTTPException(503, f"Model Gemini sedang sibuk. Detail terakhir: {last_detail}")
+    reply = "".join(
+        part.get("text", "")
+        for candidate in result.get("candidates", [])[:1]
+        for part in candidate.get("content", {}).get("parts", [])
+    ).strip()
+    if not reply:
+        raise HTTPException(502, "Gemini tidak mengembalikan jawaban")
+    return {"reply": reply, "model": selected_model}
+
+
 def member_json(row: sqlite3.Row) -> dict[str, Any]:
+    avatar_url = None
+    avatar_path = Path(row["avatar_path"]) if row["avatar_path"] else None
+    if avatar_path and avatar_path.is_file():
+        avatar_url = f"/api/auth/members/{row['id']}/avatar?v={avatar_path.stat().st_mtime_ns}"
     return {
         "id": row["id"],
         "name": row["name"],
@@ -636,20 +888,35 @@ def member_json(row: sqlite3.Row) -> dict[str, Any]:
         "role": row["role"],
         "createdAt": row["created_at"],
         "hasPassword": bool(row["password_hash"]),
+        "emailVerified": bool(row["email_verified"]),
+        "onboardingCompleted": bool(row["onboarding_completed"]),
+        "avatarUrl": avatar_url,
     }
+
+
+def request_member_id(request: Request, con: sqlite3.Connection) -> str | None:
+    member_id = getattr(request.state, "member_id", None)
+    if member_id or AUTH_REQUIRED:
+        return member_id
+    local_owner = con.execute(
+        "SELECT id FROM workspace_members WHERE role='owner' ORDER BY rowid LIMIT 1"
+    ).fetchone()
+    return local_owner["id"] if local_owner else None
 
 
 @app.get("/api/auth/status")
 def auth_status(request: Request):
     member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
     with db() as con:
-        setup_required = not con.execute("SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL LIMIT 1").fetchone()
+        setup_required = not con.execute("SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL OR email_verified=1 LIMIT 1").fetchone()
     return {"required": AUTH_REQUIRED, "setupRequired": setup_required, "member": member_json(member) if member else None}
 
 
 @app.post("/api/auth/bootstrap", status_code=201)
 def bootstrap_auth(payload: BootstrapPayload):
     digest, salt = password_digest(payload.password)
+    email = payload.email.strip().lower()
+    display_name = payload.name.strip()
     with db() as con:
         if con.execute("SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL LIMIT 1").fetchone():
             raise HTTPException(409, "Workspace authentication is already configured")
@@ -658,36 +925,184 @@ def bootstrap_auth(payload: BootstrapPayload):
             member_id = owner["id"]
             con.execute(
                 "UPDATE workspace_members SET name=?,email=?,password_hash=?,password_salt=? WHERE id=?",
-                (payload.name.strip(), payload.email.lower(), digest, salt, member_id),
+                (display_name, email, digest, salt, member_id),
             )
         else:
             member_id = uid()
             con.execute(
                 "INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)",
-                (member_id, payload.name.strip(), payload.email.lower(), "owner", now(), digest, salt),
+                (member_id, display_name, email, "owner", now(), digest, salt),
             )
     return {"status": "configured"}
 
 
 @app.post("/api/auth/login")
 def login(payload: LoginPayload):
+    email = payload.email.strip().lower()
     with db() as con:
-        member = con.execute("SELECT * FROM workspace_members WHERE email=?", (payload.email.lower(),)).fetchone()
+        member = con.execute("SELECT * FROM workspace_members WHERE email=?", (email,)).fetchone()
         if not member or not member["password_hash"] or not member["password_salt"]:
             raise HTTPException(401, "Invalid email or password")
         digest, _ = password_digest(payload.password, member["password_salt"])
         if not hmac.compare_digest(digest, member["password_hash"]):
             raise HTTPException(401, "Invalid email or password")
-        token = secrets.token_urlsafe(32)
-        expires = datetime.now(timezone.utc) + timedelta(days=30)
-        con.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (now(),))
+        # Keep the authenticated identity canonical even for the password
+        # fallback: the account name is the email username, not free text.
+        con.execute("UPDATE workspace_members SET name=? WHERE id=?", (account_name_from_email(email), member["id"]))
+        member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member["id"],)).fetchone()
+    return create_member_session(member)
+
+
+@app.post("/api/auth/register", status_code=201)
+def register(payload: BootstrapPayload):
+    email = payload.email.strip().lower()
+    display_name = payload.name.strip()
+    digest, salt = password_digest(payload.password)
+    with db() as con:
+        if con.execute("SELECT 1 FROM workspace_members WHERE email=?", (email,)).fetchone():
+            raise HTTPException(409, "Email Gmail ini sudah terdaftar. Silakan Sign In.")
+        if con.execute("SELECT 1 FROM workspace_members WHERE lower(name)=lower(?)", (display_name,)).fetchone():
+            raise HTTPException(409, "Username sudah digunakan")
+        member_id = uid()
+        # Self-registration is intended for this personal/local workspace, so
+        # registered users receive full workspace access. Restricted accounts
+        # can still be created explicitly from member settings.
+        role = "owner"
         con.execute(
-            "INSERT INTO auth_sessions (token_hash,member_id,created_at,expires_at) VALUES (?,?,?,?)",
-            (hashlib.sha256(token.encode("utf-8")).hexdigest(), member["id"], now(), expires.isoformat()),
+            "INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt,email_verified,onboarding_completed) VALUES (?,?,?,?,?,?,?,1,0)",
+            (member_id, display_name, email, role, now(), digest, salt),
         )
-    response = JSONResponse({"token": token, "member": member_json(member)})
-    response.set_cookie("vf_session", token, max_age=30 * 86400, httponly=True, samesite="lax", secure=False)
-    return response
+        member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
+    return create_member_session(member)
+
+
+@app.post("/api/auth/firebase")
+def firebase_login(payload: FirebaseLoginPayload):
+    if firebase_admin is None:
+        raise HTTPException(503, "Firebase Admin SDK belum terpasang")
+    try:
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app()
+        claims = firebase_auth.verify_id_token(payload.id_token)
+    except Exception as exc:
+        LOGGER.warning("Firebase token verification failed: %s", exc)
+        raise HTTPException(401, "Token Firebase tidak valid atau kedaluwarsa") from exc
+    email = str(claims.get("email") or "").strip().lower()
+    if not email or not claims.get("email_verified"):
+        raise HTTPException(403, "Email Firebase belum terverifikasi")
+    display_name = str(claims.get("name") or account_name_from_email(email)).strip()
+    with db() as con:
+        member = con.execute("SELECT * FROM workspace_members WHERE email=?", (email,)).fetchone()
+        if not member:
+            member_id = uid()
+            con.execute(
+                "INSERT INTO workspace_members (id,name,email,role,created_at,email_verified,onboarding_completed) VALUES (?,?,?,?,?,1,0)",
+                (member_id, display_name, email, "owner", now()),
+            )
+            member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
+        else:
+            con.execute("UPDATE workspace_members SET name=?,email_verified=1 WHERE id=?", (display_name, member["id"]))
+            member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member["id"],)).fetchone()
+    return create_member_session(member)
+
+
+@app.post("/api/auth/otp/request", status_code=202)
+def request_login_otp(payload: OtpRequestPayload):
+    email = payload.email.strip().lower()
+    with db() as con:
+        member = con.execute("SELECT * FROM workspace_members WHERE email=?", (email,)).fetchone()
+        setup_required = not con.execute(
+            "SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL OR email_verified=1 LIMIT 1"
+        ).fetchone()
+        if not member and not setup_required:
+            # Do not reveal which email addresses belong to the workspace.
+            return {"status": "sent", "expiresIn": 600}
+        latest = con.execute(
+            "SELECT created_at FROM auth_otp_challenges WHERE email=? ORDER BY created_at DESC LIMIT 1",
+            (email,),
+        ).fetchone()
+        if latest and datetime.fromisoformat(latest["created_at"]) > datetime.now(timezone.utc) - timedelta(seconds=60):
+            raise HTTPException(429, "Tunggu 60 detik sebelum meminta OTP baru")
+        code = OTP_DEV_CODE if re.fullmatch(r"\d{6}", OTP_DEV_CODE) else f"{secrets.randbelow(1_000_000):06d}"
+        challenge_id = uid()
+        created = now()
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        con.execute("DELETE FROM auth_otp_challenges WHERE email=? OR expires_at<=?", (email, created))
+        con.execute(
+            "INSERT INTO auth_otp_challenges (id,email,code_hash,created_at,expires_at) VALUES (?,?,?,?,?)",
+            (challenge_id, email, otp_digest(email, code), created, expires),
+        )
+    try:
+        send_login_otp(email, code)
+    except Exception:
+        with db() as con:
+            con.execute("DELETE FROM auth_otp_challenges WHERE id=?", (challenge_id,))
+        raise
+    result: dict[str, Any] = {"status": "sent", "expiresIn": 600}
+    if OTP_DEV_CODE:
+        result["devCode"] = code
+    return result
+
+
+@app.post("/api/auth/otp/verify")
+def verify_login_otp(payload: OtpVerifyPayload):
+    email = payload.email.strip().lower()
+    with db() as con:
+        challenge = con.execute(
+            "SELECT * FROM auth_otp_challenges WHERE email=? ORDER BY created_at DESC LIMIT 1",
+            (email,),
+        ).fetchone()
+        if not challenge or challenge["expires_at"] <= now():
+            raise HTTPException(401, "OTP tidak ditemukan atau sudah kedaluwarsa")
+        if challenge["attempts"] >= 5:
+            con.execute("DELETE FROM auth_otp_challenges WHERE id=?", (challenge["id"],))
+            raise HTTPException(429, "Terlalu banyak percobaan OTP. Minta kode baru.")
+        if not hmac.compare_digest(challenge["code_hash"], otp_digest(email, payload.code)):
+            con.execute("UPDATE auth_otp_challenges SET attempts=attempts+1 WHERE id=?", (challenge["id"],))
+            raise HTTPException(401, "Kode OTP salah")
+        member = con.execute("SELECT * FROM workspace_members WHERE email=?", (email,)).fetchone()
+        setup_required = not con.execute(
+            "SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL OR email_verified=1 LIMIT 1"
+        ).fetchone()
+        if not member and setup_required:
+            placeholder = con.execute(
+                "SELECT * FROM workspace_members WHERE email='owner@visionflow.local' AND password_hash IS NULL ORDER BY rowid LIMIT 1"
+            ).fetchone()
+            display_name = account_name_from_email(email)
+            if placeholder:
+                con.execute(
+                    "UPDATE workspace_members SET name=?,email=?,email_verified=1 WHERE id=?",
+                    (display_name, email, placeholder["id"]),
+                )
+                member_id = placeholder["id"]
+            else:
+                member_id = uid()
+                con.execute(
+                    "INSERT INTO workspace_members (id,name,email,role,created_at,email_verified,onboarding_completed) VALUES (?,?,?,?,?,1,0)",
+                    (member_id, display_name, email, "owner", now()),
+                )
+            member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
+        elif member:
+            con.execute(
+                "UPDATE workspace_members SET name=?,email_verified=1 WHERE id=?",
+                (account_name_from_email(email), member["id"]),
+            )
+            member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member["id"],)).fetchone()
+        else:
+            raise HTTPException(401, "Email ini belum terdaftar di workspace")
+        con.execute("DELETE FROM auth_otp_challenges WHERE email=?", (email,))
+    return create_member_session(member)
+
+
+@app.post("/api/auth/onboarding/complete")
+def complete_onboarding(request: Request):
+    member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
+    if not member:
+        raise HTTPException(401, "Login required")
+    with db() as con:
+        con.execute("UPDATE workspace_members SET onboarding_completed=1 WHERE id=?", (member["id"],))
+        updated = con.execute("SELECT * FROM workspace_members WHERE id=?", (member["id"],)).fetchone()
+    return member_json(updated)
 
 
 @app.post("/api/auth/logout", status_code=204)
@@ -707,6 +1122,52 @@ def auth_me(request: Request):
     if not member:
         raise HTTPException(401, "Login required")
     return member_json(member)
+
+
+@app.post("/api/auth/profile/avatar")
+async def upload_profile_avatar(request: Request, file: UploadFile = File(...)):
+    with db() as con:
+        member_id = request_member_id(request, con)
+        member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone() if member_id else None
+    if not member:
+        raise HTTPException(401, "Login required")
+    payload = await file.read(5 * 1024 * 1024 + 1)
+    if len(payload) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Profile photo exceeds 5 MB")
+    try:
+        with Image.open(io.BytesIO(payload)) as source:
+            if source.width * source.height > 25_000_000:
+                raise HTTPException(400, "Profile photo dimensions are too large")
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            side = min(image.size)
+            left = (image.width - side) // 2
+            top = (image.height - side) // 2
+            image = image.crop((left, top, left + side, top + side))
+            image = image.resize((512, 512), Image.Resampling.LANCZOS)
+            target = (AVATARS / f"{member['id']}.jpg").resolve()
+            if target.parent != AVATARS.resolve():
+                raise HTTPException(400, "Invalid profile photo target")
+            image.save(target, "JPEG", quality=88, optimize=True)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, "Upload a valid JPG, PNG, or WEBP image") from exc
+    with db() as con:
+        con.execute("UPDATE workspace_members SET avatar_path=? WHERE id=?", (str(target), member["id"]))
+        updated = con.execute("SELECT * FROM workspace_members WHERE id=?", (member["id"],)).fetchone()
+    return member_json(updated)
+
+
+@app.get("/api/auth/members/{member_id}/avatar")
+def member_avatar(member_id: str):
+    with db() as con:
+        member = con.execute("SELECT avatar_path FROM workspace_members WHERE id=?", (member_id,)).fetchone()
+    if not member or not member["avatar_path"]:
+        raise HTTPException(404, "Profile photo not found")
+    target = Path(member["avatar_path"]).resolve()
+    if target.parent != AVATARS.resolve() or not target.is_file():
+        raise HTTPException(404, "Profile photo not found")
+    return FileResponse(target, media_type="image/jpeg")
 
 
 @app.get("/api/system")
@@ -734,7 +1195,7 @@ def create_member(payload: MemberPayload):
     digest, salt = password_digest(payload.password) if payload.password else (None, None)
     try:
         with db() as con:
-            con.execute("INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)", (member_id, payload.name.strip(), payload.email.lower(), payload.role, now(), digest, salt))
+            con.execute("INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)", (member_id, payload.name.strip(), payload.email.lower(), "owner", now(), digest, salt))
             row = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
     except sqlite3.IntegrityError as exc:
         raise HTTPException(409, "A member with this email already exists") from exc
@@ -747,14 +1208,12 @@ def update_member(member_id: str, payload: MemberPayload):
         member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
         if not member:
             raise HTTPException(404, "Member not found")
-        if member["role"] == "owner" and payload.role != "owner" and con.execute("SELECT COUNT(*) n FROM workspace_members WHERE role='owner'").fetchone()["n"] <= 1:
-            raise HTTPException(409, "The final workspace owner cannot be demoted")
         try:
             if payload.password:
                 digest, salt = password_digest(payload.password)
-                con.execute("UPDATE workspace_members SET name=?,email=?,role=?,password_hash=?,password_salt=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, digest, salt, member_id))
+                con.execute("UPDATE workspace_members SET name=?,email=?,role='owner',password_hash=?,password_salt=? WHERE id=?", (payload.name.strip(), payload.email.lower(), digest, salt, member_id))
             else:
-                con.execute("UPDATE workspace_members SET name=?,email=?,role=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, member_id))
+                con.execute("UPDATE workspace_members SET name=?,email=?,role='owner' WHERE id=?", (payload.name.strip(), payload.email.lower(), member_id))
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "A member with this email already exists") from exc
         updated = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
@@ -797,7 +1256,7 @@ async def restore_workspace(file: UploadFile = File(...)):
     validate_zip_size(archive, 20 * 1024 * 1024 * 1024)
     names = set(archive.namelist())
     if "visionflow.db" not in names or "manifest.json" not in names:
-        raise HTTPException(400, "Not a VisionFlow backup")
+        raise HTTPException(400, "Not a Salnova backup")
     temporary_db = DATA / f"restore-{uid()}.db"
     temporary_db.write_bytes(archive.read("visionflow.db"))
     source: sqlite3.Connection | None = None
@@ -855,6 +1314,108 @@ def get_project(project_id: str):
         if not row:
             raise HTTPException(404, "Project not found")
         return project_dict(con, row)
+
+
+@app.get("/api/projects/{project_id}/collaboration")
+def project_collaboration(project_id: str):
+    with db() as con:
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+        invites = con.execute(
+            "SELECT id,code,created_at,expires_at FROM project_invites WHERE project_id=? AND revoked=0 AND expires_at>? ORDER BY created_at DESC",
+            (project_id, now()),
+        ).fetchall()
+        requests = con.execute(
+            "SELECT r.id,r.status,r.created_at,m.id member_id,m.name,m.email FROM project_join_requests r JOIN workspace_members m ON m.id=r.member_id WHERE r.project_id=? AND r.status='pending' ORDER BY r.created_at",
+            (project_id,),
+        ).fetchall()
+        collaborators = con.execute(
+            "SELECT m.id,m.name,m.email,c.added_at FROM project_collaborators c JOIN workspace_members m ON m.id=c.member_id WHERE c.project_id=? ORDER BY c.added_at",
+            (project_id,),
+        ).fetchall()
+    return {
+        "invites": [dict(item) for item in invites],
+        "requests": [dict(item) for item in requests],
+        "collaborators": [dict(item) for item in collaborators],
+    }
+
+
+@app.post("/api/projects/{project_id}/invites", status_code=201)
+def create_project_invite(project_id: str, request: Request):
+    with db() as con:
+        member_id = request_member_id(request, con)
+        if not member_id:
+            raise HTTPException(401, "Login required")
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+        code = secrets.token_hex(4).upper()
+        invite_id = uid()
+        created = now()
+        expires = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        con.execute(
+            "INSERT INTO project_invites (id,project_id,code,created_by,created_at,expires_at) VALUES (?,?,?,?,?,?)",
+            (invite_id, project_id, code, member_id, created, expires),
+        )
+        log_activity(con, "project.invite.created", f"Invite {code} dibuat", project_id, request.state.actor)
+    return {"id": invite_id, "code": code, "created_at": created, "expires_at": expires}
+
+
+@app.post("/api/collaboration/join", status_code=202)
+def request_project_join(payload: ProjectJoinPayload, request: Request):
+    with db() as con:
+        member_id = request_member_id(request, con)
+        if not member_id:
+            raise HTTPException(401, "Login required")
+        invite = con.execute(
+            "SELECT * FROM project_invites WHERE code=? AND revoked=0 AND expires_at>?",
+            (payload.code.upper(), now()),
+        ).fetchone()
+        if not invite:
+            raise HTTPException(404, "Kode undangan tidak ditemukan atau kedaluwarsa")
+        if con.execute(
+            "SELECT 1 FROM project_collaborators WHERE project_id=? AND member_id=?",
+            (invite["project_id"], member_id),
+        ).fetchone():
+            return {"status": "accepted", "projectId": invite["project_id"]}
+        existing = con.execute(
+            "SELECT * FROM project_join_requests WHERE project_id=? AND member_id=? AND status='pending'",
+            (invite["project_id"], member_id),
+        ).fetchone()
+        if existing:
+            return {"status": "pending", "projectId": invite["project_id"]}
+        request_id = uid()
+        con.execute(
+            "INSERT INTO project_join_requests (id,invite_id,project_id,member_id,status,created_at) VALUES (?,?,?,?,?,?)",
+            (request_id, invite["id"], invite["project_id"], member_id, "pending", now()),
+        )
+        log_activity(con, "project.join.requested", "Permintaan kolaborasi baru", invite["project_id"], request.state.actor)
+    return {"status": "pending", "projectId": invite["project_id"]}
+
+
+@app.post("/api/projects/{project_id}/collaboration/requests/{request_id}")
+def review_project_join(project_id: str, request_id: str, payload: ProjectJoinReviewPayload, request: Request):
+    status = "accepted" if payload.action == "accept" else "rejected"
+    with db() as con:
+        reviewer_id = request_member_id(request, con)
+        if not reviewer_id:
+            raise HTTPException(401, "Login required")
+        join_request = con.execute(
+            "SELECT * FROM project_join_requests WHERE id=? AND project_id=? AND status='pending'",
+            (request_id, project_id),
+        ).fetchone()
+        if not join_request:
+            raise HTTPException(404, "Permintaan kolaborasi tidak ditemukan")
+        con.execute(
+            "UPDATE project_join_requests SET status=?,reviewed_at=?,reviewed_by=? WHERE id=?",
+            (status, now(), reviewer_id, request_id),
+        )
+        if status == "accepted":
+            con.execute(
+                "INSERT OR IGNORE INTO project_collaborators (project_id,member_id,added_at,added_by) VALUES (?,?,?,?)",
+                (project_id, join_request["member_id"], now(), reviewer_id),
+            )
+        log_activity(con, f"project.join.{status}", f"Permintaan {status}", project_id, request.state.actor)
+    return {"status": status}
 
 
 @app.put("/api/projects/{project_id}")
@@ -936,12 +1497,22 @@ def dataset_health(project_id: str):
         if not project:
             raise HTTPException(404, "Project not found")
         assets = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (project_id,)).fetchall()
+    started = time.monotonic()
+    with DATASET_HEALTH_PROGRESS_LOCK:
+        DATASET_HEALTH_PROGRESS[project_id] = {
+            "scanning": True,
+            "progress": 1,
+            "processed": 0,
+            "total": len(assets),
+            "stage": "Preparing dataset scan",
+            "startedMonotonic": started,
+        }
     issues: list[dict[str, Any]] = []
     hashes: dict[str, list[str]] = {}
     class_counts: dict[str, int] = {name: 0 for name in json.loads(project["classes"])}
     split_counts = {"train": 0, "valid": 0, "test": 0}
     blur_scores: list[float] = []
-    for asset in assets:
+    for index, asset in enumerate(assets, start=1):
         asset_issues: list[str] = []
         boxes = json.loads(asset["boxes"] or "[]")
         split_counts[asset["split"]] = split_counts.get(asset["split"], 0) + 1
@@ -976,6 +1547,20 @@ def dataset_health(project_id: str):
             asset_issues.append("missing-file")
         if asset_issues:
             issues.append({"assetId": asset["id"], "name": asset["name"], "issues": sorted(set(asset_issues))})
+        if index == len(assets) or index % 5 == 0:
+            elapsed = max(0.001, time.monotonic() - started)
+            remaining = max(0, len(assets) - index)
+            eta_seconds = round((elapsed / index) * remaining)
+            with DATASET_HEALTH_PROGRESS_LOCK:
+                DATASET_HEALTH_PROGRESS[project_id] = {
+                    "scanning": True,
+                    "progress": min(97, max(2, round(index / max(1, len(assets)) * 97))),
+                    "processed": index,
+                    "total": len(assets),
+                    "stage": f"Checking {asset['name']}",
+                    "etaSeconds": eta_seconds,
+                    "startedMonotonic": started,
+                }
     duplicate_groups = [ids for ids in hashes.values() if len(ids) > 1]
     duplicate_ids = {asset_id for group in duplicate_groups for asset_id in group[1:]}
     for asset_id in duplicate_ids:
@@ -990,7 +1575,7 @@ def dataset_health(project_id: str):
     if len(nonzero) > 1:
         imbalance = round(max(nonzero) / max(1, min(nonzero)), 2)
     score = max(0, round(100 - len({item["assetId"] for item in issues}) / max(1, len(assets)) * 100))
-    return {
+    result = {
         "score": score,
         "assets": len(assets),
         "issues": issues,
@@ -1000,6 +1585,35 @@ def dataset_health(project_id: str):
         "splitCounts": split_counts,
         "imbalanceRatio": imbalance,
         "averageBlurScore": round(sum(blur_scores) / len(blur_scores), 1) if blur_scores else 0,
+    }
+    with DATASET_HEALTH_PROGRESS_LOCK:
+        DATASET_HEALTH_PROGRESS[project_id] = {
+            "scanning": False,
+            "progress": 100,
+            "processed": len(assets),
+            "total": len(assets),
+            "stage": "Dataset scan complete",
+            "etaSeconds": 0,
+            "startedMonotonic": started,
+        }
+    return result
+
+
+@app.get("/api/projects/{project_id}/health/progress")
+def dataset_health_progress(project_id: str):
+    with db() as con:
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+    with DATASET_HEALTH_PROGRESS_LOCK:
+        progress = dict(DATASET_HEALTH_PROGRESS.get(project_id, {}))
+    progress.pop("startedMonotonic", None)
+    return progress or {
+        "scanning": False,
+        "progress": 0,
+        "processed": 0,
+        "total": 0,
+        "stage": "Ready to scan",
+        "etaSeconds": 0,
     }
 
 
@@ -1047,15 +1661,23 @@ def update_annotation_job(project_id: str, job_id: str, payload: JobStatusPayloa
 
 
 def run_active_learning_scan(project_id: str, model_id: str, limit: int, confidence: float) -> None:
+    started = time.monotonic()
     try:
         from ultralytics import YOLO
         with db() as con:
-            model = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND status='ready'", (model_id, project_id)).fetchone()
+            model = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (model_id, project_id)).fetchone()
             assets = con.execute("SELECT * FROM assets WHERE project_id=? AND status='unannotated' ORDER BY rowid LIMIT ?", (project_id, limit)).fetchall()
         if not model or not model["weights_path"] or not Path(model["weights_path"]).is_file():
             return
+        ACTIVE_LEARNING_PROGRESS[project_id] = {
+            "progress": 2,
+            "processed": 0,
+            "total": len(assets),
+            "etaSeconds": 0,
+            "stage": "Loading detection model",
+        }
         detector = YOLO(model["weights_path"])
-        for asset in assets:
+        for index, asset in enumerate(assets, start=1):
             try:
                 output = detector(asset["path"], conf=max(0.01, confidence / 2), verbose=False)[0]
                 confidences = output.boxes.conf.tolist() if output.boxes is not None else []
@@ -1065,27 +1687,43 @@ def run_active_learning_scan(project_id: str, model_id: str, limit: int, confide
                 with db() as con:
                     con.execute("INSERT INTO active_learning_queue (id,project_id,asset_id,model_id,score,reason,status,created_at) VALUES (?,?,?,?,?,?,'pending',?) ON CONFLICT(project_id,asset_id) DO UPDATE SET model_id=excluded.model_id,score=excluded.score,reason=excluded.reason,status='pending',created_at=excluded.created_at", (uid(), project_id, asset["id"], model_id, score, reason, now()))
             except Exception:
-                continue
+                pass
+            elapsed = max(0.001, time.monotonic() - started)
+            ACTIVE_LEARNING_PROGRESS[project_id] = {
+                "progress": min(99, round(index / max(1, len(assets)) * 100)),
+                "processed": index,
+                "total": len(assets),
+                "etaSeconds": round((elapsed / index) * max(0, len(assets) - index)),
+                "stage": f"Running inference on {asset['name']}",
+            }
     finally:
         ACTIVE_LEARNING_SCANS.discard(project_id)
+        current = ACTIVE_LEARNING_PROGRESS.get(project_id, {})
+        ACTIVE_LEARNING_PROGRESS[project_id] = {
+            **current,
+            "progress": 100,
+            "etaSeconds": 0,
+            "stage": "Active-learning scan complete",
+        }
 
 
 @app.get("/api/projects/{project_id}/active-learning")
 def active_learning_queue(project_id: str):
     with db() as con:
         rows = con.execute("SELECT q.*,a.name FROM active_learning_queue q JOIN assets a ON a.id=q.asset_id WHERE q.project_id=? ORDER BY q.score DESC,q.created_at DESC", (project_id,)).fetchall()
-    return {"scanning": project_id in ACTIVE_LEARNING_SCANS, "items": [{"id": row["id"], "assetId": row["asset_id"], "name": row["name"], "modelId": row["model_id"], "score": row["score"], "reason": row["reason"], "status": row["status"], "createdAt": row["created_at"]} for row in rows]}
+    return {"scanning": project_id in ACTIVE_LEARNING_SCANS, "progress": ACTIVE_LEARNING_PROGRESS.get(project_id, {}), "items": [{"id": row["id"], "assetId": row["asset_id"], "name": row["name"], "modelId": row["model_id"], "score": row["score"], "reason": row["reason"], "status": row["status"], "createdAt": row["created_at"]} for row in rows]}
 
 
 @app.post("/api/projects/{project_id}/active-learning", status_code=202)
 def start_active_learning(project_id: str, payload: ActiveLearningPayload, background_tasks: BackgroundTasks):
     with db() as con:
-        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' AND (? IS NULL OR id=?) ORDER BY CASE stage WHEN 'production' THEN 0 ELSE 1 END,rowid DESC LIMIT 1", (project_id, payload.model_id, payload.model_id)).fetchone()
+        model = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL AND (? IS NULL OR id=?) ORDER BY CASE stage WHEN 'production' THEN 0 ELSE 1 END,rowid DESC LIMIT 1", (project_id, payload.model_id, payload.model_id)).fetchone()
         if not model:
             raise HTTPException(400, "A ready model is required for active learning")
     if project_id in ACTIVE_LEARNING_SCANS:
         raise HTTPException(409, "Active-learning scan is already running")
     ACTIVE_LEARNING_SCANS.add(project_id)
+    ACTIVE_LEARNING_PROGRESS[project_id] = {"progress": 1, "processed": 0, "total": payload.limit, "etaSeconds": 0, "stage": "Preparing active-learning scan"}
     background_tasks.add_task(run_active_learning_scan, project_id, model["id"], payload.limit, payload.confidence)
     return {"status": "scanning", "modelId": model["id"]}
 
@@ -2192,6 +2830,87 @@ def export_annotated_dataset(project_id: str, format: str = "yolo"):
     return FileResponse(archive, media_type="application/zip", filename=archive.name)
 
 
+def cached_version_archive(
+    source: Path,
+    archive: Path,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> Path:
+    """Build an immutable dataset archive once, without exposing partial ZIPs."""
+
+    def report(**detail: Any) -> None:
+        if progress_callback:
+            progress_callback(detail)
+
+    def valid(candidate: Path) -> bool:
+        if not candidate.is_file():
+            return False
+        try:
+            with zipfile.ZipFile(candidate) as bundle:
+                bundle.infolist()
+            return True
+        except (OSError, zipfile.BadZipFile):
+            return False
+
+    if valid(archive):
+        report(stage="Dataset archive ready", archivePercent=100)
+        return archive
+    with VERSION_EXPORT_LOCK:
+        if valid(archive):
+            report(stage="Dataset archive ready", archivePercent=100)
+            return archive
+        temporary = archive.with_name(f".{archive.name}.{uid()}.building")
+        try:
+            # Generated images are already compressed. ZIP_STORED avoids spending
+            # many minutes recompressing multi-gigabyte immutable versions.
+            with zipfile.ZipFile(
+                temporary,
+                "w",
+                compression=zipfile.ZIP_STORED,
+                allowZip64=True,
+            ) as bundle:
+                report(stage="Scanning dataset files", archivePercent=0)
+                paths = sorted(path for path in source.rglob("*") if path.is_file())
+                total_files = len(paths)
+                total_bytes = sum(path.stat().st_size for path in paths)
+                written_bytes = 0
+                report(
+                    stage="Packaging dataset for laptop",
+                    archivePercent=0,
+                    processedFiles=0,
+                    totalFiles=total_files,
+                    processedBytes=0,
+                    totalBytes=total_bytes,
+                )
+                report_every = max(1, total_files // 200)
+                for index, path in enumerate(paths, 1):
+                    bundle.write(path, path.relative_to(source).as_posix())
+                    written_bytes += path.stat().st_size
+                    if index == total_files or index % report_every == 0:
+                        report(
+                            stage="Packaging dataset for laptop",
+                            archivePercent=round(index / max(1, total_files) * 100),
+                            processedFiles=index,
+                            totalFiles=total_files,
+                            processedBytes=written_bytes,
+                            totalBytes=total_bytes,
+                        )
+            temporary.replace(archive)
+            report(
+                stage="Dataset archive ready",
+                archivePercent=100,
+                processedFiles=total_files,
+                totalFiles=total_files,
+                processedBytes=total_bytes,
+                totalBytes=total_bytes,
+            )
+        except Exception:
+            report(stage="Dataset packaging failed", archivePercent=0)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
+    return archive
+
+
 @app.get("/api/projects/{project_id}/versions/{version_id}/export")
 def export_version(project_id: str, version_id: str, format: str = "yolo"):
     with db() as con:
@@ -2204,18 +2923,21 @@ def export_version(project_id: str, version_id: str, format: str = "yolo"):
     if format.lower() not in {"yolo", "coco"}:
         raise HTTPException(400, "Supported export formats: yolo, coco")
     if version["project_type"] in {"Single-Label Classification", "Multi-Label Classification"}:
-        archive = Path(shutil.make_archive(str(EXPORTS / f"{project_id}-v{version['number']}-classification"), "zip", root_dir=source))
+        archive = cached_version_archive(
+            source,
+            EXPORTS / f"{project_id}-v{version['number']}-classification.zip",
+        )
         return FileResponse(archive, media_type="application/zip", filename=archive.name)
     archive_base = EXPORTS / f"{project_id}-v{version['number']}-{format.lower()}"
     if format.lower() == "yolo":
-        archive = Path(shutil.make_archive(str(archive_base), "zip", root_dir=source))
+        archive = cached_version_archive(source, archive_base.with_suffix(".zip"))
     else:
         import yaml
         config = yaml.safe_load((source / "data.yaml").read_text(encoding="utf-8"))
         names_raw = config.get("names", {})
         names = [names_raw[key] for key in sorted(names_raw)] if isinstance(names_raw, dict) else list(names_raw)
         coco: dict[str, Any] = {
-            "info": {"description": f"VisionFlow {project_id} dataset v{version['number']}", "version": str(version["number"])},
+            "info": {"description": f"Salnova {project_id} dataset v{version['number']}", "version": str(version["number"])},
             "licenses": [], "images": [], "annotations": [],
             "categories": [{"id": index + 1, "name": name, "supercategory": "object"} for index, name in enumerate(names)],
         }
@@ -2321,14 +3043,29 @@ def remote_job_json(con: sqlite3.Connection, model: sqlite3.Row) -> dict[str, An
     ).fetchone()
     if not project or not version:
         raise HTTPException(409, "Training job dataset is unavailable")
+    config = json.loads(model["config"] or "{}")
+    base_weights_url = None
+    base_model_id = config.get("base_model_id")
+    if base_model_id:
+        base_model = con.execute(
+            "SELECT weights_path FROM models WHERE id=? AND project_id=?",
+            (base_model_id, model["project_id"]),
+        ).fetchone()
+        if base_model and base_model["weights_path"] and Path(base_model["weights_path"]).is_file():
+            base_weights_url = f"/api/training-workers/agent/jobs/{model['id']}/base-weights"
+    last_checkpoint = RUNS / model["id"] / "weights" / "last.pt"
+    recovery_checkpoint = Path(model["weights_path"]) if model["weights_path"] else None
     return {
         "id": model["id"],
         "projectId": model["project_id"],
         "projectName": project["name"],
         "projectType": project["type"],
         "version": version["number"],
-        "config": json.loads(model["config"] or "{}"),
+        "config": config,
         "datasetUrl": f"/api/training-workers/agent/jobs/{model['id']}/dataset",
+        "resumeUrl": f"/api/training-workers/agent/jobs/{model['id']}/checkpoint/last" if last_checkpoint.is_file() else None,
+        "recoveryUrl": f"/api/training-workers/agent/jobs/{model['id']}/checkpoint/best" if not last_checkpoint.is_file() and recovery_checkpoint and recovery_checkpoint.is_file() else None,
+        "baseWeightsUrl": base_weights_url,
     }
 
 
@@ -2402,8 +3139,16 @@ def training_worker_heartbeat(payload: WorkerHeartbeatPayload, request: Request)
     capabilities = {
         "cuda": bool(payload.capabilities.get("cuda")),
         "gpuName": str(payload.capabilities.get("gpuName", ""))[:160],
+        "gpuCount": (
+            max(0, min(32, int(payload.capabilities.get("gpuCount", 0) or 0)))
+            if str(payload.capabilities.get("gpuCount", 0) or 0).isdigit()
+            else 0
+        ),
+        "torchVersion": str(payload.capabilities.get("torchVersion", ""))[:80],
+        "cudaVersion": str(payload.capabilities.get("cudaVersion", ""))[:80],
         "cpu": str(payload.capabilities.get("cpu", ""))[:160],
         "platform": str(payload.capabilities.get("platform", ""))[:160],
+        "provider": str(payload.capabilities.get("provider", "local"))[:40],
     }
     with db() as con:
         con.execute(
@@ -2425,7 +3170,12 @@ def claim_training_job(request: Request):
         for stale in stale_workers:
             model = con.execute("SELECT status,config FROM models WHERE id=?", (stale["current_model_id"],)).fetchone()
             if model and model["status"] == "training" and json.loads(model["config"] or "{}").get("execution_target", "server") != "server":
-                con.execute("UPDATE models SET status='queued',worker_id=NULL,error='Remote worker disconnected; queued for retry' WHERE id=?", (stale["current_model_id"],))
+                config = json.loads(model["config"] or "{}")
+                config["queue_activated_at"] = now()
+                con.execute(
+                    "UPDATE models SET status='queued',worker_id=NULL,error='Remote worker disconnected; queued for retry',config=? WHERE id=?",
+                    (json.dumps(config), stale["current_model_id"]),
+                )
             con.execute("UPDATE training_workers SET current_model_id=NULL,status='offline' WHERE id=?", (stale["id"],))
         current = con.execute("SELECT * FROM models WHERE id=? AND worker_id=?", (worker["current_model_id"], worker["id"])).fetchone() if worker["current_model_id"] else None
         if current and current["status"] == "training":
@@ -2438,11 +3188,31 @@ def claim_training_job(request: Request):
         for candidate in con.execute("SELECT * FROM models WHERE status='queued' ORDER BY rowid").fetchall():
             config = json.loads(candidate["config"] or "{}")
             target = config.get("execution_target", "server")
-            if not str(target).startswith("remote-"):
+            if not str(target).startswith(("remote-", "colab-")):
+                continue
+            activated_at = config.get("queue_activated_at") or candidate["created_at"]
+            try:
+                queue_is_current = datetime.fromisoformat(activated_at) >= (
+                    datetime.now(timezone.utc)
+                    - timedelta(minutes=REMOTE_QUEUE_TTL_MINUTES)
+                )
+            except (TypeError, ValueError):
+                queue_is_current = False
+            if not queue_is_current:
+                con.execute(
+                    "UPDATE models SET status='paused',worker_id=NULL,error=?,training_detail=? WHERE id=? AND status='queued'",
+                    (
+                        "Worker queue expired; press Resume training to authorize this job again",
+                        json.dumps({"stage": "Waiting for user to resume expired job"}),
+                        candidate["id"],
+                    ),
+                )
                 continue
             if config.get("worker_id") and config["worker_id"] != worker["id"]:
                 continue
-            if target == "remote-gpu" and not capabilities.get("cuda"):
+            if str(target).startswith("colab-") and capabilities.get("provider") != "google-colab":
+                continue
+            if target in {"remote-gpu", "colab-gpu"} and not capabilities.get("cuda"):
                 continue
             selected = candidate
             break
@@ -2450,8 +3220,8 @@ def claim_training_job(request: Request):
             con.execute("UPDATE training_workers SET last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
             return Response(status_code=204)
         updated = con.execute(
-            "UPDATE models SET status='training',progress=2,error=NULL,worker_id=? WHERE id=? AND status='queued'",
-            (worker["id"], selected["id"]),
+            "UPDATE models SET status='training',progress=2,error=NULL,worker_id=?,training_detail=? WHERE id=? AND status='queued'",
+            (worker["id"], json.dumps({"stage": "Worker claimed job"}), selected["id"]),
         )
         if not updated.rowcount:
             return Response(status_code=204)
@@ -2472,7 +3242,13 @@ def remote_training_status(model_id: str, request: Request):
     worker = worker_from_request(request)
     with db() as con:
         model = assigned_remote_model(con, worker["id"], model_id)
-    return {"id": model_id, "status": model["status"], "progress": model["progress"], "cancelled": model["status"] == "cancelled"}
+    return {
+        "id": model_id,
+        "status": model["status"],
+        "progress": model["progress"],
+        "cancelled": model["status"] == "cancelled",
+        "trainingDetail": json.loads(model["training_detail"] or "{}"),
+    }
 
 
 @app.get("/api/training-workers/agent/jobs/{model_id}/dataset")
@@ -2480,10 +3256,115 @@ def remote_training_dataset(model_id: str, request: Request):
     worker = worker_from_request(request)
     with db() as con:
         model = assigned_remote_model(con, worker["id"], model_id)
-        version = con.execute("SELECT id FROM versions WHERE project_id=? AND number=?", (model["project_id"], model["version"])).fetchone()
+        version = con.execute("SELECT id,path FROM versions WHERE project_id=? AND number=?", (model["project_id"], model["version"])).fetchone()
     if model["status"] != "training" or not version:
         raise HTTPException(409, "Training dataset is no longer available for this job")
-    return export_version(model["project_id"], version["id"], "yolo")
+    source = Path(version["path"]).resolve()
+    archive = EXPORTS / f"{model['project_id']}-v{model['version']}-yolo.zip"
+
+    def update_archive_progress(detail: dict[str, Any]) -> None:
+        with db() as progress_db:
+            current = progress_db.execute(
+                "SELECT status FROM models WHERE id=? AND worker_id=?",
+                (model_id, worker["id"]),
+            ).fetchone()
+            if current and current["status"] == "training":
+                progress_db.execute(
+                    "UPDATE models SET progress=?,training_detail=? WHERE id=?",
+                    (
+                        5 if detail.get("archivePercent") == 100 else 3,
+                        json.dumps(detail),
+                        model_id,
+                    ),
+                )
+
+    archive = cached_version_archive(source, archive, update_archive_progress)
+    return FileResponse(archive, media_type="application/zip", filename=archive.name)
+
+
+@app.get("/api/training-workers/agent/jobs/{model_id}/checkpoint/{kind}")
+def remote_training_checkpoint(model_id: str, kind: str, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+    if kind == "last":
+        checkpoint = RUNS / model_id / "weights" / "last.pt"
+    elif kind == "best" and model["weights_path"]:
+        checkpoint = Path(model["weights_path"])
+    else:
+        raise HTTPException(404, "Checkpoint is unavailable")
+    if not checkpoint.is_file():
+        raise HTTPException(404, "Checkpoint is unavailable")
+    return FileResponse(checkpoint, media_type="application/octet-stream", filename=f"{kind}.pt")
+
+
+@app.get("/api/training-workers/agent/jobs/{model_id}/base-weights")
+def remote_training_base_weights(model_id: str, request: Request):
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        config = json.loads(model["config"] or "{}")
+        source = con.execute(
+            "SELECT weights_path FROM models WHERE id=? AND project_id=?",
+            (config.get("base_model_id"), model["project_id"]),
+        ).fetchone()
+    if not source or not source["weights_path"] or not Path(source["weights_path"]).is_file():
+        raise HTTPException(404, "Fine-tune base checkpoint is unavailable")
+    return FileResponse(Path(source["weights_path"]), media_type="application/octet-stream", filename="base-best.pt")
+
+
+@app.post("/api/training-workers/agent/jobs/{model_id}/checkpoint/{kind}")
+async def upload_remote_training_checkpoint(model_id: str, kind: str, request: Request):
+    if kind not in {"last", "best"}:
+        raise HTTPException(400, "Checkpoint kind must be last or best")
+    worker = worker_from_request(request)
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        if model["status"] not in {"training", "cancelled"}:
+            raise HTTPException(409, f"Training job is {model['status']}")
+    target = RUNS / model_id / "weights" / f"{kind}.pt"
+    partial = target.with_suffix(".upload.pt")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with partial.open("wb") as output:
+            async for chunk in request.stream():
+                if chunk:
+                    size += len(chunk)
+                    if size > 2 * 1024 * 1024 * 1024:
+                        raise HTTPException(413, "Checkpoint exceeds 2 GB")
+                    output.write(chunk)
+        if size < 1024:
+            raise HTTPException(400, "Checkpoint is empty or invalid")
+        from ultralytics import YOLO
+        YOLO(str(partial))
+        partial.replace(target)
+    except Exception as exc:
+        partial.unlink(missing_ok=True)
+        if isinstance(exc, HTTPException):
+            raise
+        LOGGER.exception("Remote %s checkpoint validation failed for model %s", kind, model_id)
+        raise HTTPException(400, "Uploaded checkpoint could not be validated") from exc
+    if kind == "best":
+        with db() as con:
+            con.execute("UPDATE models SET weights_path=? WHERE id=?", (str(target), model_id))
+    return {"status": "saved", "kind": kind, "bytes": size}
+
+
+@app.post("/api/training-workers/agent/jobs/{model_id}/paused")
+def pause_remote_training(model_id: str, request: Request):
+    worker = worker_from_request(request)
+    last_checkpoint = RUNS / model_id / "weights" / "last.pt"
+    with db() as con:
+        model = assigned_remote_model(con, worker["id"], model_id)
+        status = "paused" if last_checkpoint.is_file() else "cancelled"
+        error = None if status == "paused" else "Paused before the first resumable epoch checkpoint was saved"
+        con.execute(
+            "UPDATE models SET status=?,error=?,training_detail=? WHERE id=?",
+            (status, error, json.dumps({"stage": "Paused" if status == "paused" else "Cancelled without checkpoint"}), model_id),
+        )
+        con.execute("UPDATE training_workers SET current_model_id=NULL,last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
+    return {"status": status, "modelId": model_id}
 
 
 @app.post("/api/training-workers/agent/jobs/{model_id}/progress")
@@ -2494,8 +3375,20 @@ def remote_training_progress(model_id: str, payload: WorkerProgressPayload, requ
         if model["status"] != "training":
             raise HTTPException(409, f"Training job is {model['status']}")
         history = json.loads(model["metrics_history"] or "[]")
-        history.append({"epoch": payload.epoch or len(history) + 1, **{key: round(float(value), 6) for key, value in payload.metrics.items()}})
-        con.execute("UPDATE models SET progress=?,metrics_history=? WHERE id=?", (payload.progress, json.dumps(history[-500:]), model_id))
+        if payload.metrics:
+            history.append({"epoch": payload.epoch or len(history) + 1, **{key: round(float(value), 6) for key, value in payload.metrics.items()}})
+        detail = {
+            "stage": payload.stage,
+            "epoch": payload.epoch,
+            "totalEpochs": payload.total_epochs,
+            "batch": payload.batch,
+            "totalBatches": payload.total_batches,
+            "loss": round(payload.loss, 6) if payload.loss is not None else None,
+        }
+        con.execute(
+            "UPDATE models SET progress=?,metrics_history=?,training_detail=? WHERE id=?",
+            (payload.progress, json.dumps(history[-500:]), json.dumps(detail), model_id),
+        )
         con.execute("UPDATE training_workers SET last_seen=?,status='busy' WHERE id=?", (now(), worker["id"]))
     return {"status": "ok"}
 
@@ -2545,8 +3438,8 @@ async def complete_remote_training(model_id: str, request: Request):
             raise HTTPException(409, f"Training job is {model['status']}")
         partial.replace(target)
         con.execute(
-            "UPDATE models SET status='ready',progress=100,map=?,precision=?,recall=?,weights_path=?,error=NULL WHERE id=?",
-            (metric_percent(parsed_metrics, "metrics/accuracy_top1", "metrics/mAP50(B)", "metrics/mAP50(M)", "map50"), metric_percent(parsed_metrics, "metrics/precision(B)", "metrics/precision(M)", "precision"), metric_percent(parsed_metrics, "metrics/recall(B)", "metrics/recall(M)", "recall"), str(target), model_id),
+            "UPDATE models SET status='ready',progress=100,map=?,precision=?,recall=?,weights_path=?,error=NULL,training_detail=? WHERE id=?",
+            (metric_percent(parsed_metrics, "metrics/accuracy_top1", "metrics/mAP50(B)", "metrics/mAP50(M)", "map50"), metric_percent(parsed_metrics, "metrics/precision(B)", "metrics/precision(M)", "precision"), metric_percent(parsed_metrics, "metrics/recall(B)", "metrics/recall(M)", "recall"), str(target), json.dumps({"stage": "Training complete"}), model_id),
         )
         con.execute("UPDATE training_workers SET current_model_id=NULL,last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
         log_activity(con, "training.remote-completed", f"{model['name']} by worker {worker['name']} · {size} bytes", model["project_id"], worker["name"])
@@ -2559,7 +3452,10 @@ def fail_remote_training(model_id: str, payload: WorkerFailurePayload, request: 
     with db() as con:
         model = assigned_remote_model(con, worker["id"], model_id)
         if model["status"] == "training":
-            con.execute("UPDATE models SET status='failed',error=? WHERE id=?", (payload.error[:1000], model_id))
+            con.execute(
+                "UPDATE models SET status='failed',error=?,training_detail=? WHERE id=?",
+                (payload.error[:1000], json.dumps({"stage": "Training failed"}), model_id),
+            )
         con.execute("UPDATE training_workers SET current_model_id=NULL,last_seen=?,status='online' WHERE id=?", (now(), worker["id"]))
     return {"status": "failed", "modelId": model_id}
 
@@ -2568,11 +3464,65 @@ def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
     try:
         from ultralytics import YOLO
         with db() as con:
-            con.execute("UPDATE models SET progress=10 WHERE id=?", (model_id,))
+            con.execute(
+                "UPDATE models SET progress=10,training_detail=? WHERE id=?",
+                (json.dumps({"stage": "Loading model"}), model_id),
+            )
         last_checkpoint = RUNS / model_id / "weights" / "last.pt"
         resume = last_checkpoint.is_file()
-        model = YOLO(str(last_checkpoint) if resume else payload.architecture)
+        initial_checkpoint = payload.architecture
+        with db() as con:
+            model_row = con.execute("SELECT project_id,weights_path FROM models WHERE id=?", (model_id,)).fetchone()
+            if payload.base_model_id and model_row:
+                source_model = con.execute(
+                    "SELECT weights_path FROM models WHERE id=? AND project_id=?",
+                    (payload.base_model_id, model_row["project_id"]),
+                ).fetchone()
+                if source_model and source_model["weights_path"] and Path(source_model["weights_path"]).is_file():
+                    initial_checkpoint = source_model["weights_path"]
+            elif model_row and model_row["weights_path"] and Path(model_row["weights_path"]).is_file():
+                initial_checkpoint = model_row["weights_path"]
+        model = YOLO(str(last_checkpoint) if resume else initial_checkpoint)
         cancel_event = TRAIN_CANCEL[model_id]
+        current_batch = 0
+        last_batch_update = 0.0
+
+        def on_epoch_start(trainer):
+            nonlocal current_batch
+            current_batch = 0
+
+        def on_batch_end(trainer):
+            nonlocal current_batch, last_batch_update
+            current_batch += 1
+            timestamp = time.monotonic()
+            total_batches = len(trainer.train_loader)
+            if timestamp - last_batch_update < 2 and current_batch != total_batches:
+                return
+            epoch = int(trainer.epoch) + 1
+            progress = 20 + round(
+                (((epoch - 1) + current_batch / max(1, total_batches)) / payload.epochs) * 75
+            )
+            loss_value = getattr(trainer, "loss", None)
+            try:
+                loss = float(loss_value.detach().sum().cpu())
+            except (AttributeError, TypeError, ValueError):
+                loss = None
+            detail = {
+                "stage": "Training batches",
+                "epoch": epoch,
+                "totalEpochs": payload.epochs,
+                "batch": current_batch,
+                "totalBatches": total_batches,
+                "loss": round(loss, 6) if loss is not None else None,
+            }
+            with db() as callback_db:
+                callback_db.execute(
+                    "UPDATE models SET progress=?,training_detail=? WHERE id=?",
+                    (min(progress, 95), json.dumps(detail), model_id),
+                )
+            last_batch_update = timestamp
+            if cancel_event.is_set():
+                trainer.stop = True
 
         def on_epoch_end(trainer):
             progress = 20 + round(((trainer.epoch + 1) / payload.epochs) * 75)
@@ -2581,32 +3531,63 @@ def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
                 history = json.loads(model_row["metrics_history"] or "[]") if model_row else []
                 epoch_metrics = {key: round(float(value), 6) for key, value in (getattr(trainer, "metrics", {}) or {}).items() if isinstance(value, (int, float))}
                 history.append({"epoch": trainer.epoch + 1, **epoch_metrics})
-                callback_db.execute("UPDATE models SET progress=?,metrics_history=? WHERE id=?", (min(progress, 95), json.dumps(history), model_id))
+                detail = {
+                    "stage": "Validating epoch",
+                    "epoch": trainer.epoch + 1,
+                    "totalEpochs": payload.epochs,
+                    "batch": current_batch,
+                    "totalBatches": len(trainer.train_loader),
+                }
+                callback_db.execute(
+                    "UPDATE models SET progress=?,metrics_history=?,training_detail=? WHERE id=?",
+                    (min(progress, 95), json.dumps(history), json.dumps(detail), model_id),
+                )
             if cancel_event.is_set():
                 trainer.stop = True
 
+        model.add_callback("on_train_epoch_start", on_epoch_start)
+        model.add_callback("on_train_batch_end", on_batch_end)
         model.add_callback("on_train_epoch_end", on_epoch_end)
         with db() as con:
-            con.execute("UPDATE models SET progress=20 WHERE id=?", (model_id,))
+            con.execute(
+                "UPDATE models SET progress=20,training_detail=? WHERE id=?",
+                (json.dumps({"stage": "Starting training"}), model_id),
+            )
         if resume:
             result = model.train(resume=True, device=None if payload.device == "auto" else payload.device, workers=0, plots=True)
         else:
             training_data = version_path if "-cls" in payload.architecture else version_path / "data.yaml"
-            result = model.train(data=str(training_data), epochs=payload.epochs, imgsz=payload.image_size, batch=payload.batch_size, optimizer=payload.optimizer, lr0=payload.learning_rate, patience=payload.patience, device=None if payload.device == "auto" else payload.device, project=str(RUNS), name=model_id, exist_ok=True, verbose=False, workers=0, plots=True)
+            result = model.train(data=str(training_data), epochs=payload.epochs, imgsz=payload.image_size, batch=payload.batch_size, optimizer=payload.optimizer, lr0=payload.learning_rate, patience=payload.patience, weight_decay=payload.weight_decay, cos_lr=payload.cos_lr, close_mosaic=payload.close_mosaic, amp=payload.amp, freeze=payload.freeze_layers or None, save_period=1, device=None if payload.device == "auto" else payload.device, project=str(RUNS), name=model_id, exist_ok=True, verbose=False, workers=0, plots=True)
         if cancel_event.is_set():
+            best_checkpoint = RUNS / model_id / "weights" / "best.pt"
+            resumable = last_checkpoint.is_file()
             with db() as con:
-                con.execute("UPDATE models SET status='cancelled',error='Cancelled by user' WHERE id=?", (model_id,))
+                con.execute(
+                    "UPDATE models SET status=?,weights_path=COALESCE(?,weights_path),error=?,training_detail=? WHERE id=?",
+                    (
+                        "paused" if resumable else "cancelled",
+                        str(best_checkpoint) if best_checkpoint.is_file() else None,
+                        None if resumable else "Stopped before the first resumable epoch checkpoint was saved",
+                        json.dumps({"stage": "Paused" if resumable else "Cancelled without checkpoint"}),
+                        model_id,
+                    ),
+                )
             return
         metrics = result.results_dict
         weights = RUNS / model_id / "weights" / "best.pt"
         with db() as con:
             con.execute(
-                "UPDATE models SET status='ready',progress=100,map=?,precision=?,recall=?,weights_path=? WHERE id=?",
-                (round(float(metrics.get("metrics/accuracy_top1", metrics.get("metrics/mAP50(B)", metrics.get("metrics/mAP50(M)", 0))))*100, 1), round(float(metrics.get("metrics/precision(B)", metrics.get("metrics/precision(M)", 0)))*100, 1), round(float(metrics.get("metrics/recall(B)", metrics.get("metrics/recall(M)", 0)))*100, 1), str(weights), model_id)
+                "UPDATE models SET status='ready',progress=100,map=?,precision=?,recall=?,weights_path=?,training_detail=? WHERE id=?",
+                (round(float(metrics.get("metrics/accuracy_top1", metrics.get("metrics/mAP50(B)", metrics.get("metrics/mAP50(M)", 0))))*100, 1), round(float(metrics.get("metrics/precision(B)", metrics.get("metrics/precision(M)", 0)))*100, 1), round(float(metrics.get("metrics/recall(B)", metrics.get("metrics/recall(M)", 0)))*100, 1), str(weights), json.dumps({"stage": "Training complete"}), model_id)
             )
     except Exception as exc:
+        LOGGER.exception("Local training failed for model %s", model_id)
+        best_checkpoint = RUNS / model_id / "weights" / "best.pt"
         with db() as con:
-            con.execute("UPDATE models SET status='failed',error=? WHERE id=?", (str(exc)[:1000], model_id))
+            con.execute(
+                "UPDATE models SET status='failed',error=?,weights_path=COALESCE(?,weights_path),training_detail=? WHERE id=?",
+                (str(exc)[:1000], str(best_checkpoint) if best_checkpoint.is_file() else None, json.dumps({"stage": "Training failed; checkpoint retained"}), model_id),
+            )
     finally:
         TRAIN_CANCEL.pop(model_id, None)
         schedule_training_jobs()
@@ -2677,6 +3658,14 @@ def start_training(project_id: str, payload: TrainPayload):
             raise HTTPException(400, "Selected model task does not match the project type")
         if not re.match(r"^(yolo(26|12|11)[nslmx](-(seg|pose|obb|cls))?|yolov(10[nsmblx]|9[tsmce](-seg)?|8[nslmx](-(seg|pose|obb|cls))?|5[nslmx]u|3u|3-tinyu))\.pt$", payload.architecture):
             raise HTTPException(400, "Unsupported or unsafe model checkpoint name")
+        source_model = None
+        if payload.base_model_id:
+            source_model = con.execute(
+                "SELECT * FROM models WHERE id=? AND project_id=?",
+                (payload.base_model_id, project_id),
+            ).fetchone()
+            if not source_model or not source_model["weights_path"] or not Path(source_model["weights_path"]).is_file():
+                raise HTTPException(409, "Selected fine-tune model has no usable best.pt checkpoint")
         if payload.execution_target == "server" and payload.worker_id:
             raise HTTPException(400, "A laptop worker can only be selected for remote training")
         if payload.worker_id:
@@ -2684,15 +3673,20 @@ def start_training(project_id: str, payload: TrainPayload):
             if not worker:
                 raise HTTPException(404, "Selected laptop worker was not found")
             capabilities = json.loads(worker["capabilities"] or "{}")
-            if payload.execution_target == "remote-gpu" and worker["last_seen"] and not capabilities.get("cuda"):
-                raise HTTPException(400, "Selected laptop worker does not report a CUDA GPU")
+            if payload.execution_target.startswith("colab-") and capabilities.get("provider") != "google-colab":
+                raise HTTPException(400, "Selected worker is not running in Google Colab")
+            if payload.execution_target in {"remote-gpu", "colab-gpu"} and worker["last_seen"] and not capabilities.get("cuda"):
+                raise HTTPException(400, "Selected worker does not report a CUDA GPU")
         annotated = con.execute("SELECT boxes FROM assets WHERE project_id=?", (project_id,)).fetchall()
         if not any(json.loads(row["boxes"]) for row in annotated):
             raise HTTPException(400, "Annotate at least one object before training")
         model_id = uid()
-        display = payload.architecture.replace(".pt", "")
-        con.execute("INSERT INTO models (id,project_id,name,version,status,progress,config,created_at,metrics_history) VALUES (?,?,?,?,?,?,?,?,?)", (model_id, project_id, display, version["number"], "queued", 0, payload.model_dump_json(), now(), "[]"))
-        destination = "NAS/server" if payload.execution_target == "server" else payload.execution_target.replace("remote-", "laptop ")
+        display = f"{source_model['name']} fine-tune" if source_model else payload.architecture.replace(".pt", "")
+        saved_config = payload.model_dump()
+        if payload.execution_target != "server":
+            saved_config["queue_activated_at"] = now()
+        con.execute("INSERT INTO models (id,project_id,name,version,status,progress,config,created_at,metrics_history) VALUES (?,?,?,?,?,?,?,?,?)", (model_id, project_id, display, version["number"], "queued", 0, json.dumps(saved_config), now(), "[]"))
+        destination = "NAS/server" if payload.execution_target == "server" else payload.execution_target.replace("remote-", "worker ").replace("colab-", "Google Colab ")
         log_activity(con, "training.started", f"{display} on version {version['number']} · {destination}", project_id)
         result = project_dict(con, project)
     if payload.execution_target == "server":
@@ -2733,9 +3727,9 @@ def cancel_training(project_id: str, model_id: str):
         if not model or model["status"] not in {"queued", "training"}:
             raise HTTPException(404, "Active training job not found")
         if model["status"] == "queued":
-            con.execute("UPDATE models SET status='cancelled',error='Cancelled by user' WHERE id=?", (model_id,))
+            con.execute("UPDATE models SET status='cancelled',error='Cancelled by user',training_detail=? WHERE id=?", (json.dumps({"stage": "Cancelled"}), model_id))
         elif json.loads(model["config"] or "{}").get("execution_target", "server") != "server":
-            con.execute("UPDATE models SET status='cancelled',error='Cancelled by user' WHERE id=?", (model_id,))
+            con.execute("UPDATE models SET status='cancelled',error='Cancelled by user',training_detail=? WHERE id=?", (json.dumps({"stage": "Cancelled"}), model_id))
         elif event:
             event.set()
         else:
@@ -2760,8 +3754,8 @@ def update_model_lifecycle(project_id: str, model_id: str, payload: ModelLifecyc
         model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
         if not model:
             raise HTTPException(404, "Model not found")
-        if payload.stage in {"staging", "production"} and model["status"] != "ready":
-            raise HTTPException(409, "Only ready models can be promoted")
+        if payload.stage in {"staging", "production"} and (not model["weights_path"] or not Path(model["weights_path"]).is_file()):
+            raise HTTPException(409, "Only models with a usable best.pt can be promoted")
         if payload.stage == "production":
             con.execute("UPDATE models SET stage='staging' WHERE project_id=? AND stage='production' AND id<>?", (project_id, model_id))
         if alias:
@@ -2777,7 +3771,7 @@ def retry_training(project_id: str, model_id: str):
         model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
         if not model:
             raise HTTPException(404, "Model not found")
-        if model["status"] not in {"failed", "cancelled", "ready"}:
+        if model["status"] not in {"failed", "cancelled", "paused"}:
             raise HTTPException(409, "This training run cannot be retried yet")
         try:
             payload = TrainPayload.model_validate_json(model["config"] or "{}")
@@ -2785,7 +3779,17 @@ def retry_training(project_id: str, model_id: str):
             raise HTTPException(400, "Saved training configuration is invalid") from exc
         if not con.execute("SELECT 1 FROM versions WHERE project_id=? AND number=?", (project_id, model["version"])).fetchone():
             raise HTTPException(409, "The dataset version used by this model no longer exists")
-        con.execute("UPDATE models SET status='queued',progress=MIN(progress,95),error=NULL,worker_id=NULL WHERE id=?", (model_id,))
+        saved_config = json.loads(model["config"] or "{}")
+        if payload.execution_target != "server":
+            saved_config["queue_activated_at"] = now()
+        con.execute(
+            "UPDATE models SET status='queued',progress=MIN(progress,95),error=NULL,worker_id=NULL,training_detail=?,config=? WHERE id=?",
+            (
+                json.dumps({"stage": "Waiting for worker"}),
+                json.dumps(saved_config),
+                model_id,
+            ),
+        )
         log_activity(con, "training.resumed", f"{model['name']} from saved checkpoint", project_id)
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         result = project_dict(con, project)
@@ -2812,8 +3816,8 @@ def delete_model(project_id: str, model_id: str):
 def download_model_weights(project_id: str, model_id: str):
     with db() as con:
         model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (model_id, project_id)).fetchone()
-    if not model or model["status"] != "ready" or not model["weights_path"]:
-        raise HTTPException(404, "Ready best.pt weights are unavailable")
+    if not model or not model["weights_path"]:
+        raise HTTPException(404, "best.pt weights are unavailable")
     weights = Path(model["weights_path"]).resolve()
     expected = (RUNS / model_id).resolve()
     if expected not in weights.parents or not weights.is_file():
@@ -2867,7 +3871,7 @@ async def import_model_weights(
 @app.post("/api/projects/{project_id}/models/{model_id}/export")
 def export_model(project_id: str, model_id: str, payload: ModelExportPayload):
     with db() as con:
-        model_row = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND status='ready'", (model_id, project_id)).fetchone()
+        model_row = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (model_id, project_id)).fetchone()
     if not model_row or not model_row["weights_path"] or not Path(model_row["weights_path"]).is_file():
         raise HTTPException(400, "A ready model with weights is required")
     from ultralytics import YOLO
@@ -2878,13 +3882,63 @@ def export_model(project_id: str, model_id: str, payload: ModelExportPayload):
     return FileResponse(exported, filename=exported.name)
 
 
+EVALUATION_ARTIFACTS = {
+    "results.png": "Training metrics",
+    "results.csv": "Metrics data (CSV)",
+    "confusion_matrix.png": "Confusion matrix",
+    "confusion_matrix_normalized.png": "Normalized confusion matrix",
+    "F1_curve.png": "F1 confidence curve",
+    "PR_curve.png": "Precision-recall curve",
+    "P_curve.png": "Precision confidence curve",
+    "R_curve.png": "Recall confidence curve",
+    "labels.jpg": "Label distribution",
+    "labels_correlogram.jpg": "Label correlogram",
+    "args.yaml": "Training configuration",
+}
+
+
+def evaluation_artifact_label(name: str) -> str | None:
+    if name in EVALUATION_ARTIFACTS:
+        return EVALUATION_ARTIFACTS[name]
+    match = re.fullmatch(r"train_batch(\d+)\.jpg", name)
+    if match:
+        return f"Training batch {match.group(1)}"
+    match = re.fullmatch(r"val_batch(\d+)_(labels|pred)\.jpg", name)
+    if match:
+        suffix = "ground truth" if match.group(2) == "labels" else "predictions"
+        return f"Validation batch {match.group(1)} {suffix}"
+    return None
+
+
+@app.get("/api/projects/{project_id}/models/{model_id}/evaluation")
+def list_model_evaluation_artifacts(project_id: str, model_id: str):
+    with db() as con:
+        model = con.execute("SELECT 1 FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (model_id, project_id)).fetchone()
+    run_dir = (RUNS / model_id).resolve()
+    if not model or run_dir.parent != RUNS.resolve() or not run_dir.is_dir():
+        return []
+    artifacts = []
+    for path in run_dir.iterdir():
+        label = evaluation_artifact_label(path.name) if path.is_file() else None
+        if not label:
+            continue
+        artifacts.append({
+            "name": path.name,
+            "label": label,
+            "size": path.stat().st_size,
+            "preview": path.suffix.lower() in {".png", ".jpg", ".jpeg"},
+        })
+    priority = {name: index for index, name in enumerate(EVALUATION_ARTIFACTS)}
+    artifacts.sort(key=lambda item: (priority.get(item["name"], 100), item["name"]))
+    return artifacts
+
+
 @app.get("/api/projects/{project_id}/models/{model_id}/evaluation/{artifact}")
 def model_evaluation_artifact(project_id: str, model_id: str, artifact: str):
-    allowed = {"results.png", "confusion_matrix.png", "confusion_matrix_normalized.png", "F1_curve.png", "PR_curve.png", "P_curve.png", "R_curve.png", "labels.jpg"}
-    if artifact not in allowed:
+    if not evaluation_artifact_label(artifact):
         raise HTTPException(400, "Unsupported evaluation artifact")
     with db() as con:
-        model = con.execute("SELECT 1 FROM models WHERE id=? AND project_id=? AND status='ready'", (model_id, project_id)).fetchone()
+        model = con.execute("SELECT 1 FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (model_id, project_id)).fetchone()
     path = (RUNS / model_id / artifact).resolve()
     if not model or path.parent != (RUNS / model_id).resolve() or not path.is_file():
         raise HTTPException(404, "Evaluation artifact is unavailable for this run")
@@ -2930,7 +3984,7 @@ def deployment_metrics(project_id: str):
 @app.post("/api/projects/{project_id}/infer")
 async def infer(project_id: str, file: UploadFile = File(...), confidence: float = 0.5):
     with db() as con:
-        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+        model = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
     if not model or not model["weights_path"]:
         raise HTTPException(400, "No trained model is ready")
     temp = DATA / f"infer-{uid()}{Path(file.filename or '.jpg').suffix}"
@@ -2980,7 +4034,7 @@ async def secure_infer(project_id: str, file: UploadFile = File(...), confidence
             raise HTTPException(429, f"Rate limit exceeded ({DEPLOY_RATE_LIMIT} requests/minute)")
         bucket.append(time.time())
         con.execute("UPDATE api_keys SET last_used=? WHERE id=?", (now(), valid["id"]))
-        model = con.execute("SELECT id FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+        model = con.execute("SELECT id FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
     try:
         result = await infer(project_id, file, confidence)
         with db() as con:
@@ -3000,9 +4054,9 @@ def auto_label(project_id: str, payload: AutoLabelPayload):
         if not project:
             raise HTTPException(404, "Project not found")
         if payload.model_id:
-            model_row = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND status='ready'", (payload.model_id, project_id)).fetchone()
+            model_row = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (payload.model_id, project_id)).fetchone()
         else:
-            model_row = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+            model_row = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
         weights = model_row["weights_path"] if model_row and model_row["weights_path"] else ("yolo11n-seg.pt" if project["type"] == "Instance Segmentation" else "yolo11n.pt")
         assets = list(con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid LIMIT ?", (project_id, payload.limit)))
         if not payload.overwrite:
@@ -3200,9 +4254,9 @@ async def run_workflow(workflow_id: str, file: UploadFile = File(...), confidenc
         model_node = next((node for node in nodes if node.get("type") == "model"), None)
         requested_project = (model_node or {}).get("projectId")
         if requested_project:
-            model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY rowid DESC LIMIT 1", (requested_project,)).fetchone()
+            model = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY rowid DESC LIMIT 1", (requested_project,)).fetchone()
         else:
-            model = con.execute("SELECT * FROM models WHERE status='ready' ORDER BY rowid DESC LIMIT 1").fetchone()
+            model = con.execute("SELECT * FROM models WHERE weights_path IS NOT NULL ORDER BY rowid DESC LIMIT 1").fetchone()
     if not model or not model["weights_path"]:
         raise HTTPException(400, "Workflow requires a ready model")
     temp = DATA / f"workflow-{uid()}{Path(file.filename or '.jpg').suffix}"
@@ -3282,7 +4336,7 @@ async def infer_video(project_id: str, file: UploadFile = File(...), confidence:
     if Path(file.filename or "").suffix.lower() not in {".mp4", ".mov", ".webm", ".avi"}:
         raise HTTPException(400, "Upload an MP4, MOV, WEBM, or AVI video")
     with db() as con:
-        model = con.execute("SELECT * FROM models WHERE project_id=? AND status='ready' ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+        model = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
     if not model or not model["weights_path"]:
         raise HTTPException(400, "No trained model is ready")
     temp = DATA / f"video-infer-{uid()}{Path(file.filename or '.mp4').suffix}"
@@ -3294,15 +4348,34 @@ async def infer_video(project_id: str, file: UploadFile = File(...), confidence:
                 temp.unlink(missing_ok=True)
                 raise HTTPException(413, "Video exceeds 4 GB")
             output.write(chunk)
+    capture = None
+    writer = None
+    working_output: Path | None = None
+    final_output: Path | None = None
     try:
         import cv2
         from ultralytics import YOLO
         capture = cv2.VideoCapture(str(temp))
         fps = max(1, round(capture.get(cv2.CAP_PROP_FPS) or 1))
+        width = max(1, round(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 1))
+        height = max(1, round(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1))
         stride = fps * max(1, frame_interval)
+        output_id = uid()
+        working_output = EXPORTS / f"{project_id}-detection-{output_id}.working.mp4"
+        final_output = EXPORTS / f"{project_id}-detection-{output_id}.mp4"
+        output_fps = float(fps)
+        writer = cv2.VideoWriter(
+            str(working_output),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            output_fps,
+            (width, height),
+        )
+        if not writer.isOpened():
+            raise HTTPException(500, "Could not create annotated video output")
         detector = YOLO(model["weights_path"])
         frame_index = 0
         sampled = 0
+        latest_result = None
         timeline = []
         totals: dict[str, int] = {}
         while capture.isOpened() and sampled < 300:
@@ -3311,6 +4384,7 @@ async def infer_video(project_id: str, file: UploadFile = File(...), confidence:
                 break
             if frame_index % stride == 0:
                 result = detector(frame, conf=confidence, verbose=False)[0]
+                latest_result = result
                 counts: dict[str, int] = {}
                 detection = result.obb if result.obb is not None else result.boxes
                 if result.probs is not None:
@@ -3324,11 +4398,86 @@ async def infer_video(project_id: str, file: UploadFile = File(...), confidence:
                     totals[name] = totals.get(name, 0) + count
                 timeline.append({"second": round(frame_index / fps, 2), "counts": counts})
                 sampled += 1
+            annotated_frame = latest_result.plot(img=frame.copy()) if latest_result is not None else frame
+            if annotated_frame.shape[1] != width or annotated_frame.shape[0] != height:
+                annotated_frame = cv2.resize(annotated_frame, (width, height))
+            writer.write(annotated_frame)
             frame_index += 1
         capture.release()
-        return {"sampledFrames": sampled, "durationSeconds": round(frame_index / fps, 2), "frameInterval": max(1, frame_interval), "totals": totals, "timeline": timeline}
+        capture = None
+        writer.release()
+        writer = None
+        if sampled == 0 or not working_output.is_file():
+            raise HTTPException(400, "Video contains no readable frames")
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            converted = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(working_output),
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "23",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(final_output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+            if converted.returncode != 0:
+                working_output.replace(final_output)
+            else:
+                working_output.unlink(missing_ok=True)
+        else:
+            working_output.replace(final_output)
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(file.filename or "video").stem).strip("-.")[:80] or "video"
+        return {
+            "sampledFrames": sampled,
+            "durationSeconds": round(frame_index / fps, 2),
+            "frameInterval": max(1, frame_interval),
+            "totals": totals,
+            "timeline": timeline,
+            "annotatedVideoUrl": f"/api/projects/{project_id}/infer/video/results/{output_id}",
+            "annotatedVideoName": f"{safe_stem}-detected.mp4",
+        }
     finally:
+        if capture is not None:
+            capture.release()
+        if writer is not None:
+            writer.release()
+        if working_output is not None:
+            working_output.unlink(missing_ok=True)
         temp.unlink(missing_ok=True)
+
+
+@app.get("/api/projects/{project_id}/infer/video/results/{output_id}")
+def inference_video_result(project_id: str, output_id: str, download: bool = False):
+    if not re.fullmatch(r"[a-f0-9]{12}", output_id):
+        raise HTTPException(400, "Invalid video result id")
+    with db() as con:
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+    target = (EXPORTS / f"{project_id}-detection-{output_id}.mp4").resolve()
+    if target.parent != EXPORTS.resolve() or not target.is_file():
+        raise HTTPException(404, "Annotated video result not found")
+    return FileResponse(
+        target,
+        media_type="video/mp4",
+        filename=f"{project_id}-detected.mp4" if download else None,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 def workflow_scheduler_loop() -> None:
@@ -3342,7 +4491,7 @@ def workflow_scheduler_loop() -> None:
                 model_node = next((node for node in nodes if node.get("type") == "model"), None)
                 project_id = (model_node or {}).get("projectId")
                 with db() as con:
-                    asset = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid DESC LIMIT 1", (project_id,)).fetchone() if project_id else con.execute("SELECT a.* FROM assets a JOIN models m ON m.project_id=a.project_id WHERE m.status='ready' ORDER BY CASE m.stage WHEN 'production' THEN 0 ELSE 1 END,m.rowid DESC,a.rowid DESC LIMIT 1").fetchone()
+                    asset = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid DESC LIMIT 1", (project_id,)).fetchone() if project_id else con.execute("SELECT a.* FROM assets a JOIN models m ON m.project_id=a.project_id WHERE m.weights_path IS NOT NULL ORDER BY CASE m.stage WHEN 'production' THEN 0 ELSE 1 END,m.rowid DESC,a.rowid DESC LIMIT 1").fetchone()
                     next_run = (datetime.now(timezone.utc) + timedelta(minutes=schedule["interval_minutes"])).isoformat()
                     con.execute("UPDATE workflow_schedules SET next_run=?,last_run=? WHERE id=?", (next_run, now(), schedule["id"]))
                 if not asset or not Path(asset["path"]).is_file():
@@ -3360,7 +4509,7 @@ def root():
     frontend = ROOT / "dist" / "index.html"
     if frontend.is_file():
         return FileResponse(frontend)
-    return {"name": "Roboflow Local API", "docs": "/docs", "health": "/api/health"}
+    return {"name": "Salnova API", "docs": "/docs", "health": "/api/health"}
 
 
 if (ROOT / "dist" / "assets").is_dir():

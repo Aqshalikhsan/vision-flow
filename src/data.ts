@@ -24,7 +24,7 @@ export const starterProjects: Project[] = [
     models: [
       {
         id: "m1",
-        name: "VisionFlow Detect Fast",
+        name: "Salnova Detect Fast",
         version: 1,
         status: "ready",
         progress: 100,

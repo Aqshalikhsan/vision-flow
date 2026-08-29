@@ -1273,6 +1273,10 @@ main {
   background: #eee9ff;
   color: #694be0;
 }
+.run-head > span.paused {
+  background: #fff7df;
+  color: #a66a00;
+}
 .run-head svg {
   width: 17px;
 }
@@ -1295,6 +1299,20 @@ main {
 }
 .run .big-meter {
   margin-top: 13px;
+}
+.training-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 8px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.training-detail span {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #faf9fc;
 }
 .metrics {
   display: grid;

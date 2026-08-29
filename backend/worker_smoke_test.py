@@ -76,7 +76,7 @@ def main(checkpoint: Path | None = None) -> None:
             requests.post(
                 f"{BASE}/api/training-workers/agent/heartbeat",
                 headers=headers,
-                json={"capabilities": {"cuda": False, "cpu": "Smoke CPU", "platform": "test"}},
+                json={"capabilities": {"cuda": False, "cpu": "Smoke CPU", "platform": "test", "provider": "google-colab"}},
                 timeout=10,
             )
         )
@@ -88,7 +88,7 @@ def main(checkpoint: Path | None = None) -> None:
                     "epochs": 1,
                     "image_size": 160,
                     "version_id": version_id,
-                    "execution_target": "remote-cpu",
+                    "execution_target": "colab-cpu",
                     "worker_id": workers[0]["id"],
                 },
                 timeout=15,
@@ -100,7 +100,7 @@ def main(checkpoint: Path | None = None) -> None:
         job = checked(
             requests.post(f"{BASE}/api/training-workers/agent/claim", headers=headers, timeout=15)
         ).json()
-        assert job["id"] == model["id"] and job["config"]["execution_target"] == "remote-cpu"
+        assert job["id"] == model["id"] and job["config"]["execution_target"] == "colab-cpu"
         forbidden = requests.get(
             f"{BASE}{job['datasetUrl']}", headers=other_headers, timeout=15
         )
@@ -115,7 +115,16 @@ def main(checkpoint: Path | None = None) -> None:
             requests.post(
                 f"{BASE}/api/training-workers/agent/jobs/{model['id']}/progress",
                 headers=headers,
-                json={"progress": 42, "epoch": 1, "metrics": {"metrics/mAP50(B)": 0.5}},
+                json={
+                    "progress": 42,
+                    "epoch": 1,
+                    "total_epochs": 10,
+                    "batch": 12,
+                    "total_batches": 40,
+                    "stage": "Training batches",
+                    "loss": 1.2345,
+                    "metrics": {"metrics/mAP50(B)": 0.5},
+                },
                 timeout=10,
             )
         )
@@ -123,6 +132,14 @@ def main(checkpoint: Path | None = None) -> None:
         current_model = next(item for item in current["models"] if item["id"] == model["id"])
         assert current_model["status"] == "training" and current_model["progress"] == 42
         assert current_model["workerId"] == workers[0]["id"]
+        assert current_model["trainingDetail"] == {
+            "stage": "Training batches",
+            "epoch": 1,
+            "totalEpochs": 10,
+            "batch": 12,
+            "totalBatches": 40,
+            "loss": 1.2345,
+        }
 
         if checkpoint:
             with checkpoint.open("rb") as best_pt:
@@ -148,6 +165,74 @@ def main(checkpoint: Path | None = None) -> None:
                 )
             ).content
             assert len(downloaded) == checkpoint.stat().st_size
+            resumed_project = checked(
+                requests.post(
+                    f"{BASE}/api/projects/{project_id}/train",
+                    json={
+                        "architecture": "yolo11n.pt",
+                        "epochs": 5,
+                        "image_size": 160,
+                        "version_id": version_id,
+                        "execution_target": "colab-cpu",
+                        "worker_id": workers[0]["id"],
+                        "base_model_id": model["id"],
+                        "freeze_layers": 3,
+                        "weight_decay": 0.001,
+                        "cos_lr": True,
+                        "close_mosaic": 2,
+                        "amp": False,
+                    },
+                    timeout=15,
+                )
+            ).json()
+            paused_model = resumed_project["models"][-1]
+            paused_job = checked(
+                requests.post(f"{BASE}/api/training-workers/agent/claim", headers=headers, timeout=15)
+            ).json()
+            assert paused_job["id"] == paused_model["id"]
+            assert paused_job["baseWeightsUrl"] and paused_job["config"]["freeze_layers"] == 3
+            checked(
+                requests.post(
+                    f"{BASE}/api/projects/{project_id}/models/{paused_model['id']}/cancel", timeout=10
+                )
+            )
+            for kind in ("last", "best"):
+                with checkpoint.open("rb") as saved_checkpoint:
+                    checked(
+                        requests.post(
+                            f"{BASE}/api/training-workers/agent/jobs/{paused_model['id']}/checkpoint/{kind}",
+                            headers={**headers, "Content-Type": "application/octet-stream"},
+                            data=saved_checkpoint,
+                            timeout=1800,
+                        )
+                    )
+            paused = checked(
+                requests.post(
+                    f"{BASE}/api/training-workers/agent/jobs/{paused_model['id']}/paused",
+                    headers=headers,
+                    timeout=10,
+                )
+            ).json()
+            assert paused["status"] == "paused"
+            paused_project = checked(requests.get(f"{BASE}/api/projects/{project_id}", timeout=10)).json()
+            saved_model = next(item for item in paused_project["models"] if item["id"] == paused_model["id"])
+            assert saved_model["deployable"] is True and saved_model["resumable"] is True
+            checked(
+                requests.post(
+                    f"{BASE}/api/projects/{project_id}/models/{paused_model['id']}/retry", timeout=10
+                )
+            )
+            resumed_job = checked(
+                requests.post(f"{BASE}/api/training-workers/agent/claim", headers=headers, timeout=15)
+            ).json()
+            assert resumed_job["id"] == paused_model["id"] and resumed_job["resumeUrl"]
+            checked(
+                requests.post(
+                    f"{BASE}/api/projects/{project_id}/models/{paused_model['id']}/cancel", timeout=10
+                )
+            )
+            print("Remote worker checkpoint upload smoke test passed")
+            return
         else:
             checked(
                 requests.post(f"{BASE}/api/projects/{project_id}/models/{model['id']}/cancel", timeout=10)
@@ -172,7 +257,7 @@ def main(checkpoint: Path | None = None) -> None:
             requests.post(
                 f"{BASE}/api/training-workers/agent/heartbeat",
                 headers=other_headers,
-                json={"capabilities": {"cuda": False, "cpu": "Other CPU", "platform": "test"}},
+                json={"capabilities": {"cuda": False, "cpu": "Other CPU", "platform": "test", "provider": "google-colab"}},
                 timeout=10,
             )
         )

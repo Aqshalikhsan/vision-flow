@@ -44,7 +44,7 @@ export type Model = {
   id: string;
   name: string;
   version: number;
-  status: "queued" | "training" | "ready" | "failed" | "cancelled";
+  status: "queued" | "training" | "ready" | "paused" | "failed" | "cancelled";
   progress: number;
   map: number;
   precision: number;
@@ -56,6 +56,21 @@ export type Model = {
   alias?: string;
   stage?: "development" | "staging" | "production" | "archived";
   workerId?: string;
+  deployable?: boolean;
+  resumable?: boolean;
+  trainingDetail?: {
+    stage?: string;
+    epoch?: number;
+    totalEpochs?: number;
+    batch?: number;
+    totalBatches?: number;
+    loss?: number;
+    archivePercent?: number;
+    processedFiles?: number;
+    totalFiles?: number;
+    processedBytes?: number;
+    totalBytes?: number;
+  };
 };
 export type Project = {
   id: string;

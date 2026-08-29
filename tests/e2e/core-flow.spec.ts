@@ -186,7 +186,7 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   const trainingLocation = page.getByLabel("Training location");
   await expect(trainingLocation).toBeVisible();
   await trainingLocation.selectOption("remote-auto");
-  await expect(page.getByLabel("Laptop worker")).toBeVisible();
+  await expect(page.getByLabel("External worker")).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

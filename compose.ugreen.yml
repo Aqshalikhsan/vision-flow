@@ -8,6 +8,14 @@ services:
     environment:
       VISIONFLOW_REQUIRE_AUTH: "1"
       VISIONFLOW_RATE_LIMIT: "120"
+      VISIONFLOW_SMTP_HOST: "smtp.gmail.com"
+      VISIONFLOW_SMTP_PORT: "587"
+      VISIONFLOW_SMTP_USERNAME: "${VISIONFLOW_SMTP_USERNAME:-}"
+      VISIONFLOW_SMTP_PASSWORD: "${VISIONFLOW_SMTP_PASSWORD:-}"
+      VISIONFLOW_SMTP_FROM: "${VISIONFLOW_SMTP_FROM:-}"
+      VISIONFLOW_OTP_SECRET: "${VISIONFLOW_OTP_SECRET:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      VISIONFLOW_GEMINI_MODEL: "${VISIONFLOW_GEMINI_MODEL:-gemini-3.6-flash}"
       TZ: Asia/Jakarta
     volumes:
       - ./visionflow-data:/app/local_data

@@ -32,6 +32,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--server", default=os.getenv("VISIONFLOW_SERVER", "http://127.0.0.1:8000"))
     parser.add_argument("--token", default=os.getenv("VISIONFLOW_WORKER_TOKEN"))
     parser.add_argument("--work-dir", default=os.getenv("VISIONFLOW_WORK_DIR", "visionflow-worker-data"))
+    parser.add_argument(
+        "--provider",
+        default=os.getenv("VISIONFLOW_WORKER_PROVIDER", "local"),
+        choices=("local", "google-colab", "cloud-vm"),
+    )
     parser.add_argument("--poll-seconds", type=max_poll, default=10)
     parser.add_argument("--once", action="store_true", help="Exit after one job or one empty claim")
     parser.add_argument("--keep-jobs", action="store_true", help="Keep successful run directories")
@@ -49,7 +54,7 @@ def max_poll(value: str) -> int:
 
 
 class VisionFlowWorker:
-    def __init__(self, server: str, token: str, work_dir: Path, keep_jobs: bool):
+    def __init__(self, server: str, token: str, work_dir: Path, keep_jobs: bool, provider: str = "local"):
         self.server = server.rstrip("/")
         self.headers = {"Authorization": f"Bearer {token}"}
         self.work_dir = work_dir.resolve()
@@ -57,11 +62,16 @@ class VisionFlowWorker:
         self.keep_jobs = keep_jobs
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        cuda_available = torch.cuda.is_available()
         self.capabilities = {
-            "cuda": torch.cuda.is_available(),
-            "gpuName": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "",
+            "cuda": cuda_available,
+            "gpuName": torch.cuda.get_device_name(0) if cuda_available else "",
+            "gpuCount": torch.cuda.device_count() if cuda_available else 0,
+            "torchVersion": torch.__version__,
+            "cudaVersion": torch.version.cuda or "",
             "cpu": platform.processor() or platform.machine(),
             "platform": f"{platform.system()} {platform.release()}",
+            "provider": provider,
         }
 
     def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
@@ -89,12 +99,132 @@ class VisionFlowWorker:
             print(f"[worker] status check unavailable; training continues: {exc}", flush=True)
             return False
 
-    def download_dataset(self, job: dict[str, Any], destination: Path) -> Path:
-        archive = destination / "dataset.zip"
-        with self.request("GET", job["datasetUrl"], stream=True, timeout=300) as response, archive.open("wb") as output:
+    def download_checkpoint(self, path: str, destination: Path) -> None:
+        with self.request("GET", path, stream=True, timeout=(30, 3600)) as response, destination.open("wb") as output:
             for chunk in response.iter_content(1024 * 1024):
                 if chunk:
                     output.write(chunk)
+
+    def upload_recovery_checkpoints(self, model_id: str, weights_dir: Path) -> bool:
+        uploaded_last = False
+        for kind in ("last", "best"):
+            checkpoint_path = weights_dir / f"{kind}.pt"
+            if not checkpoint_path.is_file():
+                continue
+            try:
+                with checkpoint_path.open("rb") as checkpoint:
+                    self.request(
+                        "POST",
+                        f"/api/training-workers/agent/jobs/{model_id}/checkpoint/{kind}",
+                        data=checkpoint,
+                        headers={"Content-Type": "application/octet-stream"},
+                        timeout=1800,
+                    )
+                uploaded_last = uploaded_last or kind == "last"
+                print(f"[worker] recovery {kind}.pt uploaded", flush=True)
+            except requests.RequestException as exc:
+                print(f"[worker] could not upload recovery {kind}.pt: {exc}", flush=True)
+        return uploaded_last
+
+    def download_dataset(self, job: dict[str, Any], destination: Path) -> Path:
+        archive = destination / "dataset.zip"
+        model_id = job["id"]
+        print(
+            "[worker] preparing dataset archive; large versions can take several minutes before download starts",
+            flush=True,
+        )
+        preparation_stop = threading.Event()
+
+        def show_preparation_progress() -> None:
+            last_signature: tuple[Any, ...] | None = None
+            while not preparation_stop.wait(2):
+                try:
+                    response = requests.get(
+                        self.server + f"/api/training-workers/agent/jobs/{model_id}",
+                        headers=self.headers,
+                        timeout=15,
+                    )
+                    response.raise_for_status()
+                    detail = response.json().get("trainingDetail") or {}
+                    signature = (
+                        detail.get("stage"),
+                        detail.get("archivePercent"),
+                        detail.get("processedFiles"),
+                    )
+                    if signature == last_signature or not detail.get("stage"):
+                        continue
+                    message = f"[worker] {detail['stage']}"
+                    if detail.get("archivePercent") is not None:
+                        message += f" {detail['archivePercent']}%"
+                    if detail.get("totalFiles"):
+                        message += (
+                            f" · {detail.get('processedFiles', 0):,}/"
+                            f"{detail['totalFiles']:,} files"
+                        )
+                    print(message, flush=True)
+                    last_signature = signature
+                except requests.RequestException:
+                    continue
+
+        preparation_thread = threading.Thread(
+            target=show_preparation_progress,
+            daemon=True,
+        )
+        preparation_thread.start()
+        downloaded = 0
+        last_reported = -1
+        try:
+            response = self.request(
+                "GET",
+                job["datasetUrl"],
+                stream=True,
+                timeout=(30, 3600),
+            )
+        finally:
+            preparation_stop.set()
+            preparation_thread.join(timeout=2)
+        with response, archive.open("wb") as output:
+            total = int(response.headers.get("Content-Length", "0") or 0)
+            for chunk in response.iter_content(1024 * 1024):
+                if chunk:
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    if total:
+                        percent = downloaded * 100 // total
+                        if percent >= last_reported + 10:
+                            print(
+                                f"[worker] dataset download {percent}% "
+                                f"({downloaded / 1024**3:.2f}/{total / 1024**3:.2f} GB)",
+                                flush=True,
+                            )
+                            try:
+                                requests.post(
+                                    self.server
+                                    + f"/api/training-workers/agent/jobs/{model_id}/progress",
+                                    headers=self.headers,
+                                    json={
+                                        "progress": 5,
+                                        "stage": f"Downloading dataset {percent}%",
+                                        "metrics": {},
+                                    },
+                                    timeout=15,
+                                ).raise_for_status()
+                            except requests.RequestException:
+                                pass
+                            last_reported = percent
+        print(
+            f"[worker] dataset downloaded ({downloaded / 1024**3:.2f} GB); extracting",
+            flush=True,
+        )
+        try:
+            self.request(
+                "POST",
+                f"/api/training-workers/agent/jobs/{model_id}/progress",
+                json={"progress": 5, "stage": "Extracting dataset", "metrics": {}},
+                timeout=15,
+            )
+        except requests.RequestException:
+            pass
         dataset = destination / "dataset"
         dataset.mkdir()
         with zipfile.ZipFile(archive) as bundle:
@@ -144,49 +274,134 @@ class VisionFlowWorker:
         if job_dir.parent != self.work_dir:
             raise RuntimeError("invalid remote job identifier")
         last_checkpoint = job_dir / "run" / "weights" / "last.pt"
-        resume = last_checkpoint.is_file() and (job_dir / "dataset").is_dir()
-        if job_dir.exists() and not resume:
+        dataset_dir = job_dir / "dataset"
+        if job_dir.exists() and not last_checkpoint.is_file() and not dataset_dir.is_dir():
             shutil.rmtree(job_dir)
         job_dir.mkdir(parents=True, exist_ok=True)
+        if job.get("resumeUrl") and not last_checkpoint.is_file():
+            last_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            print("[worker] downloading resumable last.pt", flush=True)
+            self.download_checkpoint(job["resumeUrl"], last_checkpoint)
+        resume = last_checkpoint.is_file()
         action = "resuming" if resume else "claimed"
         print(f"[worker] {action} {model_id}: {job['projectName']} v{job['version']}", flush=True)
-        dataset = job_dir / "dataset" if resume else self.download_dataset(job, job_dir)
+        dataset = dataset_dir if dataset_dir.is_dir() else self.download_dataset(job, job_dir)
         target = config.get("execution_target", "remote-auto")
-        if target == "remote-gpu":
+        if target in {"remote-gpu", "colab-gpu"}:
             if not self.capabilities["cuda"]:
-                raise RuntimeError("job requires CUDA but this laptop has no available CUDA device")
+                raise RuntimeError(
+                    "job requires CUDA, but this worker cannot access an NVIDIA GPU; "
+                    f"PyTorch {torch.__version__}, CUDA runtime {torch.version.cuda or 'none'}"
+                )
             device: str | int = 0
-        elif target == "remote-cpu":
+        elif target in {"remote-cpu", "colab-cpu"}:
             device = "cpu"
         else:
             device = 0 if self.capabilities["cuda"] else "cpu"
         task_data: str = str(dataset if "Classification" in job["projectType"] else dataset / "data.yaml")
-        model = YOLO(str(last_checkpoint) if resume else config["architecture"])
+        try:
+            self.request(
+                "POST",
+                f"/api/training-workers/agent/jobs/{model_id}/progress",
+                json={"progress": 5, "stage": "Loading model checkpoint", "metrics": {}},
+                timeout=15,
+            )
+        except requests.RequestException:
+            pass
+        initial_checkpoint: str = config["architecture"]
+        if resume:
+            initial_checkpoint = str(last_checkpoint)
+        elif job.get("recoveryUrl"):
+            recovery = job_dir / "recovery-best.pt"
+            print("[worker] last.pt unavailable; recovering from best.pt with a fresh optimizer", flush=True)
+            self.download_checkpoint(job["recoveryUrl"], recovery)
+            initial_checkpoint = str(recovery)
+        elif job.get("baseWeightsUrl"):
+            fine_tune_base = job_dir / "fine-tune-base.pt"
+            print("[worker] downloading fine-tune base best.pt", flush=True)
+            self.download_checkpoint(job["baseWeightsUrl"], fine_tune_base)
+            initial_checkpoint = str(fine_tune_base)
+        model = YOLO(initial_checkpoint)
         cancelled = False
+        current_batch = 0
+        last_batch_report = 0.0
 
-        def on_epoch_end(trainer: Any) -> None:
-            nonlocal cancelled
+        def upload_progress(
+            trainer: Any,
+            stage: str,
+            metrics: dict[str, float] | None = None,
+            force: bool = False,
+        ) -> None:
+            nonlocal cancelled, last_batch_report
+            timestamp = time.monotonic()
+            if not force and timestamp - last_batch_report < 2:
+                return
+            # Check cancellation before posting progress: the server intentionally
+            # rejects progress after the UI has requested a pause.
+            cancelled = self.job_cancelled(model_id)
+            if cancelled:
+                trainer.stop = True
+                return
             epoch = int(trainer.epoch) + 1
             epochs = max(1, int(config["epochs"]))
-            progress = min(98, 5 + round(epoch / epochs * 92))
+            total_batches = len(trainer.train_loader)
+            progress = min(
+                98,
+                5 + round(((epoch - 1) + current_batch / max(1, total_batches)) / epochs * 92),
+            )
+            loss_value = getattr(trainer, "loss", None)
+            try:
+                loss = float(loss_value.detach().sum().cpu())
+            except (AttributeError, TypeError, ValueError):
+                loss = None
+            self.request(
+                "POST",
+                f"/api/training-workers/agent/jobs/{model_id}/progress",
+                json={
+                    "progress": max(5, progress),
+                    "epoch": epoch,
+                    "total_epochs": epochs,
+                    "batch": current_batch,
+                    "total_batches": total_batches,
+                    "stage": stage,
+                    "loss": loss,
+                    "metrics": metrics or {},
+                },
+                timeout=20,
+            )
+            print(
+                f"[worker] {stage} · epoch {epoch}/{epochs} · "
+                f"batch {current_batch}/{total_batches}"
+                + (f" · loss {loss:.4f}" if loss is not None else ""),
+                flush=True,
+            )
+            last_batch_report = timestamp
+
+        def on_epoch_start(trainer: Any) -> None:
+            nonlocal current_batch
+            current_batch = 0
+
+        def on_batch_end(trainer: Any) -> None:
+            nonlocal current_batch
+            current_batch += 1
+            try:
+                upload_progress(trainer, "Training batches")
+            except requests.RequestException as exc:
+                print(f"[worker] batch progress will retry: {exc}", flush=True)
+
+        def on_epoch_end(trainer: Any) -> None:
             metrics = {
                 key: float(value)
                 for key, value in (getattr(trainer, "metrics", {}) or {}).items()
                 if isinstance(value, numbers.Real)
             }
             try:
-                self.request(
-                    "POST",
-                    f"/api/training-workers/agent/jobs/{model_id}/progress",
-                    json={"progress": progress, "epoch": epoch, "metrics": metrics},
-                    timeout=20,
-                )
-                cancelled = self.job_cancelled(model_id)
-                if cancelled:
-                    trainer.stop = True
+                upload_progress(trainer, "Validating epoch", metrics, force=True)
             except requests.RequestException as exc:
                 print(f"[worker] progress upload will retry next epoch: {exc}", flush=True)
 
+        model.add_callback("on_train_epoch_start", on_epoch_start)
+        model.add_callback("on_train_batch_end", on_batch_end)
         model.add_callback("on_train_epoch_end", on_epoch_end)
         if resume:
             result = model.train(resume=True, device=device, workers=0, verbose=True)
@@ -199,16 +414,29 @@ class VisionFlowWorker:
                 optimizer=config.get("optimizer", "auto"),
                 lr0=float(config.get("learning_rate", 0.01)),
                 patience=int(config.get("patience", 50)),
+                weight_decay=float(config.get("weight_decay", 0.0005)),
+                cos_lr=bool(config.get("cos_lr", False)),
+                close_mosaic=int(config.get("close_mosaic", 10)),
+                amp=bool(config.get("amp", True)),
+                freeze=int(config.get("freeze_layers", 0)) or None,
                 device=device,
                 project=str(job_dir),
                 name="run",
                 exist_ok=True,
                 plots=True,
+                save_period=1,
                 verbose=True,
                 workers=0,
             )
         if cancelled or self.job_cancelled(model_id):
-            raise TrainingCancelled("job cancelled from VisionFlow")
+            uploaded = self.upload_recovery_checkpoints(model_id, Path(result.save_dir) / "weights")
+            try:
+                self.request("POST", f"/api/training-workers/agent/jobs/{model_id}/paused", timeout=30)
+            except requests.RequestException as exc:
+                print(f"[worker] could not finalize paused state: {exc}", flush=True)
+            raise TrainingCancelled(
+                "training paused with last.pt checkpoint" if uploaded else "training stopped before a resumable checkpoint was available"
+            )
         weights = Path(result.save_dir) / "weights" / "best.pt"
         if not weights.is_file():
             raise RuntimeError("Ultralytics did not produce weights/best.pt")
@@ -249,9 +477,24 @@ class VisionFlowWorker:
 
 def main() -> int:
     args = parse_args()
-    worker = VisionFlowWorker(args.server, args.token, Path(args.work_dir), args.keep_jobs)
+    worker = VisionFlowWorker(
+        args.server,
+        args.token,
+        Path(args.work_dir),
+        args.keep_jobs,
+        args.provider,
+    )
     hardware = worker.capabilities["gpuName"] or worker.capabilities["cpu"]
-    print(f"[worker] connecting to {worker.server} with {hardware}", flush=True)
+    acceleration = (
+        f"CUDA {worker.capabilities['cudaVersion']}"
+        if worker.capabilities["cuda"]
+        else "CPU only (CUDA unavailable)"
+    )
+    print(
+        f"[worker] connecting to {worker.server} with {hardware} | "
+        f"PyTorch {worker.capabilities['torchVersion']} | {acceleration}",
+        flush=True,
+    )
     while True:
         try:
             worker.heartbeat()
@@ -268,6 +511,10 @@ def main() -> int:
                 print(f"[worker] {exc}", flush=True)
             except Exception as exc:
                 print(f"[worker] job failed: {exc}", file=sys.stderr, flush=True)
+                worker.upload_recovery_checkpoints(
+                    job["id"],
+                    worker.work_dir / job["id"] / "run" / "weights",
+                )
                 worker.report_failure(job["id"], exc)
             if args.once:
                 return 0

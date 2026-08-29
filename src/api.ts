@@ -24,11 +24,31 @@ export type WorkspaceMember = {
   role: "owner" | "admin" | "annotator" | "viewer";
   createdAt: string;
   hasPassword?: boolean;
+  emailVerified?: boolean;
+  onboardingCompleted?: boolean;
+  avatarUrl?: string | null;
 };
 export type AuthStatus = {
   required: boolean;
   setupRequired: boolean;
   member?: WorkspaceMember | null;
+};
+export type ProjectCollaboration = {
+  invites: Array<{ id: string; code: string; created_at: string; expires_at: string }>;
+  requests: Array<{
+    id: string;
+    status: string;
+    created_at: string;
+    member_id: string;
+    name: string;
+    email: string;
+  }>;
+  collaborators: Array<{
+    id: string;
+    name: string;
+    email: string;
+    added_at: string;
+  }>;
 };
 export type ActivityEntry = {
   id: string;
@@ -57,6 +77,20 @@ export type DatasetHealth = {
   splitCounts: Record<string, number>;
   imbalanceRatio: number;
   averageBlurScore: number;
+};
+export type DatasetHealthProgress = {
+  scanning: boolean;
+  progress: number;
+  processed: number;
+  total: number;
+  stage: string;
+  etaSeconds: number;
+};
+export type EvaluationArtifact = {
+  name: string;
+  label: string;
+  size: number;
+  preview: boolean;
 };
 export type AnnotationJob = {
   id: string;
@@ -88,8 +122,12 @@ export type TrainingWorker = {
   capabilities: {
     cuda?: boolean;
     gpuName?: string;
+    gpuCount?: number;
+    torchVersion?: string;
+    cudaVersion?: string;
     cpu?: string;
     platform?: string;
+    provider?: "local" | "google-colab" | "cloud-vm";
   };
   status: "online" | "busy" | "offline" | "revoked";
   currentModelId?: string;
@@ -99,12 +137,10 @@ export type TrainingWorker = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const role =
-    typeof localStorage === "undefined"
-      ? "owner"
-      : localStorage.getItem("vf-active-role") || "owner";
   const headers = new Headers(init?.headers);
-  headers.set("X-Workspace-Role", role);
+  // Keep compatibility with older local backends without trusting a stale
+  // browser role. Every Salnova account has the same capabilities.
+  headers.set("X-Workspace-Role", "owner");
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
@@ -121,13 +157,9 @@ function uploadRequest<T>(
   onProcessing?: () => void,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const role =
-      typeof localStorage === "undefined"
-        ? "owner"
-        : localStorage.getItem("vf-active-role") || "owner";
     const xhr = new XMLHttpRequest();
     xhr.open("POST", path);
-    xhr.setRequestHeader("X-Workspace-Role", role);
+    xhr.setRequestHeader("X-Workspace-Role", "owner");
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable)
         onProgress?.(Math.round((event.loaded / event.total) * 100));
@@ -175,9 +207,80 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     }),
+  register: (name: string, email: string, password: string) =>
+    request<{ token: string; member: WorkspaceMember }>("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, password }),
+    }),
+  requestOtp: (email: string, name?: string) =>
+    request<{ status: string; expiresIn: number; devCode?: string }>(
+      "/api/auth/otp/request",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, name: name || undefined }),
+      },
+    ),
+  verifyOtp: (email: string, code: string, name?: string) =>
+    request<{ token: string; member: WorkspaceMember }>(
+      "/api/auth/otp/verify",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code, name: name || undefined }),
+      },
+    ),
+  completeOnboarding: () =>
+    request<WorkspaceMember>("/api/auth/onboarding/complete", {
+      method: "POST",
+    }),
+  uploadProfilePhoto: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<WorkspaceMember>("/api/auth/profile/avatar", {
+      method: "POST",
+      body,
+    });
+  },
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+  assistantChat: (
+    messages: Array<{ role: "user" | "assistant"; content: string }>,
+    context: string,
+  ) =>
+    request<{ reply: string; model: string }>("/api/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, context }),
+    }),
   health: () => request<{ status: string; mlReady: boolean }>("/api/health"),
   projects: () => request<Project[]>("/api/projects"),
+  projectCollaboration: (projectId: string) =>
+    request<ProjectCollaboration>(`/api/projects/${projectId}/collaboration`),
+  createProjectInvite: (projectId: string) =>
+    request<{ id: string; code: string; created_at: string; expires_at: string }>(
+      `/api/projects/${projectId}/invites`,
+      { method: "POST" },
+    ),
+  requestProjectJoin: (code: string) =>
+    request<{ status: string; projectId: string }>("/api/collaboration/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code.toUpperCase() }),
+    }),
+  reviewProjectJoin: (
+    projectId: string,
+    requestId: string,
+    action: "accept" | "reject",
+  ) =>
+    request<{ status: string }>(
+      `/api/projects/${projectId}/collaboration/requests/${requestId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      },
+    ),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
   updateProject: (id: string, data: { name: string; description: string }) =>
     request<Project>(`/api/projects/${id}`, {
@@ -199,6 +302,8 @@ export const api = {
     ),
   datasetHealth: (projectId: string) =>
     request<DatasetHealth>(`/api/projects/${projectId}/health`),
+  datasetHealthProgress: (projectId: string) =>
+    request<DatasetHealthProgress>(`/api/projects/${projectId}/health/progress`),
   annotationJobs: (projectId: string) =>
     request<AnnotationJob[]>(`/api/projects/${projectId}/annotation-jobs`),
   createAnnotationJob: (
@@ -223,7 +328,11 @@ export const api = {
       },
     ),
   activeLearning: (projectId: string) =>
-    request<{ scanning: boolean; items: ActiveLearningItem[] }>(
+    request<{
+      scanning: boolean;
+      progress: Partial<DatasetHealthProgress>;
+      items: ActiveLearningItem[];
+    }>(
       `/api/projects/${projectId}/active-learning`,
     ),
   startActiveLearning: (
@@ -513,8 +622,14 @@ export const api = {
       learning_rate?: number;
       patience?: number;
       device?: string;
-      execution_target?: "server" | "remote-auto" | "remote-gpu" | "remote-cpu";
+      execution_target?: "server" | "remote-auto" | "remote-gpu" | "remote-cpu" | "colab-auto" | "colab-gpu" | "colab-cpu";
       worker_id?: string;
+      base_model_id?: string;
+      freeze_layers?: number;
+      weight_decay?: number;
+      cos_lr?: boolean;
+      close_mosaic?: number;
+      amp?: boolean;
     },
   ) =>
     request<Project>(`/api/projects/${id}/train`, {
@@ -536,8 +651,20 @@ export const api = {
         patience?: number;
         device?: string;
         execution_target?:
-          "server" | "remote-auto" | "remote-gpu" | "remote-cpu";
+          | "server"
+          | "remote-auto"
+          | "remote-gpu"
+          | "remote-cpu"
+          | "colab-auto"
+          | "colab-gpu"
+          | "colab-cpu";
         worker_id?: string;
+        base_model_id?: string;
+        freeze_layers?: number;
+        weight_decay?: number;
+        cos_lr?: boolean;
+        close_mosaic?: number;
+        amp?: boolean;
       };
       learning_rates: number[];
       optimizers: string[];
@@ -744,6 +871,8 @@ export const api = {
       frameInterval: number;
       totals: Record<string, number>;
       timeline: Array<{ second: number; counts: Record<string, number> }>;
+      annotatedVideoUrl: string;
+      annotatedVideoName: string;
     }>(
       `/api/projects/${id}/infer/video?confidence=${confidence}`,
       body,
@@ -751,6 +880,16 @@ export const api = {
       onProcessing,
     );
   },
+  modelEvaluationArtifacts: (projectId: string, modelId: string) =>
+    request<EvaluationArtifact[]>(
+      `/api/projects/${projectId}/models/${modelId}/evaluation`,
+    ),
+  modelEvaluationArtifactUrl: (
+    projectId: string,
+    modelId: string,
+    artifact: string,
+  ) =>
+    `/api/projects/${projectId}/models/${modelId}/evaluation/${encodeURIComponent(artifact)}`,
   workflows: () => request<WorkflowData[]>("/api/workflows"),
   saveWorkflow: (data: WorkflowData) =>
     request<WorkflowData>("/api/workflows", {

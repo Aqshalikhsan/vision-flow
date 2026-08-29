@@ -61,6 +61,19 @@ The extended product suite also includes:
 
 Set `VISIONFLOW_REQUIRE_AUTH=1` for server-enforced login. On the first visit, VisionFlow asks you to configure the owner account. For local development with authentication disabled, the legacy role header remains available for compatibility. Internet-facing deployments should additionally use HTTPS and a reverse proxy.
 
+### Gmail OTP login
+
+VisionFlow supports six-digit, single-use Gmail OTP login. Create a Google App Password for the sender account, then set these variables before running `start.ps1` or Docker Compose:
+
+```powershell
+$env:VISIONFLOW_SMTP_USERNAME="sender@gmail.com"
+$env:VISIONFLOW_SMTP_PASSWORD="your-16-character-google-app-password"
+$env:VISIONFLOW_SMTP_FROM="sender@gmail.com"
+$env:VISIONFLOW_OTP_SECRET="a-long-random-server-secret"
+```
+
+OTP codes expire after 10 minutes, allow five attempts, and are stored only as hashes. Password login remains available as a recovery method. For local automated tests only, `VISIONFLOW_OTP_DEV_CODE=123456` bypasses email delivery and exposes the test code in the response; never enable it on an internet-facing deployment.
+
 MP4, MOV, and WEBM uploads are sampled locally with OpenCV at approximately one frame per second, up to 100 frames per video.
 
 ## UGREEN NAS deployment
