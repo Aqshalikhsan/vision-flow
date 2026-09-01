@@ -41,6 +41,11 @@ jobs:
         run: npm run format:check
 
       - name: Run API smoke tests
+        env:
+          # The smoke suite exercises project APIs directly. Production keeps
+          # authentication enabled through compose.ugreen.yml; CI uses an
+          # isolated ephemeral database and disables it only for this test.
+          VISIONFLOW_REQUIRE_AUTH: "0"
         run: |
           python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
           api_pid=$!
