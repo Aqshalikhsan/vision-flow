@@ -1,0 +1,64 @@
+name: salnova
+
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      VISIONFLOW_REQUIRE_AUTH: "1"
+      VISIONFLOW_ALLOW_SELF_REGISTRATION: "${VISIONFLOW_ALLOW_SELF_REGISTRATION:-0}"
+      VISIONFLOW_PUBLIC_URL: "${VISIONFLOW_PUBLIC_URL:?Set VISIONFLOW_PUBLIC_URL in .env}"
+      VISIONFLOW_COOKIE_SECURE: "${VISIONFLOW_COOKIE_SECURE:-auto}"
+      VISIONFLOW_ALLOWED_ORIGINS: "${VISIONFLOW_ALLOWED_ORIGINS:-${VISIONFLOW_PUBLIC_URL}}"
+      VISIONFLOW_ALLOWED_HOSTS: "app,localhost,127.0.0.1,${VISIONFLOW_ALLOWED_HOSTS:-*}"
+      VISIONFLOW_OTP_SECRET: "${VISIONFLOW_OTP_SECRET:?Set a persistent random VISIONFLOW_OTP_SECRET in .env}"
+      VISIONFLOW_RATE_LIMIT: "${VISIONFLOW_RATE_LIMIT:-120}"
+      VISIONFLOW_AUTH_RATE_LIMIT: "${VISIONFLOW_AUTH_RATE_LIMIT:-30}"
+      VISIONFLOW_AUTH_RATE_WINDOW_SECONDS: "${VISIONFLOW_AUTH_RATE_WINDOW_SECONDS:-300}"
+      VISIONFLOW_DB_BUSY_TIMEOUT_MS: "${VISIONFLOW_DB_BUSY_TIMEOUT_MS:-30000}"
+      VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES: "${VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES:-120}"
+      VISIONFLOW_SMTP_HOST: "${VISIONFLOW_SMTP_HOST:-smtp.gmail.com}"
+      VISIONFLOW_SMTP_PORT: "${VISIONFLOW_SMTP_PORT:-587}"
+      VISIONFLOW_SMTP_USERNAME: "${VISIONFLOW_SMTP_USERNAME:-}"
+      VISIONFLOW_SMTP_PASSWORD: "${VISIONFLOW_SMTP_PASSWORD:-}"
+      VISIONFLOW_SMTP_FROM: "${VISIONFLOW_SMTP_FROM:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      VISIONFLOW_GEMINI_MODEL: "${VISIONFLOW_GEMINI_MODEL:-gemini-3.6-flash}"
+      TZ: "${TZ:-Asia/Jakarta}"
+    expose:
+      - "8000"
+    volumes:
+      - salnova-data:/app/local_data
+      - salnova-models:/app/models
+    networks:
+      - private
+    stop_grace_period: 2m
+
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      VISIONFLOW_ADDRESS: "${VISIONFLOW_ADDRESS:-:80}"
+    ports:
+      - "${VISIONFLOW_HTTP_PORT:-80}:80"
+      - "${VISIONFLOW_HTTPS_PORT:-443}:443"
+      - "${VISIONFLOW_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - private
+
+networks:
+  private:
+
+volumes:
+  salnova-data:
+  salnova-models:
+  caddy-data:
+  caddy-config:

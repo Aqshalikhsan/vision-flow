@@ -7,4 +7,9 @@ local_data
 test-results
 .tmp
 *.pt
+mobileclip_blt.ts
 Ultralytics
+.env
+.env.*
+visionflow-data
+visionflow-models

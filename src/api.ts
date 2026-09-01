@@ -31,10 +31,16 @@ export type WorkspaceMember = {
 export type AuthStatus = {
   required: boolean;
   setupRequired: boolean;
+  registrationAllowed?: boolean;
   member?: WorkspaceMember | null;
 };
 export type ProjectCollaboration = {
-  invites: Array<{ id: string; code: string; created_at: string; expires_at: string }>;
+  invites: Array<{
+    id: string;
+    code: string;
+    created_at: string;
+    expires_at: string;
+  }>;
   requests: Array<{
     id: string;
     status: string;
@@ -92,6 +98,72 @@ export type EvaluationArtifact = {
   size: number;
   preview: boolean;
 };
+export type ModelEvaluation = {
+  id: string;
+  projectId: string;
+  modelId: string;
+  status: "queued" | "running" | "completed" | "failed";
+  split: string;
+  confidence: number;
+  iouThreshold: number;
+  progress: number;
+  summary: {
+    assets?: number;
+    tp?: number;
+    fp?: number;
+    fn?: number;
+    precision?: number;
+    recall?: number;
+    f1?: number;
+    perClass?: Record<
+      string,
+      { tp: number; fp: number; fn: number; precision: number; recall: number; f1: number }
+    >;
+    thresholdSweep?: Array<{ threshold: number; precision: number; recall: number; f1: number }>;
+    recommendedThreshold?: number;
+    qualityGate?: boolean;
+  };
+  errors: Array<{
+    assetId: string;
+    name: string;
+    type: "false-positive" | "false-negative";
+    class: string;
+    confidence?: number;
+  }>;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type GlobalJob = {
+  id: string;
+  projectId?: string;
+  projectName?: string;
+  kind: string;
+  name: string;
+  status: string;
+  progress: number;
+  detail: string;
+  createdAt: string;
+  target?: string;
+};
+export type WorkspaceNotification = {
+  id: string;
+  projectId?: string;
+  kind: string;
+  title: string;
+  message: string;
+  target?: string;
+  read: boolean;
+  createdAt: string;
+};
+export type DeploymentConfig = {
+  primaryModelId?: string | null;
+  previousModelId?: string | null;
+  canaryModelId?: string | null;
+  canaryPercent: number;
+  captureSamples: boolean;
+  updatedAt?: string;
+};
 export type AnnotationJob = {
   id: string;
   name: string;
@@ -114,6 +186,49 @@ export type ActiveLearningItem = {
   reason: string;
   status: string;
   createdAt: string;
+};
+export type AdvanceEngine = {
+  id: string;
+  name: string;
+  ready: boolean;
+  tier: string;
+  weight?: string;
+  note: string;
+  reason?: string | null;
+};
+export type AdvanceCategory = {
+  id: string;
+  name: string;
+  description: string;
+  engines: AdvanceEngine[];
+};
+export type AdvanceDraft = {
+  id: string;
+  jobId: string;
+  projectId: string;
+  assetId: string;
+  annotations: Box[];
+  confidence: number;
+  status: "pending" | "accepted" | "rejected";
+  engine: string;
+  provenance: Record<string, unknown>;
+  createdAt: string;
+  reviewedAt?: string;
+};
+export type AdvanceJob = {
+  id: string;
+  projectId: string;
+  category: string;
+  engine: string;
+  status: "queued" | "running" | "completed" | "failed";
+  config: Record<string, unknown>;
+  progress: number;
+  processed: number;
+  total: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  drafts?: AdvanceDraft[] | null;
 };
 export type TrainingWorker = {
   id: string;
@@ -258,10 +373,12 @@ export const api = {
   projectCollaboration: (projectId: string) =>
     request<ProjectCollaboration>(`/api/projects/${projectId}/collaboration`),
   createProjectInvite: (projectId: string) =>
-    request<{ id: string; code: string; created_at: string; expires_at: string }>(
-      `/api/projects/${projectId}/invites`,
-      { method: "POST" },
-    ),
+    request<{
+      id: string;
+      code: string;
+      created_at: string;
+      expires_at: string;
+    }>(`/api/projects/${projectId}/invites`, { method: "POST" }),
   requestProjectJoin: (code: string) =>
     request<{ status: string; projectId: string }>("/api/collaboration/join", {
       method: "POST",
@@ -303,7 +420,19 @@ export const api = {
   datasetHealth: (projectId: string) =>
     request<DatasetHealth>(`/api/projects/${projectId}/health`),
   datasetHealthProgress: (projectId: string) =>
-    request<DatasetHealthProgress>(`/api/projects/${projectId}/health/progress`),
+    request<DatasetHealthProgress>(
+      `/api/projects/${projectId}/health/progress`,
+    ),
+  applyHealthAction: (
+    projectId: string,
+    assetIds: string[],
+    action: "delete" | "review" | "approve" | "train" | "valid" | "test",
+  ) =>
+    request<Project>(`/api/projects/${projectId}/health/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asset_ids: assetIds, action }),
+    }),
   annotationJobs: (projectId: string) =>
     request<AnnotationJob[]>(`/api/projects/${projectId}/annotation-jobs`),
   createAnnotationJob: (
@@ -332,9 +461,7 @@ export const api = {
       scanning: boolean;
       progress: Partial<DatasetHealthProgress>;
       items: ActiveLearningItem[];
-    }>(
-      `/api/projects/${projectId}/active-learning`,
-    ),
+    }>(`/api/projects/${projectId}/active-learning`),
   startActiveLearning: (
     projectId: string,
     data: { model_id?: string; limit?: number; confidence?: number },
@@ -479,13 +606,59 @@ export const api = {
   smartMask: (
     projectId: string,
     assetId: string,
-    data: { x: number; y: number; label: string; size?: number },
+    data: {
+      x: number;
+      y: number;
+      label: string;
+      size?: number;
+      engine?: string;
+    },
   ) =>
     request<Box>(`/api/projects/${projectId}/assets/${assetId}/smart-mask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  advanceProviders: () =>
+    request<{ categories: AdvanceCategory[] }>("/api/advance/providers"),
+  advanceJobs: (projectId?: string) =>
+    request<AdvanceJob[]>(
+      `/api/advance/jobs${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
+  advanceJob: (jobId: string) =>
+    request<AdvanceJob>(`/api/advance/jobs/${jobId}`),
+  createAdvanceJob: (data: {
+    project_id: string;
+    category: string;
+    engine: string;
+    confidence: number;
+    limit: number;
+    overwrite: boolean;
+    prompt: string;
+    model_id?: string;
+    sam_model: string;
+    slicing: boolean;
+  }) =>
+    request<AdvanceJob>("/api/advance/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  reviewAdvanceDraft: (draftId: string, action: "accept" | "reject") =>
+    request<AdvanceDraft>(`/api/advance/drafts/${draftId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    }),
+  reviewAdvanceJob: (jobId: string, action: "accept" | "reject") =>
+    request<{ reviewed: number; action: string }>(
+      `/api/advance/jobs/${jobId}/review`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      },
+    ),
   exportUrl: (
     projectId: string,
     versionId: string,
@@ -514,6 +687,7 @@ export const api = {
         actor: string;
         createdAt: string;
         annotations: number;
+        boxes: Box[];
       }>;
       comments: Array<{
         id: string;
@@ -522,6 +696,32 @@ export const api = {
         createdAt: string;
       }>;
     }>(`/api/projects/${projectId}/assets/${assetId}/collaboration`),
+  restoreAnnotationRevision: (
+    projectId: string,
+    assetId: string,
+    revisionId: string,
+  ) =>
+    request<Project>(
+      `/api/projects/${projectId}/assets/${assetId}/revisions/${revisionId}/restore`,
+      { method: "POST" },
+    ),
+  annotationLock: (projectId: string, assetId: string) =>
+    request<{ locked: boolean; actor?: string; expiresAt?: string }>(
+      `/api/projects/${projectId}/assets/${assetId}/lock`,
+    ),
+  acquireAnnotationLock: (projectId: string, assetId: string) =>
+    request<{ locked: boolean; actor?: string; expiresAt?: string }>(
+      `/api/projects/${projectId}/assets/${assetId}/lock`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttl_seconds: 300 }),
+      },
+    ),
+  releaseAnnotationLock: (projectId: string, assetId: string) =>
+    request<void>(`/api/projects/${projectId}/assets/${assetId}/lock`, {
+      method: "DELETE",
+    }),
   addAssetComment: (projectId: string, assetId: string, body: string) =>
     request<{ id: string; actor: string; body: string; createdAt: string }>(
       `/api/projects/${projectId}/assets/${assetId}/comments`,
@@ -593,6 +793,7 @@ export const api = {
       splits: [number, number, number];
       augmentations?: AugmentationRecipe;
       augmentation_copies?: number;
+      enforce_quality?: boolean;
     },
   ) =>
     request<Project>(`/api/projects/${id}/versions`, {
@@ -622,7 +823,14 @@ export const api = {
       learning_rate?: number;
       patience?: number;
       device?: string;
-      execution_target?: "server" | "remote-auto" | "remote-gpu" | "remote-cpu" | "colab-auto" | "colab-gpu" | "colab-cpu";
+      execution_target?:
+        | "server"
+        | "remote-auto"
+        | "remote-gpu"
+        | "remote-cpu"
+        | "colab-auto"
+        | "colab-gpu"
+        | "colab-cpu";
       worker_id?: string;
       base_model_id?: string;
       freeze_layers?: number;
@@ -778,14 +986,82 @@ export const api = {
     request<{
       requests: number;
       averageLatencyMs: number;
+      p50LatencyMs: number;
+      p95LatencyMs: number;
+      p99LatencyMs: number;
       errors: number;
+      errorRate: number;
+      driftScore: number;
+      classDistribution: Record<string, number>;
+      buckets: Array<{
+        time: string;
+        requests: number;
+        errors: number;
+        averageLatencyMs: number;
+      }>;
+      perModel: Array<{
+        modelId?: string;
+        requests: number;
+        errors: number;
+        p95LatencyMs: number;
+      }>;
       recent: Array<{
+        id: string;
         created_at: string;
         latency_ms: number;
         predictions: number;
         status: string;
+        model_id?: string;
+        feedback?: string;
+        class_counts: Record<string, number>;
       }>;
     }>(`/api/projects/${projectId}/deployment/metrics`),
+  deploymentConfig: (projectId: string) =>
+    request<DeploymentConfig>(`/api/projects/${projectId}/deployment/config`),
+  updateDeploymentConfig: (
+    projectId: string,
+    data: {
+      primary_model_id?: string | null;
+      canary_model_id?: string | null;
+      canary_percent: number;
+      capture_samples?: boolean;
+    },
+  ) =>
+    request<DeploymentConfig>(`/api/projects/${projectId}/deployment/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  rollbackDeployment: (projectId: string) =>
+    request<DeploymentConfig>(
+      `/api/projects/${projectId}/deployment/rollback`,
+      { method: "POST" },
+    ),
+  inferenceFeedback: (
+    projectId: string,
+    requestId: string,
+    feedback: "correct" | "incorrect",
+    note = "",
+  ) =>
+    request<{ id: string; feedback: string }>(
+      `/api/projects/${projectId}/deployment/requests/${requestId}/feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback, note }),
+      },
+    ),
+  jobs: () => request<GlobalJob[]>("/api/jobs"),
+  notifications: () =>
+    request<WorkspaceNotification[]>("/api/notifications"),
+  readNotification: (id: string) =>
+    request<{ id: string; read: boolean }>(`/api/notifications/${id}/read`, {
+      method: "POST",
+    }),
+  readAllNotifications: () =>
+    request<{ read: boolean }>("/api/notifications/read-all", {
+      method: "POST",
+    }),
   system: () =>
     request<{
       disk: { total: number; used: number; free: number };
@@ -883,6 +1159,28 @@ export const api = {
   modelEvaluationArtifacts: (projectId: string, modelId: string) =>
     request<EvaluationArtifact[]>(
       `/api/projects/${projectId}/models/${modelId}/evaluation`,
+    ),
+  modelEvaluations: (projectId: string, modelId: string) =>
+    request<ModelEvaluation[]>(
+      `/api/projects/${projectId}/models/${modelId}/evaluations`,
+    ),
+  createModelEvaluation: (
+    projectId: string,
+    modelId: string,
+    data: {
+      split: "train" | "valid" | "test" | "all";
+      confidence: number;
+      iou_threshold: number;
+      limit?: number;
+    },
+  ) =>
+    request<ModelEvaluation>(
+      `/api/projects/${projectId}/models/${modelId}/evaluations`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      },
     ),
   modelEvaluationArtifactUrl: (
     projectId: string,

@@ -4,3 +4,6 @@ python-multipart>=0.0.9
 pillow>=10.0
 ultralytics>=8.3
 firebase-admin>=7.5
+transformers>=4.48,<6
+safetensors>=0.4
+clip @ git+https://github.com/ultralytics/CLIP.git@a13192f8cb767260d7dfd98c843b0716593169e7

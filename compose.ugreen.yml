@@ -1,25 +1,50 @@
 services:
   visionflow:
-    build: .
-    container_name: visionflow
+    build:
+      context: .
+      args:
+        # UGREEN NAS models have no NVIDIA GPU, so skip the CUDA torch build.
+        TORCH_INDEX_URL: "https://download.pytorch.org/whl/cpu"
+    image: "${VISIONFLOW_IMAGE:-salnova:local}"
+    container_name: salnova
     restart: unless-stopped
     ports:
-      - "8080:8000"
+      - "${VISIONFLOW_BIND_ADDRESS:-0.0.0.0}:${VISIONFLOW_PORT:-8080}:8000"
     environment:
       VISIONFLOW_REQUIRE_AUTH: "1"
-      VISIONFLOW_RATE_LIMIT: "120"
-      VISIONFLOW_SMTP_HOST: "smtp.gmail.com"
-      VISIONFLOW_SMTP_PORT: "587"
+      VISIONFLOW_ALLOW_SELF_REGISTRATION: "${VISIONFLOW_ALLOW_SELF_REGISTRATION:-0}"
+      VISIONFLOW_AUTH_RATE_LIMIT: "${VISIONFLOW_AUTH_RATE_LIMIT:-30}"
+      VISIONFLOW_AUTH_RATE_WINDOW_SECONDS: "${VISIONFLOW_AUTH_RATE_WINDOW_SECONDS:-300}"
+      VISIONFLOW_DB_BUSY_TIMEOUT_MS: "${VISIONFLOW_DB_BUSY_TIMEOUT_MS:-30000}"
+      VISIONFLOW_PUBLIC_URL: "${VISIONFLOW_PUBLIC_URL:?Set the UGREEN LAN or HTTPS URL in .env}"
+      VISIONFLOW_COOKIE_SECURE: "${VISIONFLOW_COOKIE_SECURE:-auto}"
+      VISIONFLOW_ALLOWED_ORIGINS: "${VISIONFLOW_ALLOWED_ORIGINS:-${VISIONFLOW_PUBLIC_URL}}"
+      VISIONFLOW_ALLOWED_HOSTS: "127.0.0.1,localhost,${VISIONFLOW_ALLOWED_HOSTS:-*}"
+      VISIONFLOW_RATE_LIMIT: "${VISIONFLOW_RATE_LIMIT:-120}"
+      VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES: "${VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES:-120}"
+      VISIONFLOW_SMTP_HOST: "${VISIONFLOW_SMTP_HOST:-smtp.gmail.com}"
+      VISIONFLOW_SMTP_PORT: "${VISIONFLOW_SMTP_PORT:-587}"
       VISIONFLOW_SMTP_USERNAME: "${VISIONFLOW_SMTP_USERNAME:-}"
       VISIONFLOW_SMTP_PASSWORD: "${VISIONFLOW_SMTP_PASSWORD:-}"
       VISIONFLOW_SMTP_FROM: "${VISIONFLOW_SMTP_FROM:-}"
-      VISIONFLOW_OTP_SECRET: "${VISIONFLOW_OTP_SECRET:-}"
+      VISIONFLOW_OTP_SECRET: "${VISIONFLOW_OTP_SECRET:?Set a persistent random VISIONFLOW_OTP_SECRET in .env}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       VISIONFLOW_GEMINI_MODEL: "${VISIONFLOW_GEMINI_MODEL:-gemini-3.6-flash}"
       TZ: Asia/Jakarta
     volumes:
       - ./visionflow-data:/app/local_data
-    deploy:
-      resources:
-        limits:
-          memory: 6G
+      - ./visionflow-models:/app/models
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    shm_size: "${VISIONFLOW_SHM_SIZE:-1gb}"
+    mem_limit: "${VISIONFLOW_MEMORY_LIMIT:-6g}"
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 2m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

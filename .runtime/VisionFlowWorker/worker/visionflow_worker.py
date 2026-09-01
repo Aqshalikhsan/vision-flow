@@ -10,6 +10,7 @@ import json
 import numbers
 import os
 import platform
+import re
 import shutil
 import sys
 import threading
@@ -25,6 +26,21 @@ from ultralytics import YOLO
 
 class TrainingCancelled(Exception):
     pass
+
+
+def is_evaluation_artifact(path: Path) -> bool:
+    if path.name in {
+        "results.png", "confusion_matrix.png", "confusion_matrix_normalized.png",
+        "F1_curve.png", "PR_curve.png", "P_curve.png", "R_curve.png",
+        "labels.jpg", "labels_correlogram.jpg", "args.yaml",
+    }:
+        return True
+    return bool(
+        re.fullmatch(r"(Box|Mask|Pose)(F1|PR|P|R)_curve\.png", path.name)
+        or
+        re.fullmatch(r"train_batch\d+\.jpg", path.name)
+        or re.fullmatch(r"val_batch\d+_(labels|pred)\.jpg", path.name)
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,9 +78,13 @@ class VisionFlowWorker:
         self.keep_jobs = keep_jobs
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        cuda_available = torch.cuda.is_available()
         self.capabilities = {
-            "cuda": torch.cuda.is_available(),
-            "gpuName": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "",
+            "cuda": cuda_available,
+            "gpuName": torch.cuda.get_device_name(0) if cuda_available else "",
+            "gpuCount": torch.cuda.device_count() if cuda_available else 0,
+            "torchVersion": torch.__version__,
+            "cudaVersion": torch.version.cuda or "",
             "cpu": platform.processor() or platform.machine(),
             "platform": f"{platform.system()} {platform.release()}",
             "provider": provider,
@@ -285,7 +305,10 @@ class VisionFlowWorker:
         target = config.get("execution_target", "remote-auto")
         if target in {"remote-gpu", "colab-gpu"}:
             if not self.capabilities["cuda"]:
-                raise RuntimeError("job requires CUDA but this laptop has no available CUDA device")
+                raise RuntimeError(
+                    "job requires CUDA, but this worker cannot access an NVIDIA GPU; "
+                    f"PyTorch {torch.__version__}, CUDA runtime {torch.version.cuda or 'none'}"
+                )
             device: str | int = 0
         elif target in {"remote-cpu", "colab-cpu"}:
             device = "cpu"
@@ -434,6 +457,25 @@ class VisionFlowWorker:
         if not weights.is_file():
             raise RuntimeError("Ultralytics did not produce weights/best.pt")
         metrics = {key: float(value) for key, value in result.results_dict.items() if isinstance(value, numbers.Real)}
+        artifacts = [path for path in Path(result.save_dir).iterdir() if path.is_file() and is_evaluation_artifact(path)]
+        if artifacts:
+            artifact_archive = job_dir / "evaluation-artifacts.zip"
+            with zipfile.ZipFile(artifact_archive, "w", zipfile.ZIP_DEFLATED) as archive:
+                for artifact in artifacts:
+                    archive.write(artifact, artifact.name)
+            try:
+                with artifact_archive.open("rb") as payload:
+                    response = self.request(
+                        "POST",
+                        f"/api/training-workers/agent/jobs/{model_id}/artifacts",
+                        data=payload,
+                        headers={"Content-Type": "application/zip"},
+                        timeout=600,
+                    )
+                stored = len(response.json().get("artifacts", []))
+                print(f"[worker] uploaded {stored} evaluation artifacts", flush=True)
+            except requests.RequestException as exc:
+                print(f"[worker] warning: evaluation artifact upload failed: {exc}", flush=True)
         for attempt in range(1, 6):
             try:
                 with weights.open("rb") as checkpoint:
@@ -478,7 +520,16 @@ def main() -> int:
         args.provider,
     )
     hardware = worker.capabilities["gpuName"] or worker.capabilities["cpu"]
-    print(f"[worker] connecting to {worker.server} with {hardware}", flush=True)
+    acceleration = (
+        f"CUDA {worker.capabilities['cudaVersion']}"
+        if worker.capabilities["cuda"]
+        else "CPU only (CUDA unavailable)"
+    )
+    print(
+        f"[worker] connecting to {worker.server} with {hardware} | "
+        f"PyTorch {worker.capabilities['torchVersion']} | {acceleration}",
+        flush=True,
+    )
     while True:
         try:
             worker.heartbeat()

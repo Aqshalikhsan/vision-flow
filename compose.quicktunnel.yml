@@ -1,0 +1,32 @@
+# Free trial path: no domain and no Cloudflare account required.
+# cloudflared requests a throwaway https://<random>.trycloudflare.com hostname and
+# prints it in its own log. The name changes on every restart, so use this to
+# validate the stack, not for a permanent site. For a stable address, buy a domain
+# and switch to compose.cloudflare.yml instead.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: salnova-quicktunnel
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --loglevel
+      - info
+      - --url
+      - http://visionflow:8000
+    depends_on:
+      visionflow:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -80,9 +80,14 @@ export type Project = {
   createdAt: string;
   updatedAt?: string;
   archived?: boolean;
+  /** Identifies which tutorial template this project was copied from. */
+  demoKey?: string | null;
   classes: string[];
   colors: Record<string, string>;
   assets: Asset[];
   versions: Version[];
   models: Model[];
+  assetCount?: number;
+  coverImage?: string;
+  summary?: boolean;
 };

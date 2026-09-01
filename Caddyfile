@@ -1,0 +1,16 @@
+{$VISIONFLOW_ADDRESS::80} {
+    encode zstd gzip
+
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+    }
+
+    reverse_proxy app:8000 {
+        health_uri /api/ready
+        health_interval 30s
+        health_timeout 5s
+    }
+}

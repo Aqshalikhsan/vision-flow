@@ -1,0 +1,2 @@
+﻿time_created,id,level,provider,record_id,message
+2026-08-31T19:02:32.4317506+07:00,17,"Warning","Microsoft-Windows-WHEA-Logger",17836,"A corrected hardware error has occurred. Component: PCI Express Root Port Error Source: Advanced Error Reporting (PCI Express) Primary Bus:Device:Function: 0x0:0x1:0x0 Secondary Bus:Device:Function: 0x0:0x0:0x0 Primary Device Name:PCI\VEN_8086&DEV_460D&SUBSYS_50001458&REV_02 Secondary Device Name:"

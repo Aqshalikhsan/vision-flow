@@ -1,0 +1,8 @@
+Started 2026-08-31T16:26:41.9962055+07:00
+2026-08-31T16:26:42.0027049+07:00 Stopping Gigabyte Control Center and NVIDIA Overlay processes.
+2026-08-31T16:26:42.0482273+07:00 Resetting NVIDIA graphics clocks to firmware defaults.
+2026-08-31T16:26:42.1082269+07:00 All done.
+2026-08-31T16:26:42.1087264+07:00 Resetting NVIDIA memory clocks to firmware defaults.
+2026-08-31T16:26:42.1442262+07:00 All done.
+2026-08-31T16:26:42.1447263+07:00 Disabling PCI Express Link State Power Management on AC and DC.
+2026-08-31T16:26:42.1917484+07:00 SAFE_RESET_COMPLETE

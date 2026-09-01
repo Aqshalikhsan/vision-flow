@@ -1,6 +1,16 @@
-# VisionFlow Local
+# Salnova
 
-Local computer-vision dataset, annotation, training, and inference workspace modeled after the Roboflow application workflow.
+Computer-vision dataset, annotation, training, and inference workspace that can
+run locally, on a LAN, NAS, or public HTTPS server. The browser always uses
+same-origin API paths, so the deployed application works from desktops, laptops,
+tablets, and phones without device-specific API configuration.
+
+For an internet-facing or multi-device installation, follow
+[DEPLOYMENT.md](DEPLOYMENT.md). It includes CPU, NVIDIA GPU, HTTPS, persistence,
+backup, and upgrade configuration.
+
+For UGOS Pro and UGREEN NAS, use the device-specific walkthrough in
+[UGREEN_DEPLOYMENT.md](UGREEN_DEPLOYMENT.md) with `compose.ugreen.yml`.
 
 ## Start
 

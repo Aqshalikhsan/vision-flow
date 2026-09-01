@@ -18,14 +18,15 @@ export default defineConfig({
   reporter: [["list"]],
   webServer: [
     {
-      command: `${python} -m uvicorn backend.main:app --host 127.0.0.1 --port 8000`,
-      url: "http://127.0.0.1:8000/api/health",
-      reuseExistingServer: true,
+      command: `${python} -m uvicorn backend.main:app --host 127.0.0.1 --port 8010`,
+      url: "http://127.0.0.1:8010/api/health",
+      env: { ...process.env, VISIONFLOW_REQUIRE_AUTH: "0" },
+      reuseExistingServer: false,
       timeout: 120_000,
     },
   ],
   use: {
-    baseURL: "http://127.0.0.1:8000",
+    baseURL: "http://127.0.0.1:8010",
     headless: true,
     viewport: { width: 1440, height: 1000 },
     trace: "retain-on-failure",

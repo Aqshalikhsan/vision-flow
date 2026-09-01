@@ -18,5 +18,8 @@ local_data/
 .env.local
 Ultralytics/
 *.pt
+mobileclip_blt.ts
 __pycache__/
 *.pyc
+.venv-backend/
+.vscode/

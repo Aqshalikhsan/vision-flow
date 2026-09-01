@@ -1,9 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-const API = "http://127.0.0.1:8000";
+const API = "http://127.0.0.1:8010";
 let projectId = "";
 
 test.beforeAll(async ({ request }) => {
+  const ready = await request.get(`${API}/api/ready`);
+  expect(ready.ok()).toBeTruthy();
+  await expect(ready.json()).resolves.toMatchObject({
+    status: "ready",
+    database: "ok",
+    storage: "writable",
+  });
   const existing = await request.get(`${API}/api/projects`);
   if (existing.ok()) {
     for (const project of (await existing.json()) as Array<{
@@ -223,4 +230,57 @@ test("dashboard to annotation, versions, training, and deployment", async ({
       }),
     );
   expect(connectionContained).toBeTruthy();
+
+  await page.getByRole("button", { name: "Advance", exact: true }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Detect, segment, propagate, and review.",
+    }),
+  ).toBeVisible();
+  for (const category of [
+    "Interactive Smart Mask",
+    "Text Auto-Label",
+    "Model-Assisted",
+    "Batch Masks",
+    "Video Propagation",
+    "Quality & Review",
+  ]) {
+    await expect(
+      page.getByRole("button", { name: new RegExp(category) }),
+    ).toBeVisible();
+  }
+  await page.getByRole("button", { name: /Interactive Smart Mask/ }).click();
+  await expect(
+    page.getByRole("button", { name: /SAM 2\.1 Small/ }),
+  ).toBeEnabled();
+  const providersResponse = await page.request.get(
+    `${API}/api/advance/providers`,
+  );
+  expect(providersResponse.ok()).toBeTruthy();
+  const providers = (await providersResponse.json()) as {
+    categories: Array<{
+      id: string;
+      engines: Array<{ id: string; ready: boolean; reason?: string }>;
+    }>;
+  };
+  const sam3 = providers.categories
+    .find((category) => category.id === "smart-segmentation")
+    ?.engines.find((engine) => engine.id === "sam3");
+  expect(sam3).toBeTruthy();
+  if (sam3?.ready) {
+    await expect(page.getByRole("button", { name: /SAM 3/ })).toBeEnabled();
+  } else {
+    await expect(page.getByRole("button", { name: /SAM 3/ })).toBeDisabled();
+    expect(sam3?.reason).toContain("CUDA worker");
+  }
+  await page.getByRole("button", { name: /Video Propagation/ }).click();
+  await expect(
+    page.getByRole("button", { name: /Keyframe Interpolation/ }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: /Video Object Tracker/ }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: /SAM 2\.1 Video/ }),
+  ).toBeDisabled();
 });

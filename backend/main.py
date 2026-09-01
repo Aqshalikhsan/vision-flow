@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 import hmac
 import hashlib
 import io
+from importlib import metadata as package_metadata
 import importlib.util
 import ipaddress
 import json
@@ -13,6 +14,7 @@ import logging
 import os
 import random
 import re
+from urllib.parse import unquote
 import secrets
 import shutil
 import smtplib
@@ -34,8 +36,10 @@ from typing import Any, Callable
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 try:
     import firebase_admin
     from firebase_admin import auth as firebase_auth
@@ -63,9 +67,17 @@ ACTIVE_LEARNING_SCANS: set[str] = set()
 ACTIVE_LEARNING_PROGRESS: dict[str, dict[str, Any]] = {}
 DATASET_HEALTH_PROGRESS: dict[str, dict[str, Any]] = {}
 DATASET_HEALTH_PROGRESS_LOCK = threading.Lock()
+ADVANCE_MODEL_CACHE: dict[str, Any] = {}
+ADVANCE_MODEL_LOCK = threading.Lock()
+ADVANCE_JOB_LOCK = threading.Lock()
 WORKFLOW_SCHEDULER_STARTED = False
 DEPLOY_RATE_LIMIT = max(1, int(os.getenv("VISIONFLOW_RATE_LIMIT", "120")))
 DEPLOY_REQUESTS: dict[str, deque[float]] = defaultdict(deque)
+AUTH_REQUESTS: dict[str, deque[float]] = defaultdict(deque)
+AUTH_RATE_LIMIT_LOCK = threading.Lock()
+AUTH_RATE_LIMIT = max(5, int(os.getenv("VISIONFLOW_AUTH_RATE_LIMIT", "30")))
+AUTH_RATE_WINDOW_SECONDS = max(60, int(os.getenv("VISIONFLOW_AUTH_RATE_WINDOW_SECONDS", "300")))
+DB_BUSY_TIMEOUT_MS = max(1000, int(os.getenv("VISIONFLOW_DB_BUSY_TIMEOUT_MS", "30000")))
 REMOTE_QUEUE_TTL_MINUTES = max(
     5, int(os.getenv("VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES", "120"))
 )
@@ -111,9 +123,10 @@ def set_version_generation_progress(
 
 
 def db() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH, check_same_thread=False)
+    connection = sqlite3.connect(DB_PATH, timeout=DB_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS}")
     return connection
 
 
@@ -124,8 +137,35 @@ def log_activity(con: sqlite3.Connection, action: str, detail: str = "", project
     )
 
 
+def create_notification(
+    con: sqlite3.Connection,
+    kind: str,
+    title: str,
+    message: str = "",
+    project_id: str | None = None,
+    target: str | None = None,
+) -> None:
+    con.execute(
+        "INSERT INTO notifications (id,project_id,kind,title,message,target,created_at) VALUES (?,?,?,?,?,?,?)",
+        (uid(), project_id, kind[:40], title[:160], message[:1000], target, now()),
+    )
+
+
+def percentile(values: list[float], percent: float) -> float:
+    if not values:
+        return 0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * percent
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    fraction = position - lower
+    return round(ordered[lower] * (1 - fraction) + ordered[upper] * fraction, 1)
+
+
 def init_db() -> None:
     with db() as con:
+        con.execute("PRAGMA journal_mode = WAL")
+        con.execute("PRAGMA synchronous = NORMAL")
         con.executescript(
             """
             CREATE TABLE IF NOT EXISTS projects (
@@ -243,7 +283,68 @@ def init_db() -> None:
               added_at TEXT NOT NULL, added_by TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
               PRIMARY KEY(project_id,member_id)
             );
+            CREATE TABLE IF NOT EXISTS advance_jobs (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              category TEXT NOT NULL, engine TEXT NOT NULL, status TEXT NOT NULL,
+              config TEXT NOT NULL DEFAULT '{}', progress INTEGER NOT NULL DEFAULT 0,
+              processed INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
+              error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS advance_drafts (
+              id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES advance_jobs(id) ON DELETE CASCADE,
+              project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              annotations TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0,
+              status TEXT NOT NULL DEFAULT 'pending', engine TEXT NOT NULL,
+              provenance TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+              reviewed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS model_evaluations (
+              id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+              status TEXT NOT NULL DEFAULT 'queued', split TEXT NOT NULL DEFAULT 'test',
+              confidence REAL NOT NULL DEFAULT 0.05, iou_threshold REAL NOT NULL DEFAULT 0.5,
+              progress INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '{}',
+              errors TEXT NOT NULL DEFAULT '[]', error TEXT, created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS deployment_configs (
+              project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+              primary_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+              previous_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+              canary_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+              canary_percent INTEGER NOT NULL DEFAULT 0,
+              capture_samples INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS notifications (
+              id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+              kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
+              target TEXT, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS annotation_locks (
+              project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+              member_id TEXT REFERENCES workspace_members(id) ON DELETE CASCADE,
+              actor TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
             """
+        )
+        con.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_assets_project_id ON assets(project_id);
+            CREATE INDEX IF NOT EXISTS idx_versions_project_id ON versions(project_id);
+            CREATE INDEX IF NOT EXISTS idx_models_project_id ON models(project_id);
+            CREATE INDEX IF NOT EXISTS idx_advance_jobs_project_id ON advance_jobs(project_id);
+            CREATE INDEX IF NOT EXISTS idx_advance_drafts_job_id ON advance_drafts(job_id);
+            CREATE INDEX IF NOT EXISTS idx_advance_drafts_asset_id ON advance_drafts(asset_id);
+            CREATE INDEX IF NOT EXISTS idx_model_evaluations_model_id ON model_evaluations(model_id);
+            CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+            CREATE INDEX IF NOT EXISTS idx_inference_logs_project_created ON inference_logs(project_id,created_at);
+            """
+        )
+        con.execute(
+            "UPDATE advance_jobs SET status='failed',error='Server restarted before this job finished',updated_at=? WHERE status IN ('queued','running')",
+            (now(),),
         )
         columns = {row["name"] for row in con.execute("PRAGMA table_info(projects)")}
         if "colors" not in columns:
@@ -271,6 +372,19 @@ def init_db() -> None:
             con.execute("ALTER TABLE assets ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
         if "metadata" not in asset_columns:
             con.execute("ALTER TABLE assets ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+        inference_columns = {row["name"] for row in con.execute("PRAGMA table_info(inference_logs)")}
+        if "class_counts" not in inference_columns:
+            con.execute("ALTER TABLE inference_logs ADD COLUMN class_counts TEXT NOT NULL DEFAULT '{}'")
+        if "average_confidence" not in inference_columns:
+            con.execute("ALTER TABLE inference_logs ADD COLUMN average_confidence REAL NOT NULL DEFAULT 0")
+        if "feedback" not in inference_columns:
+            con.execute("ALTER TABLE inference_logs ADD COLUMN feedback TEXT")
+        if "feedback_note" not in inference_columns:
+            con.execute("ALTER TABLE inference_logs ADD COLUMN feedback_note TEXT")
+        if "sample_path" not in inference_columns:
+            con.execute("ALTER TABLE inference_logs ADD COLUMN sample_path TEXT")
+        if "asset_id" not in inference_columns:
+            con.execute("ALTER TABLE inference_logs ADD COLUMN asset_id TEXT")
         if "archived" not in columns:
             con.execute("ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         if "updated_at" not in columns:
@@ -307,9 +421,34 @@ def init_db() -> None:
             con.execute("ALTER TABLE workspace_members ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0")
         if "avatar_path" not in member_columns:
             con.execute("ALTER TABLE workspace_members ADD COLUMN avatar_path TEXT")
+        if "demo_seeded" not in member_columns:
+            # Seeding is once-per-account, not once-per-visit: a member who deletes
+            # their tutorial copies must not have them silently reappear.
+            con.execute("ALTER TABLE workspace_members ADD COLUMN demo_seeded INTEGER NOT NULL DEFAULT 0")
         # Salnova has one permission level. Upgrade accounts made by older
         # releases so annotator/admin metadata cannot block any operation.
         con.execute("UPDATE workspace_members SET role='owner' WHERE role IS NULL OR role!='owner'")
+        project_columns = {row["name"] for row in con.execute("PRAGMA table_info(projects)")}
+        if "owner_id" not in project_columns:
+            # Projects used to be workspace-wide. Give every existing project to the
+            # oldest account so upgrading an installation does not orphan any work,
+            # and so the first owner keeps seeing exactly what they saw before.
+            con.execute("ALTER TABLE projects ADD COLUMN owner_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL")
+            # Prefer the oldest verified account. An abandoned half-finished
+            # signup can easily be the oldest row, and handing it the whole
+            # workspace would lock the real owner out of their own projects.
+            first_member = con.execute(
+                "SELECT id FROM workspace_members WHERE email_verified=1 ORDER BY created_at LIMIT 1"
+            ).fetchone() or con.execute(
+                "SELECT id FROM workspace_members ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if first_member:
+                con.execute("UPDATE projects SET owner_id=? WHERE owner_id IS NULL", (first_member["id"],))
+        if "demo_key" not in project_columns:
+            # Marks a project as a seeded tutorial copy. The onboarding tour looks
+            # projects up by this stable key instead of hard-coded ids, so a fresh
+            # install can seed its own copies and still drive the tour.
+            con.execute("ALTER TABLE projects ADD COLUMN demo_key TEXT")
         # Jobs survive an application restart. The scheduler resumes from last.pt
         # when Ultralytics has already written a checkpoint for the run.
         for training in con.execute("SELECT id,config FROM models WHERE status='training'").fetchall():
@@ -320,14 +459,23 @@ def init_db() -> None:
             con.execute("INSERT INTO workspace_members (id,name,email,role,created_at) VALUES (?,?,?,?,?)", (uid(), "Local Owner", "owner@visionflow.local", "owner", now()))
 
 
-def project_dict(con: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
-    assets = con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (row["id"],)).fetchall()
+def project_dict(
+    con: sqlite3.Connection, row: sqlite3.Row, include_assets: bool = True
+) -> dict[str, Any]:
+    assets = (
+        con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (row["id"],)).fetchall()
+        if include_assets
+        else []
+    )
     versions = con.execute("SELECT * FROM versions WHERE project_id=? ORDER BY number", (row["id"],)).fetchall()
     models = con.execute("SELECT * FROM models WHERE project_id=? ORDER BY rowid", (row["id"],)).fetchall()
     return {
         "id": row["id"], "name": row["name"], "type": row["type"],
         "description": row["description"], "createdAt": row["created_at"],
         "updatedAt": row["updated_at"], "archived": bool(row["archived"]),
+        # Stable across every member's private copy, so the onboarding tour can
+        # find "the detection example" without knowing any generated id.
+        "demoKey": row["demo_key"] if "demo_key" in row.keys() else None,
         "classes": json.loads(row["classes"]), "colors": json.loads(row["colors"] or "{}"),
         "assets": [{
             "id": a["id"], "name": a["name"], "src": f"/files/{a['id']}",
@@ -436,6 +584,7 @@ class VersionPayload(BaseModel):
     splits: tuple[int, int, int] = (70, 20, 10)
     augmentations: dict[str, dict[str, Any]] = Field(default_factory=dict)
     augmentation_copies: int = Field(default=2, ge=1, le=8)
+    enforce_quality: bool = False
 
 
 class VersionUpdatePayload(BaseModel):
@@ -522,6 +671,28 @@ class SmartMaskPayload(BaseModel):
     y: float = Field(ge=0, le=100)
     label: str = Field(min_length=1, max_length=60)
     size: float = Field(default=36, ge=5, le=95)
+    engine: str = Field(default="grabcut", max_length=40)
+
+
+class AdvanceJobPayload(BaseModel):
+    project_id: str
+    category: str = Field(pattern=r"^(smart-segmentation|text-auto-label|model-assisted|batch-masks|video-propagation|quality-review)$")
+    engine: str = Field(min_length=1, max_length=80)
+    confidence: float = Field(default=0.35, ge=0.01, le=0.99)
+    limit: int = Field(default=100, ge=1, le=5000)
+    overwrite: bool = False
+    prompt: str = Field(default="", max_length=2000)
+    model_id: str | None = None
+    sam_model: str = Field(default="sam2.1_s.pt", max_length=80)
+    slicing: bool = False
+
+
+class AdvanceReviewPayload(BaseModel):
+    action: str = Field(pattern=r"^(accept|reject)$")
+
+
+class AdvanceBulkReviewPayload(BaseModel):
+    action: str = Field(pattern=r"^(accept|reject)$")
 
 
 class WorkflowPayload(BaseModel):
@@ -607,15 +778,63 @@ class AnnotationCommentPayload(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
 
 
+class ModelEvaluationPayload(BaseModel):
+    split: str = Field(default="test", pattern=r"^(train|valid|test|all)$")
+    confidence: float = Field(default=0.05, ge=0.01, le=0.95)
+    iou_threshold: float = Field(default=0.5, ge=0.1, le=0.95)
+    limit: int = Field(default=250, ge=1, le=2000)
+
+
+class DeploymentConfigPayload(BaseModel):
+    primary_model_id: str | None = None
+    canary_model_id: str | None = None
+    canary_percent: int = Field(default=0, ge=0, le=100)
+    capture_samples: bool = False
+
+
+class InferenceFeedbackPayload(BaseModel):
+    feedback: str = Field(pattern=r"^(correct|incorrect)$")
+    note: str = Field(default="", max_length=1000)
+
+
+class HealthActionPayload(BaseModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=5000)
+    action: str = Field(pattern=r"^(delete|review|approve|train|valid|test)$")
+
+
+class AnnotationLockPayload(BaseModel):
+    ttl_seconds: int = Field(default=300, ge=30, le=1800)
+
+
 # Authentication is on by default. Set VISIONFLOW_REQUIRE_AUTH=0 only for
 # explicitly isolated local development or automated fixtures.
 AUTH_REQUIRED = os.getenv("VISIONFLOW_REQUIRE_AUTH", "1").lower() in {"1", "true", "yes"}
+ALLOW_SELF_REGISTRATION = os.getenv("VISIONFLOW_ALLOW_SELF_REGISTRATION", "1").lower() in {"1", "true", "yes"}
 OTP_SECRET = os.getenv("VISIONFLOW_OTP_SECRET") or secrets.token_hex(32)
 OTP_DEV_CODE = os.getenv("VISIONFLOW_OTP_DEV_CODE", "").strip()
+PUBLIC_URL = os.getenv("VISIONFLOW_PUBLIC_URL", "").strip().rstrip("/")
+COOKIE_SECURE = os.getenv("VISIONFLOW_COOKIE_SECURE", "auto").lower()
+if COOKIE_SECURE == "auto":
+    COOKIE_SECURE_ENABLED = PUBLIC_URL.lower().startswith("https://")
+else:
+    COOKIE_SECURE_ENABLED = COOKIE_SECURE in {"1", "true", "yes"}
+
+
+def environment_list(name: str, defaults: list[str]) -> list[str]:
+    configured = os.getenv(name, "").strip()
+    return [item.strip() for item in configured.split(",") if item.strip()] if configured else defaults
+
+
+ALLOWED_ORIGINS = environment_list(
+    "VISIONFLOW_ALLOWED_ORIGINS",
+    ["http://localhost:5173", "http://127.0.0.1:5173"],
+)
+ALLOWED_HOSTS = environment_list("VISIONFLOW_ALLOWED_HOSTS", ["*"])
 AUTH_PUBLIC_PATHS = {
     "/",
     "/favicon.svg",
     "/api/health",
+    "/api/ready",
     "/api/auth/status",
     "/api/auth/login",
     "/api/auth/register",
@@ -682,7 +901,7 @@ def send_login_otp(email: str, code: str) -> None:
         raise HTTPException(502, "Gmail tidak dapat mengirim OTP. Periksa alamat Gmail dan App Password.") from exc
 
 
-def create_member_session(member: sqlite3.Row) -> JSONResponse:
+def create_member_session(member: sqlite3.Row, status_code: int = 200) -> JSONResponse:
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + timedelta(days=30)
     with db() as con:
@@ -691,8 +910,15 @@ def create_member_session(member: sqlite3.Row) -> JSONResponse:
             "INSERT INTO auth_sessions (token_hash,member_id,created_at,expires_at) VALUES (?,?,?,?)",
             (hashlib.sha256(token.encode("utf-8")).hexdigest(), member["id"], now(), expires.isoformat()),
         )
-    response = JSONResponse({"token": token, "member": member_json(member)})
-    response.set_cookie("vf_session", token, max_age=30 * 86400, httponly=True, samesite="lax", secure=False)
+    response = JSONResponse({"token": token, "member": member_json(member)}, status_code=status_code)
+    response.set_cookie(
+        "vf_session",
+        token,
+        max_age=30 * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=COOKIE_SECURE_ENABLED,
+    )
     return response
 
 
@@ -711,12 +937,70 @@ def session_member(authorization: str | None, cookie_token: str | None = None) -
 
 
 app = FastAPI(title="Salnova API", version="0.3.0")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+PROJECT_PATH_PATTERN = re.compile(r"^/api/projects/([^/]+)")
+
+
+def member_can_access_project(con, project_id: str, member_id: str | None) -> bool:
+    """A project is reachable by its owner, its collaborators, and nobody else.
+
+    Projects with no owner predate per-account isolation or were made in local
+    mode, so they stay visible to everyone rather than becoming unreachable.
+    """
+    row = con.execute("SELECT owner_id, demo_key FROM projects WHERE id=?", (project_id,)).fetchone()
+    if not row:
+        # Unknown id: let the route answer with its own 404 instead of guessing.
+        return True
+    if row["owner_id"] is None and row["demo_key"]:
+        # A tutorial template. Members work on their own copy, never the original.
+        return False
+    if row["owner_id"] is None or member_id is None:
+        return True
+    if row["owner_id"] == member_id:
+        return True
+    return bool(
+        con.execute(
+            "SELECT 1 FROM project_collaborators WHERE project_id=? AND member_id=?",
+            (project_id, member_id),
+        ).fetchone()
+    )
 
 
 @app.middleware("http")
 async def enforce_workspace_role(request: Request, call_next):
     """Authenticate production sessions and enforce workspace role boundaries."""
+    if request.method == "POST" and request.url.path in {
+        "/api/auth/bootstrap",
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/otp/request",
+        "/api/auth/otp/verify",
+        "/api/auth/firebase",
+    }:
+        client = request.client.host if request.client else "unknown"
+        key = f"{client}:{request.url.path}"
+        cutoff = time.monotonic() - AUTH_RATE_WINDOW_SECONDS
+        with AUTH_RATE_LIMIT_LOCK:
+            bucket = AUTH_REQUESTS[key]
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= AUTH_RATE_LIMIT:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many authentication attempts; try again later"},
+                    headers={"Retry-After": str(AUTH_RATE_WINDOW_SECONDS)},
+                )
+            bucket.append(time.monotonic())
     member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
     if request.url.path.startswith((
         "/api/training-workers/agent/",
@@ -730,6 +1014,14 @@ async def enforce_workspace_role(request: Request, call_next):
         request.state.member_id = member["id"]
         request.state.actor = member["name"]
         role = member["role"]
+        # Enforcing here covers every /api/projects/{id}/... route at once, so a
+        # new project-scoped endpoint cannot forget its own ownership check.
+        project_match = PROJECT_PATH_PATTERN.match(request.url.path)
+        if project_match:
+            with db() as con:
+                if not member_can_access_project(con, unquote(project_match.group(1)), member["id"]):
+                    # 404, not 403: someone else's project should not be observable.
+                    return JSONResponse(status_code=404, content={"detail": "Project not found"})
     else:
         request.state.actor = "Local Owner"
         role = request.headers.get("X-Workspace-Role", "owner").lower()
@@ -775,7 +1067,21 @@ def validate_zip_size(archive: zipfile.ZipFile, maximum_uncompressed: int) -> No
 @app.get("/api/health")
 def health():
     ml_ready = importlib.util.find_spec("ultralytics") is not None
-    return {"status": "ok", "database": str(DB_PATH), "mlReady": ml_ready}
+    return {"status": "ok", "version": app.version, "mlReady": ml_ready}
+
+
+@app.get("/api/ready")
+def readiness():
+    try:
+        with db() as con:
+            con.execute("SELECT 1").fetchone()
+        storage_ready = DATA.is_dir() and os.access(DATA, os.W_OK)
+    except (OSError, sqlite3.Error) as exc:
+        LOGGER.exception("Readiness check failed")
+        raise HTTPException(503, "Database or persistent storage is unavailable") from exc
+    if not storage_ready:
+        raise HTTPException(503, "Persistent storage is not writable")
+    return {"status": "ready", "database": "ok", "storage": "writable"}
 
 
 @app.post("/api/assistant/chat")
@@ -898,6 +1204,24 @@ def member_json(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def project_summary_dict(con: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+    """Return dashboard metadata without embedding every asset annotation."""
+    asset_stats = con.execute(
+        "SELECT COUNT(*) AS total, MIN(rowid) AS cover_rowid FROM assets WHERE project_id=?",
+        (row["id"],),
+    ).fetchone()
+    cover = (
+        con.execute("SELECT id FROM assets WHERE rowid=?", (asset_stats["cover_rowid"],)).fetchone()
+        if asset_stats["cover_rowid"] is not None
+        else None
+    )
+    summary = project_dict(con, row, include_assets=False)
+    summary["assetCount"] = asset_stats["total"]
+    summary["coverImage"] = f"/files/{cover['id']}" if cover else None
+    summary["summary"] = True
+    return summary
+
+
 def request_member_id(request: Request, con: sqlite3.Connection) -> str | None:
     member_id = getattr(request.state, "member_id", None)
     if member_id or AUTH_REQUIRED:
@@ -913,7 +1237,12 @@ def auth_status(request: Request):
     member = session_member(request.headers.get("Authorization"), request.cookies.get("vf_session"))
     with db() as con:
         setup_required = not con.execute("SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL OR email_verified=1 LIMIT 1").fetchone()
-    return {"required": AUTH_REQUIRED, "setupRequired": setup_required, "member": member_json(member) if member else None}
+    return {
+        "required": AUTH_REQUIRED,
+        "setupRequired": setup_required,
+        "registrationAllowed": ALLOW_SELF_REGISTRATION or setup_required,
+        "member": member_json(member) if member else None,
+    }
 
 
 @app.post("/api/auth/bootstrap", status_code=201)
@@ -963,6 +1292,11 @@ def register(payload: BootstrapPayload):
     display_name = payload.name.strip()
     digest, salt = password_digest(payload.password)
     with db() as con:
+        configured = con.execute(
+            "SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL OR email_verified=1 LIMIT 1"
+        ).fetchone()
+        if configured and not ALLOW_SELF_REGISTRATION:
+            raise HTTPException(403, "Public registration is disabled for this workspace")
         if con.execute("SELECT 1 FROM workspace_members WHERE email=?", (email,)).fetchone():
             raise HTTPException(409, "Email Gmail ini sudah terdaftar. Silakan Sign In.")
         if con.execute("SELECT 1 FROM workspace_members WHERE lower(name)=lower(?)", (display_name,)).fetchone():
@@ -977,7 +1311,7 @@ def register(payload: BootstrapPayload):
             (member_id, display_name, email, role, now(), digest, salt),
         )
         member = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
-    return create_member_session(member)
+    return create_member_session(member, status_code=201)
 
 
 @app.post("/api/auth/firebase")
@@ -998,6 +1332,11 @@ def firebase_login(payload: FirebaseLoginPayload):
     with db() as con:
         member = con.execute("SELECT * FROM workspace_members WHERE email=?", (email,)).fetchone()
         if not member:
+            configured = con.execute(
+                "SELECT 1 FROM workspace_members WHERE password_hash IS NOT NULL OR email_verified=1 LIMIT 1"
+            ).fetchone()
+            if configured and not ALLOW_SELF_REGISTRATION:
+                raise HTTPException(403, "Public registration is disabled for this workspace")
             member_id = uid()
             con.execute(
                 "INSERT INTO workspace_members (id,name,email,role,created_at,email_verified,onboarding_completed) VALUES (?,?,?,?,?,1,0)",
@@ -1187,6 +1526,46 @@ def system_info():
     return {"disk": {"total": total, "used": used, "free": free}, "gpu": gpu, "data": counts, "database": str(DB_PATH)}
 
 
+@app.get("/api/jobs")
+def global_jobs(limit: int = 100):
+    items: list[dict[str, Any]] = []
+    with db() as con:
+        for row in con.execute("SELECT m.id,m.project_id,m.name,m.status,m.progress,m.error,m.created_at,m.training_detail,p.name project_name FROM models m JOIN projects p ON p.id=m.project_id ORDER BY m.rowid DESC LIMIT ?", (max(1, min(limit, 200)),)):
+            items.append({"id": row["id"], "projectId": row["project_id"], "projectName": row["project_name"], "kind": "training", "name": row["name"], "status": row["status"], "progress": row["progress"], "detail": json.loads(row["training_detail"] or "{}").get("stage") or row["error"] or "", "createdAt": row["created_at"], "target": f"#/projects/{row['project_id']}/train"})
+        for row in con.execute("SELECT j.*,p.name project_name FROM advance_jobs j JOIN projects p ON p.id=j.project_id ORDER BY j.rowid DESC LIMIT ?", (max(1, min(limit, 200)),)):
+            items.append({"id": row["id"], "projectId": row["project_id"], "projectName": row["project_name"], "kind": "advance", "name": row["engine"], "status": row["status"], "progress": row["progress"], "detail": row["error"] or f"{row['processed']}/{row['total']} assets", "createdAt": row["created_at"], "target": "#/advance"})
+        for row in con.execute("SELECT e.*,m.name model_name,p.name project_name FROM model_evaluations e JOIN models m ON m.id=e.model_id JOIN projects p ON p.id=e.project_id ORDER BY e.rowid DESC LIMIT ?", (max(1, min(limit, 200)),)):
+            items.append({"id": row["id"], "projectId": row["project_id"], "projectName": row["project_name"], "kind": "evaluation", "name": f"Evaluate {row['model_name']}", "status": row["status"], "progress": row["progress"], "detail": row["error"] or f"{row['split']} split", "createdAt": row["created_at"], "target": f"#/projects/{row['project_id']}/registry"})
+    for project_id, progress in VERSION_GENERATION_PROGRESS.items():
+        items.append({"id": f"version-{project_id}", "projectId": project_id, "kind": "version", "name": "Dataset version", "status": progress.get("status", "running"), "progress": progress.get("progress", 0), "detail": progress.get("stage", ""), "createdAt": progress.get("updatedAt", now()), "target": f"#/projects/{project_id}/versions"})
+    for project_id, progress in DATASET_HEALTH_PROGRESS.items():
+        if progress.get("scanning"):
+            items.append({"id": f"health-{project_id}", "projectId": project_id, "kind": "health", "name": "Dataset health scan", "status": "running", "progress": progress.get("progress", 0), "detail": progress.get("stage", ""), "createdAt": now(), "target": f"#/projects/{project_id}/insights"})
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return items[:max(1, min(limit, 200))]
+
+
+@app.get("/api/notifications")
+def list_notifications(limit: int = 50):
+    with db() as con:
+        rows = con.execute("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 200)),)).fetchall()
+    return [{"id": row["id"], "projectId": row["project_id"], "kind": row["kind"], "title": row["title"], "message": row["message"], "target": row["target"], "read": bool(row["read"]), "createdAt": row["created_at"]} for row in rows]
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def read_notification(notification_id: str):
+    with db() as con:
+        con.execute("UPDATE notifications SET read=1 WHERE id=?", (notification_id,))
+    return {"id": notification_id, "read": True}
+
+
+@app.post("/api/notifications/read-all")
+def read_all_notifications():
+    with db() as con:
+        con.execute("UPDATE notifications SET read=1")
+    return {"read": True}
+
+
 @app.get("/api/members")
 def list_members():
     with db() as con:
@@ -1290,14 +1669,121 @@ async def restore_workspace(file: UploadFile = File(...)):
         temporary_db.unlink(missing_ok=True)
 
 
+def _copy_tree(source: Path, target: Path) -> None:
+    if source.is_dir():
+        shutil.copytree(source, target, dirs_exist_ok=True)
+
+
+def seed_demo_projects(con, member_id: str) -> int:
+    """Give a member their own copy of every tutorial template.
+
+    Copies are independent down to the files on disk, because delete_project()
+    removes UPLOADS/<project>, VERSIONS/<project>, and RUNS/<model> outright.
+    Sharing those directories would let one member's cleanup wipe the tutorial
+    for everybody else.
+    """
+    templates = con.execute(
+        "SELECT * FROM projects WHERE owner_id IS NULL AND demo_key IS NOT NULL ORDER BY rowid"
+    ).fetchall()
+    created = 0
+    for template in templates:
+        # Every member gets their own id for the same template, so keep the random
+        # tail wide enough that two members seeding at once cannot collide.
+        new_project = f"{template['demo_key'][:24]}-{uid()[:8]}"
+        con.execute(
+            "INSERT INTO projects (id,name,type,description,created_at,classes,colors,archived,updated_at,owner_id,demo_key)"
+            " VALUES (?,?,?,?,?,?,?,0,?,?,?)",
+            (new_project, template["name"], template["type"], template["description"],
+             now()[:10], template["classes"], template["colors"], now(), member_id, template["demo_key"]),
+        )
+
+        target_dir = UPLOADS / new_project
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for asset in con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (template["id"],)):
+            asset_id = uid()
+            source_file = Path(asset["path"])
+            target_file = target_dir / f"{asset_id}{source_file.suffix.lower() or '.jpg'}"
+            if source_file.is_file():
+                shutil.copy2(source_file, target_file)
+            boxes = json.loads(asset["boxes"] or "[]")
+            for box in boxes:
+                box["id"] = uid()
+            con.execute(
+                "INSERT INTO assets (id,project_id,name,path,split,status,boxes,split_locked,review_status,tags,metadata)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (asset_id, new_project, asset["name"], str(target_file), asset["split"], asset["status"],
+                 json.dumps(boxes), asset["split_locked"], asset["review_status"], asset["tags"], asset["metadata"]),
+            )
+
+        _copy_tree(VERSIONS / template["id"], VERSIONS / new_project)
+        version_columns = [c for c in columns_of_table(con, "versions") if c != "id"]
+        for version in con.execute("SELECT * FROM versions WHERE project_id=? ORDER BY rowid", (template["id"],)):
+            record = {c: version[c] for c in version_columns}
+            record["project_id"] = new_project
+            if record.get("path"):
+                record["path"] = str(record["path"]).replace(template["id"], new_project)
+            names = ",".join(["id", *record])
+            con.execute(
+                f"INSERT INTO versions ({names}) VALUES ({','.join('?' * (len(record) + 1))})",
+                [uid(), *record.values()],
+            )
+
+        model_columns = [c for c in columns_of_table(con, "models") if c != "id"]
+        for model in con.execute("SELECT * FROM models WHERE project_id=? ORDER BY rowid", (template["id"],)):
+            model_id = uid()
+            _copy_tree(RUNS / model["id"], RUNS / model_id)
+            record = {c: model[c] for c in model_columns}
+            record["project_id"] = new_project
+            if record.get("weights_path"):
+                record["weights_path"] = str(record["weights_path"]).replace(model["id"], model_id)
+            names = ",".join(["id", *record])
+            con.execute(
+                f"INSERT INTO models ({names}) VALUES ({','.join('?' * (len(record) + 1))})",
+                [model_id, *record.values()],
+            )
+        created += 1
+
+    con.execute("UPDATE workspace_members SET demo_seeded=1 WHERE id=?", (member_id,))
+    return created
+
+
+def columns_of_table(con, table: str) -> list[str]:
+    return [row[1] for row in con.execute(f"PRAGMA table_info({table})")]
+
+
 @app.get("/api/projects")
-def list_projects():
+def list_projects(request: Request):
+    member_id = getattr(request.state, "member_id", None)
     with db() as con:
-        return [project_dict(con, row) for row in con.execute("SELECT * FROM projects ORDER BY rowid DESC")]
+        if member_id is not None:
+            seeded = con.execute(
+                "SELECT demo_seeded FROM workspace_members WHERE id=?", (member_id,)
+            ).fetchone()
+            if seeded is not None and not seeded["demo_seeded"]:
+                try:
+                    seed_demo_projects(con, member_id)
+                except Exception:
+                    # A tutorial is never worth failing the dashboard over.
+                    LOGGER.exception("Demo seeding failed for member %s", member_id)
+                    con.execute("UPDATE workspace_members SET demo_seeded=1 WHERE id=?", (member_id,))
+        if member_id is None:
+            # Local mode has no accounts, so the whole workspace stays visible.
+            rows = con.execute("SELECT * FROM projects ORDER BY rowid DESC")
+        else:
+            rows = con.execute(
+                """SELECT p.* FROM projects p
+                   WHERE (p.owner_id IS NULL AND p.demo_key IS NULL)
+                      OR p.owner_id=?
+                      OR EXISTS (SELECT 1 FROM project_collaborators c
+                                 WHERE c.project_id=p.id AND c.member_id=?)
+                   ORDER BY p.rowid DESC""",
+                (member_id, member_id),
+            )
+        return [project_summary_dict(con, row) for row in rows]
 
 
 @app.post("/api/projects", status_code=201)
-def create_project(payload: ProjectCreate):
+def create_project(payload: ProjectCreate, request: Request):
     if payload.type not in ProjectCreate.supported_types():
         raise HTTPException(400, "Unsupported project type")
     cleaned_classes = validate_class_names(payload.classes)
@@ -1305,7 +1791,7 @@ def create_project(payload: ProjectCreate):
     project_id = "-".join("".join(c if c.isalnum() else " " for c in project_id).split()) + "-" + uid()[:4]
     with db() as con:
         colors = {name: payload.colors.get(name, "#7457e8") for name in cleaned_classes}
-        con.execute("INSERT INTO projects (id,name,type,description,created_at,classes,colors,updated_at) VALUES (?,?,?,?,?,?,?,?)", (project_id, payload.name, payload.type, payload.description, now()[:10], json.dumps(cleaned_classes), json.dumps(colors), now()))
+        con.execute("INSERT INTO projects (id,name,type,description,created_at,classes,colors,updated_at,owner_id) VALUES (?,?,?,?,?,?,?,?,?)", (project_id, payload.name, payload.type, payload.description, now()[:10], json.dumps(cleaned_classes), json.dumps(colors), now(), getattr(request.state, "member_id", None)))
         log_activity(con, "project.created", payload.name, project_id)
         row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         return project_dict(con, row)
@@ -1621,6 +2107,30 @@ def dataset_health_progress(project_id: str):
     }
 
 
+@app.post("/api/projects/{project_id}/health/actions")
+def apply_dataset_health_action(project_id: str, payload: HealthActionPayload):
+    unique_ids = list(dict.fromkeys(payload.asset_ids))
+    placeholders = ",".join("?" for _ in unique_ids)
+    with db() as con:
+        assets = con.execute(f"SELECT id,path FROM assets WHERE project_id=? AND id IN ({placeholders})", (project_id, *unique_ids)).fetchall()
+        if len(assets) != len(unique_ids):
+            raise HTTPException(404, "One or more dataset assets were not found")
+        if payload.action == "delete":
+            con.execute(f"DELETE FROM assets WHERE project_id=? AND id IN ({placeholders})", (project_id, *unique_ids))
+            for asset in assets:
+                target = Path(asset["path"]).resolve()
+                if target.is_file() and (target.parent == (UPLOADS / project_id).resolve() or (UPLOADS / project_id).resolve() in target.parents):
+                    target.unlink(missing_ok=True)
+        elif payload.action in {"review", "approve"}:
+            status = "needs-fix" if payload.action == "review" else "approved"
+            con.execute(f"UPDATE assets SET review_status=? WHERE project_id=? AND id IN ({placeholders})", (status, project_id, *unique_ids))
+        else:
+            con.execute(f"UPDATE assets SET split=?,split_locked=1 WHERE project_id=? AND id IN ({placeholders})", (payload.action, project_id, *unique_ids))
+        log_activity(con, "dataset.health-action", f"{payload.action} · {len(unique_ids)} assets", project_id)
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return project_dict(con, project)
+
+
 @app.get("/api/projects/{project_id}/annotation-jobs")
 def list_annotation_jobs(project_id: str):
     with db() as con:
@@ -1752,14 +2262,23 @@ def delete_project(project_id: str):
     for root in (UPLOADS, VERSIONS):
         target = (root / project_id).resolve()
         if target.parent == root.resolve() and target.is_dir():
-            shutil.rmtree(target)
+            try:
+                shutil.rmtree(target)
+            except OSError as error:
+                LOGGER.warning("Project %s deleted but cleanup of %s failed: %s", project_id, target, error)
     for model_id in model_ids:
         target = (RUNS / model_id).resolve()
         if target.parent == RUNS.resolve() and target.is_dir():
-            shutil.rmtree(target)
+            try:
+                shutil.rmtree(target)
+            except OSError as error:
+                LOGGER.warning("Project %s deleted but cleanup of %s failed: %s", project_id, target, error)
     for archive in EXPORTS.glob(f"{project_id}-*.zip"):
         if archive.resolve().parent == EXPORTS.resolve():
-            archive.unlink()
+            try:
+                archive.unlink()
+            except OSError as error:
+                LOGGER.warning("Project %s deleted but cleanup of %s failed: %s", project_id, archive, error)
 
 
 @app.post("/api/projects/{project_id}/assets", status_code=201)
@@ -1797,7 +2316,16 @@ async def upload_assets(project_id: str, files: list[UploadFile] = File(...)):
                         target = project_dir / f"{asset_id}.jpg"
                         cv2.imwrite(str(target), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
                         display_name = f"{Path(incoming.filename or 'video').stem}-frame-{frame_index:06d}.jpg"
-                        con.execute("INSERT INTO assets (id,project_id,name,path,split,status,boxes) VALUES (?,?,?,?,?,?,?)", (asset_id, project_id, display_name, str(target), "train", "unannotated", "[]"))
+                        metadata = {
+                            "videoGroup": video_id,
+                            "sourceVideo": incoming.filename or "video",
+                            "frameIndex": frame_index,
+                            "sampleRate": fps,
+                        }
+                        con.execute(
+                            "INSERT INTO assets (id,project_id,name,path,split,status,boxes,metadata) VALUES (?,?,?,?,?,?,?,?)",
+                            (asset_id, project_id, display_name, str(target), "train", "unannotated", "[]", json.dumps(metadata)),
+                        )
                         created.append(asset_id)
                         extracted += 1
                     frame_index += 1
@@ -2122,9 +2650,53 @@ def asset_collaboration(project_id: str, asset_id: str):
         revisions = con.execute("SELECT id,actor,created_at,boxes FROM annotation_revisions WHERE asset_id=? AND project_id=? ORDER BY created_at DESC LIMIT 50", (asset_id, project_id)).fetchall()
         comments = con.execute("SELECT id,actor,body,created_at FROM annotation_comments WHERE asset_id=? AND project_id=? ORDER BY created_at", (asset_id, project_id)).fetchall()
     return {
-        "revisions": [{"id": row["id"], "actor": row["actor"], "createdAt": row["created_at"], "annotations": len(json.loads(row["boxes"] or "[]"))} for row in revisions],
+        "revisions": [{"id": row["id"], "actor": row["actor"], "createdAt": row["created_at"], "annotations": len(json.loads(row["boxes"] or "[]")), "boxes": json.loads(row["boxes"] or "[]")} for row in revisions],
         "comments": [{"id": row["id"], "actor": row["actor"], "body": row["body"], "createdAt": row["created_at"]} for row in comments],
     }
+
+
+@app.post("/api/projects/{project_id}/assets/{asset_id}/revisions/{revision_id}/restore")
+def restore_annotation_revision(project_id: str, asset_id: str, revision_id: str, request: Request):
+    with db() as con:
+        revision = con.execute("SELECT * FROM annotation_revisions WHERE id=? AND project_id=? AND asset_id=?", (revision_id, project_id, asset_id)).fetchone()
+        if not revision:
+            raise HTTPException(404, "Annotation revision not found")
+        boxes = json.loads(revision["boxes"] or "[]")
+        actor = getattr(request.state, "actor", "Local Owner")
+        con.execute("UPDATE assets SET boxes=?,status=?,review_status='pending' WHERE id=? AND project_id=?", (json.dumps(boxes), "annotated" if boxes else "unannotated", asset_id, project_id))
+        con.execute("INSERT INTO annotation_revisions (id,project_id,asset_id,boxes,actor,created_at) VALUES (?,?,?,?,?,?)", (uid(), project_id, asset_id, json.dumps(boxes), f"{actor} · restored", now()))
+        log_activity(con, "annotation.restored", f"Revision {revision_id}", project_id, actor)
+        project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return project_dict(con, project)
+
+
+@app.get("/api/projects/{project_id}/assets/{asset_id}/lock")
+def annotation_lock(project_id: str, asset_id: str):
+    with db() as con:
+        con.execute("DELETE FROM annotation_locks WHERE expires_at<=?", (now(),))
+        row = con.execute("SELECT * FROM annotation_locks WHERE project_id=? AND asset_id=?", (project_id, asset_id)).fetchone()
+    return {"locked": bool(row), "actor": row["actor"] if row else None, "expiresAt": row["expires_at"] if row else None}
+
+
+@app.put("/api/projects/{project_id}/assets/{asset_id}/lock")
+def acquire_annotation_lock(project_id: str, asset_id: str, payload: AnnotationLockPayload, request: Request):
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=payload.ttl_seconds)).isoformat()
+    actor = getattr(request.state, "actor", "Local Owner")
+    member_id = getattr(request.state, "member_id", None)
+    with db() as con:
+        con.execute("DELETE FROM annotation_locks WHERE expires_at<=?", (now(),))
+        current = con.execute("SELECT * FROM annotation_locks WHERE asset_id=?", (asset_id,)).fetchone()
+        if current and current["member_id"] != member_id and current["actor"] != actor:
+            raise HTTPException(409, f"{current['actor']} is editing this image")
+        con.execute("INSERT INTO annotation_locks (project_id,asset_id,member_id,actor,expires_at,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET member_id=excluded.member_id,actor=excluded.actor,expires_at=excluded.expires_at,updated_at=excluded.updated_at", (project_id, asset_id, member_id, actor, expires, now()))
+    return {"locked": True, "actor": actor, "expiresAt": expires}
+
+
+@app.delete("/api/projects/{project_id}/assets/{asset_id}/lock", status_code=204)
+def release_annotation_lock(project_id: str, asset_id: str, request: Request):
+    actor = getattr(request.state, "actor", "Local Owner")
+    with db() as con:
+        con.execute("DELETE FROM annotation_locks WHERE project_id=? AND asset_id=? AND actor=?", (project_id, asset_id, actor))
 
 
 @app.post("/api/projects/{project_id}/assets/{asset_id}/comments", status_code=201)
@@ -2135,6 +2707,9 @@ def add_asset_comment(project_id: str, asset_id: str, payload: AnnotationComment
             raise HTTPException(404, "Asset not found")
         con.execute("INSERT INTO annotation_comments (id,project_id,asset_id,member_id,actor,body,created_at) VALUES (?,?,?,?,?,?,?)", (comment_id, project_id, asset_id, getattr(request.state, "member_id", None), getattr(request.state, "actor", "Local Owner"), payload.body.strip(), now()))
         log_activity(con, "annotation.comment", payload.body.strip()[:120], project_id, getattr(request.state, "actor", "Local Owner"))
+        mentioned = re.findall(r"@([A-Za-z0-9._-]+)", payload.body)
+        if mentioned:
+            create_notification(con, "mention", "Mentioned in an annotation comment", payload.body.strip()[:300], project_id, f"#/projects/{project_id}/dataset")
     return {"id": comment_id, "actor": getattr(request.state, "actor", "Local Owner"), "body": payload.body.strip(), "createdAt": now()}
 
 
@@ -2576,6 +3151,28 @@ def build_version(project_id: str, payload: VersionPayload):
         count = con.execute("SELECT COUNT(*) n FROM assets WHERE project_id=?", (project_id,)).fetchone()["n"]
         if not count:
             raise HTTPException(400, "Upload at least one image first")
+        if payload.enforce_quality:
+            blocked = []
+            for asset in con.execute("SELECT id,name,status,review_status,boxes FROM assets WHERE project_id=?", (project_id,)):
+                boxes = json.loads(asset["boxes"] or "[]")
+                invalid = any(float(box.get("w", 0)) <= 0 or float(box.get("h", 0)) <= 0 or float(box.get("x", 0)) < 0 or float(box.get("y", 0)) < 0 or float(box.get("x", 0)) + float(box.get("w", 0)) > 100.01 or float(box.get("y", 0)) + float(box.get("h", 0)) > 100.01 for box in boxes)
+                if asset["review_status"] == "needs-fix":
+                    reason = "ditandai needs-fix"
+                elif invalid:
+                    # Geometry outside the image cannot be exported correctly, so an
+                    # explicit approval is not enough to let it through.
+                    reason = "anotasi keluar batas gambar"
+                elif asset["status"] == "unannotated" and asset["review_status"] != "approved":
+                    # Approving an unlabeled asset is how a reviewer keeps it as a
+                    # deliberate background/negative sample.
+                    reason = "belum dilabeli dan belum di-approve"
+                else:
+                    continue
+                blocked.append(f"{asset['name']} ({reason})")
+            if blocked:
+                listed = ", ".join(blocked[:5])
+                more = f", dan {len(blocked) - 5} lainnya" if len(blocked) > 5 else ""
+                raise HTTPException(409, f"Quality gate memblokir versi ini — {len(blocked)} aset: {listed}{more}")
         set_version_generation_progress(
             project_id,
             1,
@@ -2614,6 +3211,7 @@ def build_version(project_id: str, payload: VersionPayload):
         version_id = uid()
         con.execute("INSERT INTO versions (id,project_id,number,created_at,images,resize,augment,splits,path,augmentations,generated_images) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (version_id, project_id, version_no, now()[:10], count, payload.resize, int(payload.augment), json.dumps(payload.splits), str(target), json.dumps({"copies": payload.augmentation_copies, "transforms": payload.augmentations}), generated_images))
         log_activity(con, "version.generated", f"Version {version_no} · {generated_images} generated images", project_id)
+        create_notification(con, "version", "Dataset version ready", f"Version {version_no} · {generated_images} generated images", project_id, f"#/projects/{project_id}/versions")
         saved = project_dict(con, project)
         set_version_generation_progress(project_id, 100, "Immutable version selesai", "completed")
         return saved
@@ -3633,6 +4231,9 @@ def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
                 "UPDATE models SET status='ready',progress=100,map=?,precision=?,recall=?,weights_path=?,training_detail=? WHERE id=?",
                 (round(float(metrics.get("metrics/accuracy_top1", metrics.get("metrics/mAP50(B)", metrics.get("metrics/mAP50(M)", 0))))*100, 1), round(float(metrics.get("metrics/precision(B)", metrics.get("metrics/precision(M)", 0)))*100, 1), round(float(metrics.get("metrics/recall(B)", metrics.get("metrics/recall(M)", 0)))*100, 1), str(weights), json.dumps({"stage": "Training complete"}), model_id)
             )
+            completed = con.execute("SELECT project_id,name FROM models WHERE id=?", (model_id,)).fetchone()
+            if completed:
+                create_notification(con, "training", "Training complete", completed["name"], completed["project_id"], f"#/projects/{completed['project_id']}/registry")
     except Exception as exc:
         LOGGER.exception("Local training failed for model %s", model_id)
         best_checkpoint = RUNS / model_id / "weights" / "best.pt"
@@ -3641,6 +4242,9 @@ def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
                 "UPDATE models SET status='failed',error=?,weights_path=COALESCE(?,weights_path),training_detail=? WHERE id=?",
                 (str(exc)[:1000], str(best_checkpoint) if best_checkpoint.is_file() else None, json.dumps({"stage": "Training failed; checkpoint retained"}), model_id),
             )
+            failed = con.execute("SELECT project_id,name FROM models WHERE id=?", (model_id,)).fetchone()
+            if failed:
+                create_notification(con, "error", "Training failed", f"{failed['name']} · {str(exc)[:300]}", failed["project_id"], f"#/projects/{failed['project_id']}/train")
     finally:
         TRAIN_CANCEL.pop(model_id, None)
         schedule_training_jobs()
@@ -3811,6 +4415,12 @@ def update_model_lifecycle(project_id: str, model_id: str, payload: ModelLifecyc
         if payload.stage in {"staging", "production"} and (not model["weights_path"] or not Path(model["weights_path"]).is_file()):
             raise HTTPException(409, "Only models with a usable best.pt can be promoted")
         if payload.stage == "production":
+            evaluation = con.execute("SELECT * FROM model_evaluations WHERE project_id=? AND model_id=? AND status='completed' ORDER BY created_at DESC LIMIT 1", (project_id, model_id)).fetchone()
+            if not evaluation:
+                raise HTTPException(409, "Run Evaluation Workbench before promoting this model to production")
+            summary = json.loads(evaluation["summary"] or "{}")
+            if not summary.get("qualityGate"):
+                raise HTTPException(409, f"Production quality gate failed (F1 {summary.get('f1', 0)}%, recall {summary.get('recall', 0)}%)")
             con.execute("UPDATE models SET stage='staging' WHERE project_id=? AND stage='production' AND id<>?", (project_id, model_id))
         if alias:
             con.execute("UPDATE models SET alias=NULL WHERE project_id=? AND alias=? AND id<>?", (project_id, alias, model_id))
@@ -3973,6 +4583,144 @@ def evaluation_artifact_label(name: str) -> str | None:
     return None
 
 
+def model_evaluation_json(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"], "projectId": row["project_id"], "modelId": row["model_id"],
+        "status": row["status"], "split": row["split"], "confidence": row["confidence"],
+        "iouThreshold": row["iou_threshold"], "progress": row["progress"],
+        "summary": json.loads(row["summary"] or "{}"), "errors": json.loads(row["errors"] or "[]"),
+        "error": row["error"], "createdAt": row["created_at"], "updatedAt": row["updated_at"],
+    }
+
+
+def evaluation_iou(first: dict[str, Any], second: dict[str, Any]) -> float:
+    left, top = max(float(first["x"]), float(second["x"])), max(float(first["y"]), float(second["y"]))
+    right = min(float(first["x"]) + float(first["w"]), float(second["x"]) + float(second["w"]))
+    bottom = min(float(first["y"]) + float(first["h"]), float(second["y"]) + float(second["h"]))
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    union = float(first["w"]) * float(first["h"]) + float(second["w"]) * float(second["h"]) - intersection
+    return intersection / union if union > 0 else 0
+
+
+def score_evaluation_items(
+    items: list[dict[str, Any]], threshold: float, iou_threshold: float, classes: list[str], include_errors: bool = False
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    totals = {name: {"tp": 0, "fp": 0, "fn": 0} for name in classes}
+    errors: list[dict[str, Any]] = []
+    for item in items:
+        ground_truth = item["groundTruth"]
+        predictions = [prediction for prediction in item["predictions"] if prediction["confidence"] >= threshold]
+        matched_ground: set[int] = set()
+        matched_predictions: set[int] = set()
+        for prediction_index, prediction in enumerate(predictions):
+            candidates = [
+                (evaluation_iou(prediction, truth), truth_index)
+                for truth_index, truth in enumerate(ground_truth)
+                if truth_index not in matched_ground and truth.get("label") == prediction.get("label")
+            ]
+            best_iou, best_index = max(candidates, default=(0.0, -1))
+            if best_index >= 0 and best_iou >= iou_threshold:
+                matched_ground.add(best_index)
+                matched_predictions.add(prediction_index)
+                totals.setdefault(prediction["label"], {"tp": 0, "fp": 0, "fn": 0})["tp"] += 1
+            else:
+                totals.setdefault(prediction["label"], {"tp": 0, "fp": 0, "fn": 0})["fp"] += 1
+                if include_errors and len(errors) < 200:
+                    errors.append({"assetId": item["assetId"], "name": item["name"], "type": "false-positive", "class": prediction["label"], "confidence": prediction["confidence"], "prediction": prediction})
+        for truth_index, truth in enumerate(ground_truth):
+            if truth_index not in matched_ground:
+                totals.setdefault(truth["label"], {"tp": 0, "fp": 0, "fn": 0})["fn"] += 1
+                if include_errors and len(errors) < 200:
+                    errors.append({"assetId": item["assetId"], "name": item["name"], "type": "false-negative", "class": truth["label"], "groundTruth": truth})
+    per_class: dict[str, Any] = {}
+    all_tp = all_fp = all_fn = 0
+    for name, counts in totals.items():
+        tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
+        precision_value = tp / max(1, tp + fp)
+        recall_value = tp / max(1, tp + fn)
+        per_class[name] = {**counts, "precision": round(precision_value * 100, 1), "recall": round(recall_value * 100, 1), "f1": round((2 * precision_value * recall_value / max(0.000001, precision_value + recall_value)) * 100, 1)}
+        all_tp += tp; all_fp += fp; all_fn += fn
+    precision_value = all_tp / max(1, all_tp + all_fp)
+    recall_value = all_tp / max(1, all_tp + all_fn)
+    f1 = 2 * precision_value * recall_value / max(0.000001, precision_value + recall_value)
+    return {"tp": all_tp, "fp": all_fp, "fn": all_fn, "precision": round(precision_value * 100, 1), "recall": round(recall_value * 100, 1), "f1": round(f1 * 100, 1), "perClass": per_class}, errors
+
+
+def run_model_evaluation(evaluation_id: str, limit: int) -> None:
+    evaluation: sqlite3.Row | None = None
+    try:
+        from ultralytics import YOLO
+        with db() as con:
+            evaluation = con.execute("SELECT * FROM model_evaluations WHERE id=?", (evaluation_id,)).fetchone()
+            model = con.execute("SELECT * FROM models WHERE id=? AND project_id=?", (evaluation["model_id"], evaluation["project_id"])).fetchone() if evaluation else None
+            project = con.execute("SELECT * FROM projects WHERE id=?", (evaluation["project_id"],)).fetchone() if evaluation else None
+            if not evaluation or not model or not project or not model["weights_path"] or not Path(model["weights_path"]).is_file():
+                raise RuntimeError("Model weights are unavailable")
+            split_clause = "" if evaluation["split"] == "all" else " AND split=?"
+            params: tuple[Any, ...] = (evaluation["project_id"],) if evaluation["split"] == "all" else (evaluation["project_id"], evaluation["split"])
+            assets = list(con.execute(f"SELECT * FROM assets WHERE project_id=?{split_clause} ORDER BY rowid LIMIT {int(limit)}", params))
+            classes = json.loads(project["classes"] or "[]")
+            con.execute("UPDATE model_evaluations SET status='running',progress=2,updated_at=? WHERE id=?", (now(), evaluation_id))
+        if not assets:
+            raise RuntimeError(f"No assets are available in the {evaluation['split']} split")
+        detector = YOLO(model["weights_path"])
+        items: list[dict[str, Any]] = []
+        for index, asset in enumerate(assets, 1):
+            output = detector.predict(asset["path"], conf=0.01, verbose=False)[0]
+            width, height = output.orig_shape[1], output.orig_shape[0]
+            predictions: list[dict[str, Any]] = []
+            if output.probs is not None:
+                for class_index in output.probs.top5:
+                    score = float(output.probs.data[class_index])
+                    predictions.append({"label": str(output.names[int(class_index)]), "confidence": score, "x": 0, "y": 0, "w": 100, "h": 100})
+            else:
+                detection = output.obb if output.obb is not None else output.boxes
+                if detection is not None:
+                    for xyxy, score, class_index in zip(detection.xyxy.tolist(), detection.conf.tolist(), detection.cls.tolist()):
+                        predictions.append({"label": str(output.names[int(class_index)]), "confidence": round(float(score), 5), "x": xyxy[0] / width * 100, "y": xyxy[1] / height * 100, "w": (xyxy[2] - xyxy[0]) / width * 100, "h": (xyxy[3] - xyxy[1]) / height * 100})
+            ground_truth = [{"label": box.get("label", ""), "x": float(box.get("x", 0)), "y": float(box.get("y", 0)), "w": float(box.get("w", 0)), "h": float(box.get("h", 0))} for box in json.loads(asset["boxes"] or "[]")]
+            items.append({"assetId": asset["id"], "name": asset["name"], "groundTruth": ground_truth, "predictions": predictions})
+            if index == len(assets) or index % 5 == 0:
+                with db() as con:
+                    con.execute("UPDATE model_evaluations SET progress=?,updated_at=? WHERE id=?", (min(95, round(index / len(assets) * 95)), now(), evaluation_id))
+        sweep = []
+        for threshold in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9):
+            scored, _ = score_evaluation_items(items, threshold, evaluation["iou_threshold"], classes)
+            sweep.append({"threshold": threshold, "precision": scored["precision"], "recall": scored["recall"], "f1": scored["f1"]})
+        recommended = max(sweep, key=lambda entry: entry["f1"])
+        scored, errors = score_evaluation_items(items, evaluation["confidence"], evaluation["iou_threshold"], classes, True)
+        summary = {**scored, "assets": len(items), "thresholdSweep": sweep, "recommendedThreshold": recommended["threshold"], "qualityGate": scored["f1"] >= 60 and scored["recall"] >= 50}
+        with db() as con:
+            con.execute("UPDATE model_evaluations SET status='completed',progress=100,summary=?,errors=?,updated_at=? WHERE id=?", (json.dumps(summary), json.dumps(errors), now(), evaluation_id))
+            create_notification(con, "evaluation", "Model evaluation complete", f"{model['name']} · F1 {scored['f1']}% · {len(errors)} review items", evaluation["project_id"], f"#/projects/{evaluation['project_id']}/registry")
+    except Exception as exc:
+        LOGGER.exception("Model evaluation %s failed", evaluation_id)
+        with db() as con:
+            con.execute("UPDATE model_evaluations SET status='failed',error=?,updated_at=? WHERE id=?", (str(exc)[:2000], now(), evaluation_id))
+            if evaluation:
+                create_notification(con, "error", "Model evaluation failed", str(exc), evaluation["project_id"], f"#/projects/{evaluation['project_id']}/registry")
+
+
+@app.get("/api/projects/{project_id}/models/{model_id}/evaluations")
+def list_model_evaluations(project_id: str, model_id: str):
+    with db() as con:
+        rows = con.execute("SELECT * FROM model_evaluations WHERE project_id=? AND model_id=? ORDER BY created_at DESC LIMIT 20", (project_id, model_id)).fetchall()
+    return [model_evaluation_json(row) for row in rows]
+
+
+@app.post("/api/projects/{project_id}/models/{model_id}/evaluations", status_code=202)
+def create_model_evaluation(project_id: str, model_id: str, payload: ModelEvaluationPayload):
+    evaluation_id = uid()
+    with db() as con:
+        model = con.execute("SELECT 1 FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (model_id, project_id)).fetchone()
+        if not model:
+            raise HTTPException(404, "Deployable model not found")
+        con.execute("INSERT INTO model_evaluations (id,project_id,model_id,status,split,confidence,iou_threshold,created_at,updated_at) VALUES (?,?,?,'queued',?,?,?,?,?)", (evaluation_id, project_id, model_id, payload.split, payload.confidence, payload.iou_threshold, now(), now()))
+        row = con.execute("SELECT * FROM model_evaluations WHERE id=?", (evaluation_id,)).fetchone()
+    threading.Thread(target=run_model_evaluation, args=(evaluation_id, payload.limit), daemon=True, name=f"evaluation-{evaluation_id}").start()
+    return model_evaluation_json(row)
+
+
 @app.get("/api/projects/{project_id}/models/{model_id}/evaluation")
 def list_model_evaluation_artifacts(project_id: str, model_id: str):
     with db() as con:
@@ -4037,19 +4785,118 @@ def revoke_api_key(project_id: str, key_id: str):
 
 
 @app.get("/api/projects/{project_id}/deployment/metrics")
-def deployment_metrics(project_id: str):
+def deployment_metrics(project_id: str, hours: int = 168):
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, min(hours, 24 * 90)))).isoformat()
     with db() as con:
-        rows = con.execute("SELECT created_at,latency_ms,predictions,status,secure FROM inference_logs WHERE project_id=? ORDER BY rowid DESC LIMIT 100", (project_id,)).fetchall()
+        rows = con.execute("SELECT * FROM inference_logs WHERE project_id=? AND created_at>=? ORDER BY created_at", (project_id, cutoff)).fetchall()
     total = len(rows)
-    return {"requests": total, "averageLatencyMs": round(sum(row["latency_ms"] for row in rows) / total, 1) if total else 0, "errors": sum(row["status"] != "ok" for row in rows), "recent": [dict(row) for row in rows]}
+    latencies = [float(row["latency_ms"]) for row in rows]
+    buckets: dict[str, dict[str, Any]] = {}
+    per_model: dict[str, dict[str, Any]] = {}
+    class_totals: dict[str, int] = defaultdict(int)
+    midpoint = max(1, total // 2)
+    first_classes: dict[str, int] = defaultdict(int)
+    recent_classes: dict[str, int] = defaultdict(int)
+    for index, row in enumerate(rows):
+        bucket = row["created_at"][:13] + ":00"
+        entry = buckets.setdefault(bucket, {"time": bucket, "requests": 0, "errors": 0, "latencyTotal": 0.0})
+        entry["requests"] += 1; entry["errors"] += row["status"] != "ok"; entry["latencyTotal"] += float(row["latency_ms"])
+        model_entry = per_model.setdefault(row["model_id"] or "unknown", {"modelId": row["model_id"], "requests": 0, "errors": 0, "latencies": []})
+        model_entry["requests"] += 1; model_entry["errors"] += row["status"] != "ok"; model_entry["latencies"].append(float(row["latency_ms"]))
+        for name, count in json.loads(row["class_counts"] or "{}").items():
+            class_totals[name] += int(count)
+            (first_classes if index < midpoint else recent_classes)[name] += int(count)
+    bucket_items = [{**entry, "averageLatencyMs": round(entry.pop("latencyTotal") / max(1, entry["requests"]), 1)} for entry in buckets.values()]
+    model_items = [{**entry, "p95LatencyMs": percentile(entry.pop("latencies"), 0.95)} for entry in per_model.values()]
+    distribution_drift = 0.0
+    first_total, recent_total = sum(first_classes.values()), sum(recent_classes.values())
+    if first_total and recent_total:
+        distribution_drift = round(sum(abs(first_classes[name] / first_total - recent_classes[name] / recent_total) for name in set(first_classes) | set(recent_classes)) * 50, 1)
+    return {
+        "requests": total, "averageLatencyMs": round(sum(latencies) / total, 1) if total else 0,
+        "p50LatencyMs": percentile(latencies, 0.5), "p95LatencyMs": percentile(latencies, 0.95), "p99LatencyMs": percentile(latencies, 0.99),
+        "errors": sum(row["status"] != "ok" for row in rows), "errorRate": round(sum(row["status"] != "ok" for row in rows) / max(1, total) * 100, 1),
+        "buckets": bucket_items, "perModel": model_items, "classDistribution": dict(class_totals), "driftScore": distribution_drift,
+        "recent": [{**dict(row), "class_counts": json.loads(row["class_counts"] or "{}")} for row in reversed(rows[-100:])],
+    }
 
 
-@app.post("/api/projects/{project_id}/infer")
-async def infer(project_id: str, file: UploadFile = File(...), confidence: float = 0.5):
+def deployment_config_json(con: sqlite3.Connection, project_id: str) -> dict[str, Any]:
+    row = con.execute("SELECT * FROM deployment_configs WHERE project_id=?", (project_id,)).fetchone()
+    if not row:
+        primary = con.execute("SELECT id FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+        return {"primaryModelId": primary["id"] if primary else None, "previousModelId": None, "canaryModelId": None, "canaryPercent": 0, "captureSamples": False}
+    return {"primaryModelId": row["primary_model_id"], "previousModelId": row["previous_model_id"], "canaryModelId": row["canary_model_id"], "canaryPercent": row["canary_percent"], "captureSamples": bool(row["capture_samples"]), "updatedAt": row["updated_at"]}
+
+
+@app.get("/api/projects/{project_id}/deployment/config")
+def get_deployment_config(project_id: str):
     with db() as con:
-        model = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
-    if not model or not model["weights_path"]:
-        raise HTTPException(400, "No trained model is ready")
+        return deployment_config_json(con, project_id)
+
+
+@app.put("/api/projects/{project_id}/deployment/config")
+def update_deployment_config(project_id: str, payload: DeploymentConfigPayload):
+    with db() as con:
+        ids = [payload.primary_model_id, payload.canary_model_id]
+        for model_id in [item for item in ids if item]:
+            if not con.execute("SELECT 1 FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (model_id, project_id)).fetchone():
+                raise HTTPException(400, "Deployment model is not ready")
+        if payload.canary_percent and not payload.canary_model_id:
+            raise HTTPException(400, "Select a canary model before assigning traffic")
+        current = deployment_config_json(con, project_id)
+        previous = current.get("primaryModelId") if current.get("primaryModelId") != payload.primary_model_id else current.get("previousModelId")
+        con.execute("INSERT INTO deployment_configs (project_id,primary_model_id,previous_model_id,canary_model_id,canary_percent,capture_samples,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET primary_model_id=excluded.primary_model_id,previous_model_id=excluded.previous_model_id,canary_model_id=excluded.canary_model_id,canary_percent=excluded.canary_percent,capture_samples=excluded.capture_samples,updated_at=excluded.updated_at", (project_id, payload.primary_model_id, previous, payload.canary_model_id, payload.canary_percent, int(payload.capture_samples), now()))
+        log_activity(con, "deployment.updated", f"Primary {payload.primary_model_id or 'automatic'} · canary {payload.canary_percent}%", project_id)
+        return deployment_config_json(con, project_id)
+
+
+@app.post("/api/projects/{project_id}/deployment/rollback")
+def rollback_deployment(project_id: str):
+    with db() as con:
+        current = deployment_config_json(con, project_id)
+        previous = current.get("previousModelId")
+        if not previous or not con.execute("SELECT 1 FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (previous, project_id)).fetchone():
+            raise HTTPException(409, "No deployable previous model is available")
+        con.execute("UPDATE deployment_configs SET primary_model_id=?,previous_model_id=?,canary_model_id=NULL,canary_percent=0,updated_at=? WHERE project_id=?", (previous, current.get("primaryModelId"), now(), project_id))
+        create_notification(con, "deployment", "Deployment rolled back", "Previous production model is serving traffic again", project_id, f"#/projects/{project_id}/deploy")
+        return deployment_config_json(con, project_id)
+
+
+@app.post("/api/projects/{project_id}/deployment/requests/{request_id}/feedback")
+def inference_feedback(project_id: str, request_id: str, payload: InferenceFeedbackPayload):
+    with db() as con:
+        inference = con.execute("SELECT * FROM inference_logs WHERE id=? AND project_id=?", (request_id, project_id)).fetchone()
+        if not inference:
+            raise HTTPException(404, "Inference request not found")
+        asset_id = inference["asset_id"]
+        if payload.feedback == "incorrect" and inference["sample_path"] and not asset_id:
+            sample = Path(inference["sample_path"]).resolve()
+            project_uploads = (UPLOADS / project_id).resolve()
+            if sample.is_file() and project_uploads in sample.parents:
+                asset_id = uid()
+                con.execute("INSERT INTO assets (id,project_id,name,path,split,status,boxes,review_status,tags,metadata) VALUES (?,?,?,?,?,'unannotated','[]','needs-fix','[]',?)", (asset_id, project_id, f"deployment-feedback-{request_id}{sample.suffix}", str(sample), "train", json.dumps({"source": "deployment-feedback", "requestId": request_id, "note": payload.note.strip()})))
+                con.execute("INSERT OR IGNORE INTO active_learning_queue (id,project_id,asset_id,model_id,score,reason,status,created_at) VALUES (?,?,?,?,?,?, 'pending',?)", (uid(), project_id, asset_id, inference["model_id"], float(inference["average_confidence"] or 0), "Incorrect production prediction", now()))
+        con.execute("UPDATE inference_logs SET feedback=?,feedback_note=?,asset_id=? WHERE id=?", (payload.feedback, payload.note.strip(), asset_id, request_id))
+        log_activity(con, "deployment.feedback", f"{payload.feedback} · {payload.note[:120]}", project_id)
+        if payload.feedback == "incorrect":
+            create_notification(con, "feedback", "Production prediction needs review", payload.note.strip() or request_id, project_id, f"#/projects/{project_id}/insights")
+    return {"id": request_id, "feedback": payload.feedback, "note": payload.note.strip(), "assetId": asset_id}
+
+
+def select_deployment_model(con: sqlite3.Connection, project_id: str, allow_canary: bool = False) -> sqlite3.Row | None:
+    config = deployment_config_json(con, project_id)
+    selected_id = config.get("primaryModelId")
+    if allow_canary and config.get("canaryModelId") and random.random() * 100 < config.get("canaryPercent", 0):
+        selected_id = config["canaryModelId"]
+    if selected_id:
+        selected = con.execute("SELECT * FROM models WHERE id=? AND project_id=? AND weights_path IS NOT NULL", (selected_id, project_id)).fetchone()
+        if selected:
+            return selected
+    return con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+
+
+async def infer_with_model(model: sqlite3.Row, file: UploadFile, confidence: float) -> dict[str, Any]:
     temp = DATA / f"infer-{uid()}{Path(file.filename or '.jpg').suffix}"
     temp.write_bytes(await file.read())
     try:
@@ -4062,7 +4909,7 @@ async def infer(project_id: str, file: UploadFile = File(...), confidence: float
                 score = float(result.probs.data[class_index])
                 if score >= confidence:
                     predictions.append({"x1": 0, "y1": 0, "x2": result.orig_shape[1], "y2": result.orig_shape[0], "confidence": score, "class": names[int(class_index)], "type": "classification"})
-            return {"predictions": predictions, "image": {"width": result.orig_shape[1], "height": result.orig_shape[0]}}
+            return {"predictions": predictions, "image": {"width": result.orig_shape[1], "height": result.orig_shape[0]}, "modelId": model["id"]}
         mask_points = result.masks.xy if result.masks is not None else []
         detection = result.obb if result.obb is not None else result.boxes
         pose_points = result.keypoints.xy.tolist() if result.keypoints is not None else []
@@ -4070,14 +4917,21 @@ async def infer(project_id: str, file: UploadFile = File(...), confidence: float
         if detection is not None:
             for index, (xyxy, conf, cls) in enumerate(zip(detection.xyxy.tolist(), detection.conf.tolist(), detection.cls.tolist())):
                 polygon = [{"x": float(point[0]), "y": float(point[1])} for point in mask_points[index]] if index < len(mask_points) else None
-                if index < len(oriented_points):
-                    polygon = [{"x": float(point[0]), "y": float(point[1])} for point in oriented_points[index]]
-                if index < len(pose_points):
-                    polygon = [{"x": float(point[0]), "y": float(point[1])} for point in pose_points[index]]
+                if index < len(oriented_points): polygon = [{"x": float(point[0]), "y": float(point[1])} for point in oriented_points[index]]
+                if index < len(pose_points): polygon = [{"x": float(point[0]), "y": float(point[1])} for point in pose_points[index]]
                 predictions.append({"x1":xyxy[0], "y1":xyxy[1], "x2":xyxy[2], "y2":xyxy[3], "confidence":conf, "class":names[int(cls)], "points": polygon})
-        return {"predictions": predictions, "image": {"width": result.orig_shape[1], "height": result.orig_shape[0]}}
+        return {"predictions": predictions, "image": {"width": result.orig_shape[1], "height": result.orig_shape[0]}, "modelId": model["id"]}
     finally:
         temp.unlink(missing_ok=True)
+
+
+@app.post("/api/projects/{project_id}/infer")
+async def infer(project_id: str, file: UploadFile = File(...), confidence: float = 0.5):
+    with db() as con:
+        model = select_deployment_model(con, project_id)
+    if not model or not model["weights_path"]:
+        raise HTTPException(400, "No trained model is ready")
+    return await infer_with_model(model, file, confidence)
 
 
 @app.post("/api/deploy/{project_id}/infer")
@@ -4097,16 +4951,561 @@ async def secure_infer(project_id: str, file: UploadFile = File(...), confidence
             raise HTTPException(429, f"Rate limit exceeded ({DEPLOY_RATE_LIMIT} requests/minute)")
         bucket.append(time.time())
         con.execute("UPDATE api_keys SET last_used=? WHERE id=?", (now(), valid["id"]))
-        model = con.execute("SELECT id FROM models WHERE project_id=? AND weights_path IS NOT NULL ORDER BY CASE stage WHEN 'production' THEN 0 WHEN 'staging' THEN 1 ELSE 2 END,rowid DESC LIMIT 1", (project_id,)).fetchone()
+        model = select_deployment_model(con, project_id, allow_canary=True)
+        capture_samples = bool(deployment_config_json(con, project_id).get("captureSamples"))
+    request_id = uid()
+    sample_bytes = await file.read() if capture_samples else b""
+    if capture_samples:
+        await file.seek(0)
     try:
-        result = await infer(project_id, file, confidence)
+        if not model:
+            raise HTTPException(400, "No trained model is ready")
+        result = await infer_with_model(model, file, confidence)
+        counts: dict[str, int] = defaultdict(int)
+        for prediction in result["predictions"]: counts[prediction["class"]] += 1
+        average_confidence = sum(float(item["confidence"]) for item in result["predictions"]) / max(1, len(result["predictions"]))
+        sample_path: str | None = None
+        if sample_bytes:
+            sample_dir = (UPLOADS / project_id / "deployment-feedback").resolve()
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            suffix = Path(file.filename or ".jpg").suffix.lower()
+            if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}: suffix = ".jpg"
+            sample_target = (sample_dir / f"{request_id}{suffix}").resolve()
+            if sample_dir not in sample_target.parents:
+                raise HTTPException(400, "Invalid deployment sample target")
+            sample_target.write_bytes(sample_bytes)
+            sample_path = str(sample_target)
         with db() as con:
-            con.execute("INSERT INTO inference_logs (id,project_id,model_id,created_at,latency_ms,predictions,status,secure) VALUES (?,?,?,?,?,?,?,1)", (uid(), project_id, model["id"] if model else None, now(), round((time.perf_counter()-started)*1000, 2), len(result["predictions"]), "ok"))
+            con.execute("INSERT INTO inference_logs (id,project_id,model_id,created_at,latency_ms,predictions,status,secure,class_counts,average_confidence,sample_path) VALUES (?,?,?,?,?,?,?,1,?,?,?)", (request_id, project_id, model["id"], now(), round((time.perf_counter()-started)*1000, 2), len(result["predictions"]), "ok", json.dumps(counts), average_confidence, sample_path))
+        result["requestId"] = request_id
         return result
     except Exception:
         with db() as con:
-            con.execute("INSERT INTO inference_logs (id,project_id,model_id,created_at,latency_ms,predictions,status,secure) VALUES (?,?,?,?,?,?,?,1)", (uid(), project_id, model["id"] if model else None, now(), round((time.perf_counter()-started)*1000, 2), 0, "error"))
+            con.execute("INSERT INTO inference_logs (id,project_id,model_id,created_at,latency_ms,predictions,status,secure,class_counts) VALUES (?,?,?,?,?,?,?,1,'{}')", (uid(), project_id, model["id"] if model else None, now(), round((time.perf_counter()-started)*1000, 2), 0, "error"))
         raise
+
+
+def advance_provider_catalog() -> list[dict[str, Any]]:
+    transformers_ready = importlib.util.find_spec("transformers") is not None
+    torch_ready = importlib.util.find_spec("torch") is not None
+    cuda_override = os.getenv("VISIONFLOW_CUDA", "").strip().lower()
+    if cuda_override in {"1", "true", "yes", "on"}:
+        cuda = True
+    elif cuda_override in {"0", "false", "no", "off"}:
+        cuda = False
+    else:
+        # Avoid importing torch on every provider request (which can add several
+        # seconds on CPU-only NAS hosts). CUDA wheels carry a +cu suffix; a
+        # local override remains available for unusual driver installations.
+        try:
+            torch_version = package_metadata.version("torch") if torch_ready else ""
+        except package_metadata.PackageNotFoundError:
+            torch_version = ""
+        cuda = bool(shutil.which("nvidia-smi")) and "+cpu" not in torch_version.lower()
+    hardware = "NVIDIA GPU detected" if cuda else "CPU runtime"
+    if not torch_ready:
+        hardware = "PyTorch unavailable"
+    return [
+        {
+            "id": "smart-segmentation",
+            "name": "Interactive Smart Mask",
+            "description": "Open Annotator and click an object to create one editable mask.",
+            "engines": [
+                {"id": "grabcut", "name": "GrabCut", "ready": True, "tier": "CPU fallback", "note": "Fast local contour from a rough region."},
+                {"id": "mobile-sam", "name": "Mobile SAM", "ready": True, "tier": "Fast", "weight": "mobile_sam.pt", "note": "Light promptable masks for CPU."},
+                {"id": "sam2.1-tiny", "name": "SAM 2.1 Tiny", "ready": True, "tier": "Fast", "weight": "sam2.1_t.pt", "note": "Recommended for CPU or modest GPUs."},
+                {"id": "sam2.1-small", "name": "SAM 2.1 Small", "ready": True, "tier": "Balanced", "weight": "sam2.1_s.pt", "note": "Recommended default for quality and speed."},
+                {"id": "sam2.1-base", "name": "SAM 2.1 Base+", "ready": True, "tier": "Quality", "weight": "sam2.1_b.pt", "note": "Better masks; GPU recommended."},
+                {"id": "sam2.1-large", "name": "SAM 2.1 Large", "ready": True, "tier": "Max quality", "weight": "sam2.1_l.pt", "note": "Heavy; CUDA strongly recommended."},
+                {"id": "sam3", "name": "SAM 3", "ready": cuda, "tier": "Experimental", "weight": "sam3.pt", "note": "Text and visual prompts; custom Meta license.", "reason": None if cuda else "A CUDA worker is required to avoid exhausting CPU-only hosts."},
+            ],
+        },
+        {
+            "id": "text-auto-label",
+            "name": "Text Auto-Label",
+            "description": "Find workspace classes from text and create boxes or polygons.",
+            "engines": [
+                {"id": "yoloe", "name": "YOLOE Open Vocabulary", "ready": True, "tier": "Fast", "weight": "yoloe-11s-seg.pt", "note": "Real-time text-prompt detection and segmentation."},
+                {"id": "sam3-text", "name": "SAM 3 Concepts", "ready": cuda, "tier": "Max quality", "weight": "sam3.pt", "note": "Segments all instances matching class concepts.", "reason": None if cuda else "A CUDA worker is required to avoid exhausting CPU-only hosts."},
+                {"id": "grounded-sam2", "name": "Grounding DINO + SAM 2.1", "ready": transformers_ready, "tier": "Robust", "weight": "sam2.1_s.pt", "note": "Strong two-stage local pipeline.", "reason": None if transformers_ready else "Install backend requirements to enable Transformers."},
+            ],
+        },
+        {
+            "id": "model-assisted",
+            "name": "Model-Assisted",
+            "description": "Use a trained project checkpoint, optionally refined by SAM.",
+            "engines": [
+                {"id": "project-yolo", "name": "Project YOLO", "ready": True, "tier": "Domain", "note": "Fastest after a project model has been trained."},
+                {"id": "project-yolo-sam2", "name": "Project YOLO + SAM 2.1", "ready": True, "tier": "Recommended", "weight": "sam2.1_s.pt", "note": "Domain detector with precise polygon refinement."},
+            ],
+        },
+        {
+            "id": "batch-masks",
+            "name": "Automatic Batch Masks",
+            "description": "Auto-generate draft masks across many unannotated images.",
+            "engines": [
+                {"id": "fastsam", "name": "FastSAM", "ready": True, "tier": "Fast", "weight": "FastSAM-s.pt", "note": "High-throughput proposals; review required."},
+                {"id": "sam2-auto", "name": "SAM 2.1 Automatic Masks", "ready": True, "tier": "Quality", "weight": "sam2.1_s.pt", "note": "Dense automatic mask proposals."},
+            ],
+        },
+        {
+            "id": "video-propagation",
+            "name": "Video Propagation",
+            "description": "Propagate keyframe masks and preserve object identity over time.",
+            "engines": [
+                {"id": "frame-interpolation", "name": "Keyframe Interpolation", "ready": True, "tier": "Built-in", "note": "Interpolates matching objects between annotated keyframes into reviewable drafts."},
+                {"id": "video-tracking", "name": "Video Object Tracker", "ready": True, "tier": "Built-in", "note": "Tracks boxes and masks frame-to-frame with optical flow while preserving object identity."},
+                {"id": "sam2-video", "name": "SAM 2.1 Video", "ready": False, "tier": "Tracking", "note": "Native mask tracking for imported frame sequences.", "reason": "The native SAM video predictor is not connected to the local worker yet."},
+                {"id": "sam3-video", "name": "SAM 3.1 Video", "ready": False, "tier": "Experimental", "note": "Text-guided multi-object tracking.", "reason": "Requires an imported frame sequence and a CUDA worker."},
+            ],
+        },
+        {
+            "id": "quality-review",
+            "name": "Quality & Review",
+            "description": "Review drafts, provenance, confidence, overlap, and uncertain examples.",
+            "engines": [
+                {"id": "draft-review", "name": "AI Draft Review", "ready": True, "tier": "Safe", "note": "Accept or reject without overwriting labels."},
+                {"id": "uncertainty", "name": "Uncertainty Queue", "ready": True, "tier": "Active learning", "note": "Prioritize low-confidence predictions for humans."},
+            ],
+        },
+        {"id": "runtime", "name": hardware, "description": "CUDA available" if cuda else "CPU-only runtime", "engines": []},
+    ]
+
+
+def advance_job_json(row: sqlite3.Row, drafts: list[sqlite3.Row] | None = None) -> dict[str, Any]:
+    return {
+        "id": row["id"], "projectId": row["project_id"], "category": row["category"],
+        "engine": row["engine"], "status": row["status"], "config": json.loads(row["config"] or "{}"),
+        "progress": row["progress"], "processed": row["processed"], "total": row["total"],
+        "error": row["error"], "createdAt": row["created_at"], "updatedAt": row["updated_at"],
+        "drafts": [advance_draft_json(item) for item in drafts] if drafts is not None else None,
+    }
+
+
+def advance_draft_json(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"], "jobId": row["job_id"], "projectId": row["project_id"],
+        "assetId": row["asset_id"], "annotations": json.loads(row["annotations"] or "[]"),
+        "confidence": row["confidence"], "status": row["status"], "engine": row["engine"],
+        "provenance": json.loads(row["provenance"] or "{}"), "createdAt": row["created_at"],
+        "reviewedAt": row["reviewed_at"],
+    }
+
+
+def cached_advance_model(key: str, factory: Callable[[], Any]) -> Any:
+    with ADVANCE_MODEL_LOCK:
+        if key not in ADVANCE_MODEL_CACHE:
+            ADVANCE_MODEL_CACHE[key] = factory()
+        return ADVANCE_MODEL_CACHE[key]
+
+
+def annotations_from_result(result: Any, allowed_classes: list[str], forced_label: str | None = None) -> tuple[list[dict[str, Any]], list[float]]:
+    width, height = result.orig_shape[1], result.orig_shape[0]
+    masks = result.masks.xy if result.masks is not None else []
+    boxes = result.boxes
+    annotations: list[dict[str, Any]] = []
+    scores: list[float] = []
+    if boxes is None:
+        return annotations, scores
+    confidences = boxes.conf.tolist() if boxes.conf is not None else [1.0] * len(boxes.xyxy)
+    classes = boxes.cls.tolist() if boxes.cls is not None else [0] * len(boxes.xyxy)
+    for index, (xyxy, score, class_index) in enumerate(zip(boxes.xyxy.tolist(), confidences, classes)):
+        name = forced_label or str(result.names.get(int(class_index), class_index) if isinstance(result.names, dict) else result.names[int(class_index)])
+        if name not in allowed_classes:
+            continue
+        x1, y1, x2, y2 = xyxy
+        annotation: dict[str, Any] = {
+            "id": uid(), "label": name, "x": x1 / width * 100, "y": y1 / height * 100,
+            "w": (x2 - x1) / width * 100, "h": (y2 - y1) / height * 100, "type": "box",
+        }
+        if index < len(masks) and len(masks[index]) >= 3:
+            annotation["type"] = "polygon"
+            annotation["points"] = [{"x": float(point[0]) / width * 100, "y": float(point[1]) / height * 100} for point in masks[index]]
+        annotations.append(annotation)
+        scores.append(float(score))
+    return annotations, scores
+
+
+def advance_predict(asset: sqlite3.Row, project: sqlite3.Row, config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[float], dict[str, Any]]:
+    from ultralytics import FastSAM, SAM, YOLO, YOLOE
+
+    engine = config["engine"]
+    classes = json.loads(project["classes"] or "[]")
+    if not classes:
+        raise RuntimeError("Project must have at least one class")
+    device = 0 if __import__("torch").cuda.is_available() else "cpu"
+    source = asset["path"]
+    confidence = float(config["confidence"])
+    prompt_label = config.get("prompt", "").strip()
+    if prompt_label not in classes:
+        prompt_label = classes[0]
+
+    if engine == "yoloe":
+        model = cached_advance_model("yoloe-11s-seg.pt", lambda: YOLOE("yoloe-11s-seg.pt"))
+        model.set_classes(classes)
+        result = model.predict(source, conf=confidence, device=device, verbose=False)[0]
+        annotations, scores = annotations_from_result(result, classes)
+        return annotations, scores, {"weights": "yoloe-11s-seg.pt", "device": str(device), "classes": classes}
+
+    if engine in {"sam3", "sam3-text"}:
+        model = cached_advance_model("sam3.pt", lambda: SAM("sam3.pt"))
+        result = model.predict(source, text=classes, conf=confidence, device=device, verbose=False)[0]
+        annotations, scores = annotations_from_result(result, classes)
+        return annotations, scores, {"weights": "sam3.pt", "device": str(device), "concepts": classes}
+
+    if engine == "grounded-sam2":
+        if importlib.util.find_spec("transformers") is None:
+            raise RuntimeError("Grounding DINO requires transformers; install backend requirements first")
+        from transformers import pipeline
+        detector = cached_advance_model(
+            "grounding-dino-tiny",
+            lambda: pipeline("zero-shot-object-detection", model="IDEA-Research/grounding-dino-tiny", device=device),
+        )
+        predictions = detector(Image.open(source).convert("RGB"), candidate_labels=classes, threshold=confidence)
+        bboxes = [[item["box"][key] for key in ("xmin", "ymin", "xmax", "ymax")] for item in predictions]
+        if not bboxes:
+            return [], [], {"weights": "grounding-dino-tiny + sam2.1_s.pt", "device": str(device)}
+        sam = cached_advance_model(config["sam_model"], lambda: SAM(config["sam_model"]))
+        result = sam.predict(source, bboxes=bboxes, device=device, verbose=False)[0]
+        labels = [str(item["label"]) for item in predictions]
+        annotations, scores = [], []
+        for index, mask in enumerate(result.masks.xy if result.masks is not None else []):
+            if index >= len(labels) or labels[index] not in classes or len(mask) < 3:
+                continue
+            points = [{"x": float(p[0]) / result.orig_shape[1] * 100, "y": float(p[1]) / result.orig_shape[0] * 100} for p in mask]
+            xs, ys = [p["x"] for p in points], [p["y"] for p in points]
+            annotations.append({"id": uid(), "label": labels[index], "type": "polygon", "points": points, "x": min(xs), "y": min(ys), "w": max(xs)-min(xs), "h": max(ys)-min(ys)})
+            scores.append(float(predictions[index]["score"]))
+        return annotations, scores, {"weights": "grounding-dino-tiny + " + config["sam_model"], "device": str(device), "concepts": classes}
+
+    if engine in {"project-yolo", "project-yolo-sam2"}:
+        with db() as con:
+            selected = con.execute("SELECT * FROM models WHERE project_id=? AND weights_path IS NOT NULL AND (? IS NULL OR id=?) ORDER BY rowid DESC LIMIT 1", (project["id"], config.get("model_id"), config.get("model_id"))).fetchone()
+        if not selected or not selected["weights_path"]:
+            raise RuntimeError("No trained project checkpoint is available")
+        detector = cached_advance_model(selected["weights_path"], lambda: YOLO(selected["weights_path"]))
+        detection = detector.predict(source, conf=confidence, device=device, verbose=False)[0]
+        if engine == "project-yolo":
+            annotations, scores = annotations_from_result(detection, classes)
+            return annotations, scores, {"weights": selected["weights_path"], "device": str(device)}
+        valid = []
+        if detection.boxes is not None:
+            for xyxy, score, cls in zip(detection.boxes.xyxy.tolist(), detection.boxes.conf.tolist(), detection.boxes.cls.tolist()):
+                name = str(detection.names[int(cls)])
+                if name in classes:
+                    valid.append((xyxy, score, name))
+        if not valid:
+            return [], [], {"weights": selected["weights_path"] + " + " + config["sam_model"], "device": str(device)}
+        sam = cached_advance_model(config["sam_model"], lambda: SAM(config["sam_model"]))
+        segmented = sam.predict(source, bboxes=[item[0] for item in valid], device=device, verbose=False)[0]
+        annotations, scores = [], []
+        for index, mask in enumerate(segmented.masks.xy if segmented.masks is not None else []):
+            if index >= len(valid) or len(mask) < 3:
+                continue
+            points = [{"x": float(p[0])/segmented.orig_shape[1]*100, "y": float(p[1])/segmented.orig_shape[0]*100} for p in mask]
+            xs, ys = [p["x"] for p in points], [p["y"] for p in points]
+            annotations.append({"id": uid(), "label": valid[index][2], "type": "polygon", "points": points, "x": min(xs), "y": min(ys), "w": max(xs)-min(xs), "h": max(ys)-min(ys)})
+            scores.append(float(valid[index][1]))
+        return annotations, scores, {"weights": selected["weights_path"] + " + " + config["sam_model"], "device": str(device)}
+
+    if engine == "fastsam":
+        model = cached_advance_model("FastSAM-s.pt", lambda: FastSAM("FastSAM-s.pt"))
+        result = model.predict(source, conf=confidence, device=device, verbose=False)[0]
+        annotations, scores = annotations_from_result(result, classes, forced_label=prompt_label)
+        return annotations, scores, {"weights": "FastSAM-s.pt", "device": str(device), "assignedClass": prompt_label}
+
+    if engine == "sam2-auto":
+        sam = cached_advance_model(config["sam_model"], lambda: SAM(config["sam_model"]))
+        result = sam.predict(
+            source,
+            device=device,
+            imgsz=640 if device == "cpu" else 1024,
+            verbose=False,
+        )[0]
+        annotations, scores = annotations_from_result(result, classes, forced_label=prompt_label)
+        return annotations, scores, {"weights": config["sam_model"], "device": str(device), "assignedClass": prompt_label}
+
+    raise RuntimeError(f"Engine {engine} cannot run as a batch draft job")
+
+
+def video_sequence_position(asset: sqlite3.Row) -> tuple[str, int] | None:
+    """Resolve both new video metadata and legacy sampled-frame filenames."""
+    try:
+        metadata = json.loads(asset["metadata"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    if metadata.get("videoGroup") is not None and metadata.get("frameIndex") is not None:
+        return str(metadata["videoGroup"]), int(metadata["frameIndex"])
+    match = re.match(r"^(?P<group>.+)-frame-(?P<frame>\d+)\.[^.]+$", asset["name"], re.IGNORECASE)
+    if match:
+        return match.group("group"), int(match.group("frame"))
+    return None
+
+
+def interpolate_annotation_pair(first: dict[str, Any], last: dict[str, Any], ratio: float) -> dict[str, Any]:
+    annotation = {**first, "id": uid()}
+    for field in ("x", "y", "w", "h"):
+        annotation[field] = round(float(first[field]) + (float(last[field]) - float(first[field])) * ratio, 5)
+    first_points, last_points = first.get("points") or [], last.get("points") or []
+    if first_points and len(first_points) == len(last_points):
+        annotation["points"] = [
+            {
+                "x": round(a["x"] + (b["x"] - a["x"]) * ratio, 5),
+                "y": round(a["y"] + (b["y"] - a["y"]) * ratio, 5),
+                **({"visibility": a.get("visibility", 2)} if "visibility" in a else {}),
+            }
+            for a, b in zip(first_points, last_points)
+        ]
+    return annotation
+
+
+def video_interpolation_drafts(assets: list[sqlite3.Row], limit: int) -> list[tuple[sqlite3.Row, list[dict[str, Any]], dict[str, Any]]]:
+    sequences: dict[str, list[tuple[int, sqlite3.Row]]] = defaultdict(list)
+    for asset in assets:
+        position = video_sequence_position(asset)
+        if position:
+            sequences[position[0]].append((position[1], asset))
+    generated: list[tuple[sqlite3.Row, list[dict[str, Any]], dict[str, Any]]] = []
+    for group, sequence in sequences.items():
+        sequence.sort(key=lambda item: item[0])
+        keyframes = [(index, frame, json.loads(frame[1]["boxes"] or "[]")) for index, frame in enumerate(sequence) if json.loads(frame[1]["boxes"] or "[]")]
+        for (start_index, start_frame, start_boxes), (end_index, end_frame, end_boxes) in zip(keyframes, keyframes[1:]):
+            if end_index - start_index < 2:
+                continue
+            end_by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for annotation in end_boxes:
+                end_by_label[annotation.get("label", "")].append(annotation)
+            used: dict[str, int] = {}
+            pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            for annotation in start_boxes:
+                label = annotation.get("label", "")
+                ordinal = used.get(label, 0)
+                if ordinal < len(end_by_label[label]):
+                    pairs.append((annotation, end_by_label[label][ordinal]))
+                    used[label] = ordinal + 1
+            for sequence_index in range(start_index + 1, end_index):
+                if len(generated) >= limit:
+                    return generated
+                frame_number, asset = sequence[sequence_index]
+                if json.loads(asset["boxes"] or "[]") or not pairs:
+                    continue
+                ratio = (sequence_index - start_index) / (end_index - start_index)
+                annotations = [interpolate_annotation_pair(first, last, ratio) for first, last in pairs]
+                generated.append(
+                    (
+                        asset,
+                        annotations,
+                        {
+                            "method": "linear-keyframe-interpolation",
+                            "videoGroup": group,
+                            "frameIndex": frame_number,
+                            "startAssetId": start_frame[1]["id"],
+                            "endAssetId": end_frame[1]["id"],
+                            "ratio": round(ratio, 6),
+                        },
+                    )
+                )
+    return generated
+
+
+def video_tracking_drafts(assets: list[sqlite3.Row], limit: int) -> list[tuple[sqlite3.Row, list[dict[str, Any]], dict[str, Any]]]:
+    """Track keyframe annotations through sampled video frames using local optical flow."""
+    import cv2
+    import numpy as np
+    sequences: dict[str, list[tuple[int, sqlite3.Row]]] = defaultdict(list)
+    for asset in assets:
+        position = video_sequence_position(asset)
+        if position:
+            sequences[position[0]].append((position[1], asset))
+    generated: list[tuple[sqlite3.Row, list[dict[str, Any]], dict[str, Any]]] = []
+    for group, sequence in sequences.items():
+        sequence.sort(key=lambda item: item[0])
+        previous_gray = None
+        previous_annotations: list[dict[str, Any]] = []
+        source_asset_id: str | None = None
+        for frame_number, asset in sequence:
+            image = cv2.imread(asset["path"])
+            if image is None:
+                previous_gray = None; previous_annotations = []; source_asset_id = None
+                continue
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            height, width = gray.shape[:2]
+            existing = json.loads(asset["boxes"] or "[]")
+            if existing:
+                previous_annotations = [{**item, "trackingId": item.get("trackingId") or item.get("id") or uid()} for item in existing]
+                previous_gray = gray
+                source_asset_id = asset["id"]
+                continue
+            if previous_gray is None or not previous_annotations:
+                previous_gray = gray
+                continue
+            tracked: list[dict[str, Any]] = []
+            for annotation in previous_annotations:
+                source_points = annotation.get("points") or [
+                    {"x": annotation["x"], "y": annotation["y"]},
+                    {"x": annotation["x"] + annotation["w"], "y": annotation["y"]},
+                    {"x": annotation["x"] + annotation["w"], "y": annotation["y"] + annotation["h"]},
+                    {"x": annotation["x"], "y": annotation["y"] + annotation["h"]},
+                ]
+                points = np.array([[[float(point["x"]) / 100 * width, float(point["y"]) / 100 * height]] for point in source_points], dtype=np.float32)
+                moved, status, _ = cv2.calcOpticalFlowPyrLK(previous_gray, gray, points, None, winSize=(31, 31), maxLevel=3)
+                valid = status.reshape(-1).astype(bool) if status is not None else np.zeros(len(points), dtype=bool)
+                if moved is None or not valid.any():
+                    continue
+                shifts = moved.reshape(-1, 2)[valid] - points.reshape(-1, 2)[valid]
+                dx, dy = np.median(shifts, axis=0)
+                next_annotation = {**annotation, "id": uid(), "trackingId": annotation.get("trackingId") or annotation.get("id") or uid()}
+                next_annotation["x"] = round(max(0, min(100 - float(annotation["w"]), float(annotation["x"]) + float(dx) / width * 100)), 5)
+                next_annotation["y"] = round(max(0, min(100 - float(annotation["h"]), float(annotation["y"]) + float(dy) / height * 100)), 5)
+                if annotation.get("points"):
+                    next_annotation["points"] = [{**point, "x": round(max(0, min(100, float(point["x"]) + float(dx) / width * 100)), 5), "y": round(max(0, min(100, float(point["y"]) + float(dy) / height * 100)), 5)} for point in annotation["points"]]
+                tracked.append(next_annotation)
+            if tracked:
+                generated.append((asset, tracked, {"method": "pyramidal-lucas-kanade", "videoGroup": group, "frameIndex": frame_number, "sourceAssetId": source_asset_id, "preservesObjectIdentity": True}))
+                previous_annotations = tracked
+                if len(generated) >= limit:
+                    return generated
+            previous_gray = gray
+    return generated
+
+
+def run_advance_job(job_id: str) -> None:
+    with ADVANCE_JOB_LOCK:
+        job: sqlite3.Row | None = None
+        try:
+            with db() as con:
+                job = con.execute("SELECT * FROM advance_jobs WHERE id=?", (job_id,)).fetchone()
+                if not job:
+                    return
+                config = json.loads(job["config"])
+                project = con.execute("SELECT * FROM projects WHERE id=?", (job["project_id"],)).fetchone()
+                assets = list(con.execute("SELECT * FROM assets WHERE project_id=? ORDER BY rowid", (job["project_id"],)))
+                if job["engine"] in {"frame-interpolation", "video-tracking"}:
+                    draft_inputs = video_interpolation_drafts(assets, config["limit"]) if job["engine"] == "frame-interpolation" else video_tracking_drafts(assets, config["limit"])
+                    assets = [item[0] for item in draft_inputs]
+                elif not config["overwrite"]:
+                    assets = [asset for asset in assets if not json.loads(asset["boxes"] or "[]")]
+                    assets = assets[: config["limit"]]
+                    draft_inputs = []
+                else:
+                    assets = assets[: config["limit"]]
+                    draft_inputs = []
+                con.execute("UPDATE advance_jobs SET status='running',total=?,updated_at=? WHERE id=?", (len(assets), now(), job_id))
+            for index, asset in enumerate(assets, 1):
+                if job["engine"] in {"frame-interpolation", "video-tracking"}:
+                    _, annotations, provenance = draft_inputs[index - 1]
+                    scores = [1.0] * len(annotations)
+                else:
+                    annotations, scores, provenance = advance_predict(asset, project, config)
+                with db() as con:
+                    con.execute(
+                        "INSERT INTO advance_drafts (id,job_id,project_id,asset_id,annotations,confidence,status,engine,provenance,created_at) VALUES (?,?,?,?,?,?, 'pending',?,?,?)",
+                        (uid(), job_id, job["project_id"], asset["id"], json.dumps(annotations), sum(scores)/len(scores) if scores else 0, job["engine"], json.dumps({**provenance, "confidenceThreshold": config["confidence"], "createdBy": "Advance"}), now()),
+                    )
+                    con.execute("UPDATE advance_jobs SET progress=?,processed=?,updated_at=? WHERE id=?", (round(index/max(1,len(assets))*100), index, now(), job_id))
+            with db() as con:
+                con.execute("UPDATE advance_jobs SET status='completed',progress=100,updated_at=? WHERE id=?", (now(), job_id))
+                log_activity(con, "advance.completed", f"{job['engine']} · {len(assets)} assets", job["project_id"])
+                create_notification(con, "advance", "AI drafts ready for review", f"{job['engine']} · {len(assets)} assets", job["project_id"], "#/advance")
+        except Exception as exc:
+            LOGGER.exception("Advance job %s failed", job_id)
+            with db() as con:
+                con.execute("UPDATE advance_jobs SET status='failed',error=?,updated_at=? WHERE id=?", (str(exc)[:2000], now(), job_id))
+                if job:
+                    create_notification(con, "error", "Advance job failed", f"{job['engine']} · {str(exc)[:300]}", job["project_id"], "#/advance")
+
+
+@app.get("/api/advance/providers")
+def advance_providers():
+    return {"categories": advance_provider_catalog()}
+
+
+@app.get("/api/advance/jobs")
+def list_advance_jobs(project_id: str | None = None):
+    with db() as con:
+        rows = con.execute("SELECT * FROM advance_jobs WHERE (? IS NULL OR project_id=?) ORDER BY rowid DESC LIMIT 100", (project_id, project_id)).fetchall()
+        return [advance_job_json(row) for row in rows]
+
+
+@app.get("/api/advance/jobs/{job_id}")
+def get_advance_job(job_id: str):
+    with db() as con:
+        row = con.execute("SELECT * FROM advance_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Advance job not found")
+        drafts = con.execute("SELECT * FROM advance_drafts WHERE job_id=? ORDER BY rowid", (job_id,)).fetchall()
+        return advance_job_json(row, drafts)
+
+
+@app.post("/api/advance/jobs", status_code=202)
+def create_advance_job(payload: AdvanceJobPayload):
+    categories = {category["id"]: category for category in advance_provider_catalog() if category["id"] != "runtime"}
+    category = categories.get(payload.category)
+    engine = next((item for item in category["engines"] if item["id"] == payload.engine), None) if category else None
+    if not engine:
+        raise HTTPException(400, "Engine is not valid for this category")
+    if not engine["ready"]:
+        raise HTTPException(409, engine.get("reason") or "Engine is not ready")
+    if payload.category in {"smart-segmentation", "quality-review"}:
+        raise HTTPException(400, "This category runs interactively and does not create batch jobs")
+    with db() as con:
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (payload.project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+        job_id = uid()
+        config = {**payload.model_dump(), "engine": payload.engine}
+        con.execute("INSERT INTO advance_jobs (id,project_id,category,engine,status,config,created_at,updated_at) VALUES (?,?,?,?, 'queued',?,?,?)", (job_id, payload.project_id, payload.category, payload.engine, json.dumps(config), now(), now()))
+        row = con.execute("SELECT * FROM advance_jobs WHERE id=?", (job_id,)).fetchone()
+    threading.Thread(target=run_advance_job, args=(job_id,), daemon=True, name=f"advance-{job_id}").start()
+    return advance_job_json(row)
+
+
+def box_iou_percent(a: dict[str, Any], b: dict[str, Any]) -> float:
+    left, top = max(a["x"], b["x"]), max(a["y"], b["y"])
+    right, bottom = min(a["x"] + a["w"], b["x"] + b["w"]), min(a["y"] + a["h"], b["y"] + b["h"])
+    intersection = max(0, right-left) * max(0, bottom-top)
+    union = a["w"]*a["h"] + b["w"]*b["h"] - intersection
+    return intersection/union if union > 0 else 0
+
+
+def review_advance_draft(draft_id: str, action: str) -> dict[str, Any]:
+    with db() as con:
+        draft = con.execute("SELECT d.*,j.config FROM advance_drafts d JOIN advance_jobs j ON j.id=d.job_id WHERE d.id=?", (draft_id,)).fetchone()
+        if not draft:
+            raise HTTPException(404, "Draft not found")
+        if draft["status"] != "pending":
+            return advance_draft_json(draft)
+        if action == "accept":
+            asset = con.execute("SELECT * FROM assets WHERE id=? AND project_id=?", (draft["asset_id"], draft["project_id"])).fetchone()
+            if not asset:
+                raise HTTPException(404, "Draft asset not found")
+            proposed = json.loads(draft["annotations"] or "[]")
+            existing = json.loads(asset["boxes"] or "[]")
+            overwrite = bool(json.loads(draft["config"] or "{}").get("overwrite"))
+            merged = [] if overwrite else list(existing)
+            for annotation in proposed:
+                duplicate = any(item.get("label") == annotation.get("label") and box_iou_percent(item, annotation) >= 0.7 for item in merged)
+                if not duplicate:
+                    merged.append(annotation)
+            con.execute("UPDATE assets SET boxes=?,status=?,review_status='approved' WHERE id=?", (json.dumps(merged), "annotated" if merged else "unannotated", asset["id"]))
+            con.execute("INSERT INTO annotation_revisions (id,project_id,asset_id,boxes,actor,created_at) VALUES (?,?,?,?,?,?)", (uid(), draft["project_id"], asset["id"], json.dumps(merged), f"Advance · {draft['engine']}", now()))
+        con.execute("UPDATE advance_drafts SET status=?,reviewed_at=? WHERE id=?", ("accepted" if action == "accept" else "rejected", now(), draft_id))
+        updated = con.execute("SELECT * FROM advance_drafts WHERE id=?", (draft_id,)).fetchone()
+        log_activity(con, f"advance.{action}", f"{draft['engine']} · {draft['asset_id']}", draft["project_id"])
+        return advance_draft_json(updated)
+
+
+@app.post("/api/advance/drafts/{draft_id}/review")
+def review_advance_draft_endpoint(draft_id: str, payload: AdvanceReviewPayload):
+    return review_advance_draft(draft_id, payload.action)
+
+
+@app.post("/api/advance/jobs/{job_id}/review")
+def review_advance_job(job_id: str, payload: AdvanceBulkReviewPayload):
+    with db() as con:
+        ids = [row["id"] for row in con.execute("SELECT id FROM advance_drafts WHERE job_id=? AND status='pending'", (job_id,))]
+    for draft_id in ids:
+        review_advance_draft(draft_id, payload.action)
+    return {"reviewed": len(ids), "action": payload.action}
 
 
 @app.post("/api/projects/{project_id}/auto-label")
@@ -4153,7 +5552,7 @@ def auto_label(project_id: str, payload: AutoLabelPayload):
 
 @app.post("/api/projects/{project_id}/assets/{asset_id}/smart-mask")
 def smart_mask(project_id: str, asset_id: str, payload: SmartMaskPayload):
-    """Create an editable polygon with local GrabCut; no cloud or API key required."""
+    """Create an editable polygon with the selected local segmentation engine."""
     import cv2
     import numpy as np
 
@@ -4168,6 +5567,37 @@ def smart_mask(project_id: str, asset_id: str, payload: SmartMaskPayload):
         raise HTTPException(400, "Image cannot be decoded")
     height, width = image.shape[:2]
     center_x, center_y = round(payload.x / 100 * width), round(payload.y / 100 * height)
+    if payload.engine != "grabcut":
+        from ultralytics import SAM
+
+        weights = {
+            "mobile-sam": "mobile_sam.pt",
+            "sam2.1-tiny": "sam2.1_t.pt",
+            "sam2.1-small": "sam2.1_s.pt",
+            "sam2.1-base": "sam2.1_b.pt",
+            "sam2.1-large": "sam2.1_l.pt",
+            "sam3": "sam3.pt",
+        }.get(payload.engine)
+        if not weights:
+            raise HTTPException(400, "Unknown smart segmentation engine")
+        try:
+            import torch
+            device: str | int = 0 if torch.cuda.is_available() else "cpu"
+            segmenter = cached_advance_model(weights, lambda: SAM(weights))
+            result = segmenter.predict(asset["path"], points=[[center_x, center_y]], labels=[1], device=device, verbose=False)[0]
+            masks = result.masks.xy if result.masks is not None else []
+            candidates = [mask for mask in masks if len(mask) >= 3]
+            if not candidates:
+                raise HTTPException(422, "The selected model did not find a mask at this point")
+            polygon = max(candidates, key=lambda points: cv2.contourArea(np.asarray(points, dtype=np.float32)))
+            points = [{"x": round(float(x) / width * 100, 4), "y": round(float(y) / height * 100, 4)} for x, y in polygon]
+            xs, ys = [point["x"] for point in points], [point["y"] for point in points]
+            return {"id": uid(), "label": payload.label, "type": "polygon", "points": points, "x": min(xs), "y": min(ys), "w": max(xs)-min(xs), "h": max(ys)-min(ys)}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            LOGGER.exception("Smart segmentation with %s failed", payload.engine)
+            raise HTTPException(422, f"{payload.engine} could not create a mask: {exc}") from exc
     box_w, box_h = max(4, round(width * payload.size / 100)), max(4, round(height * payload.size / 100))
     left, top = max(0, center_x - box_w // 2), max(0, center_y - box_h // 2)
     right, bottom = min(width - 1, center_x + box_w // 2), min(height - 1, center_y + box_h // 2)
@@ -4573,6 +6003,16 @@ def root():
     if frontend.is_file():
         return FileResponse(frontend)
     return {"name": "Salnova API", "docs": "/docs", "health": "/api/health"}
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon():
+    # index.html references /favicon.svg, which sits in dist/ rather than dist/assets/,
+    # so the /assets mount below never covers it.
+    icon = ROOT / "dist" / "favicon.svg"
+    if icon.is_file():
+        return FileResponse(icon, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 if (ROOT / "dist" / "assets").is_dir():

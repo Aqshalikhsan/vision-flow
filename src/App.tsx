@@ -10,6 +10,7 @@ import {
   Archive,
   ArrowLeft,
   BarChart3,
+  Bell,
   BookOpen,
   Boxes,
   BrainCircuit,
@@ -23,6 +24,7 @@ import {
   Copy,
   Database,
   Download,
+  Eye,
   FlaskConical,
   FolderKanban,
   GalleryHorizontalEnd,
@@ -69,16 +71,21 @@ import { api } from "./api";
 import type {
   ActivityEntry,
   ActiveLearningItem,
+  AdvanceCategory,
+  AdvanceJob,
   AnnotationJob,
   AuthStatus,
   DatasetHealth,
   DatasetHealthProgress,
   EvaluationArtifact,
+  GlobalJob,
+  ModelEvaluation,
   ProjectCollaboration,
   TrainingWorker,
   WorkflowNode,
   WorkflowRun,
   WorkspaceMember,
+  WorkspaceNotification,
 } from "./api";
 
 type Page =
@@ -92,6 +99,7 @@ type Page =
   | "registry"
   | "deploy"
   | "workflows"
+  | "advance"
   | "models"
   | "templates"
   | "settings";
@@ -144,6 +152,7 @@ const parseRoute = (): { page: Page; projectId?: string } => {
     page: [
       "dashboard",
       "workflows",
+      "advance",
       "models",
       "templates",
       "settings",
@@ -576,12 +585,16 @@ const PROJECT_TEMPLATES = [
 
 function AuthGate({
   setup,
+  registrationAllowed,
   onAuthenticated,
 }: {
   setup: boolean;
+  registrationAllowed: boolean;
   onAuthenticated: () => Promise<void>;
 }) {
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">(
+    setup ? "signup" : "signin",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -609,7 +622,10 @@ function AuthGate({
       }
       if (mode === "otp") {
         if (!otpSent) {
-          const response = await api.requestOtp(email, setup ? name : undefined);
+          const response = await api.requestOtp(
+            email,
+            setup ? name : undefined,
+          );
           setOtpSent(true);
           setDevCode(response.devCode || "");
           return;
@@ -638,7 +654,9 @@ function AuthGate({
           <Boxes />
         </span>
         <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
-        <h1>{authMode === "signup" ? "Buat akun baru" : "Selamat datang kembali"}</h1>
+        <h1>
+          {authMode === "signup" ? "Buat akun baru" : "Selamat datang kembali"}
+        </h1>
         <p>
           {authMode === "signup"
             ? "Daftarkan username, email, dan password untuk menggunakan Salnova."
@@ -657,35 +675,37 @@ function AuthGate({
             />
           </label>
         )}
-        {false && <div className="auth-methods">
-          <button
-            type="button"
-            className={mode === "otp" ? "active" : ""}
-            onClick={() => {
-              setMode("otp");
-              setError("");
-            }}
-          >
-            Gmail OTP
-          </button>
-          <button
-            type="button"
-            className={mode === "password" ? "active" : ""}
-            onClick={() => {
-              setMode("password");
-              setError("");
-            }}
-          >
-            Password
-          </button>
-        </div>}
+        {false && (
+          <div className="auth-methods">
+            <button
+              type="button"
+              className={mode === "otp" ? "active" : ""}
+              onClick={() => {
+                setMode("otp");
+                setError("");
+              }}
+            >
+              Gmail OTP
+            </button>
+            <button
+              type="button"
+              className={mode === "password" ? "active" : ""}
+              onClick={() => {
+                setMode("password");
+                setError("");
+              }}
+            >
+              Password
+            </button>
+          </div>
+        )}
         <label>
           Email
           <input
             type="email"
             value={email}
             disabled={mode === "otp" && otpSent}
-             placeholder="nama@example.com"
+            placeholder="nama@example.com"
             onChange={(event) => setEmail(event.target.value)}
             required
           />
@@ -698,7 +718,9 @@ function AuthGate({
               minLength={8}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete={authMode === "signup" ? "new-password" : "current-password"}
+              autoComplete={
+                authMode === "signup" ? "new-password" : "current-password"
+              }
               required
               autoFocus
             />
@@ -763,19 +785,25 @@ function AuthGate({
               ? "Daftar & masuk"
               : "Sign In"}
         </button>
-        <p className="auth-switch">
-          {authMode === "signin" ? "Belum memiliki akun?" : "Sudah memiliki akun?"}{" "}
-          <button
-            type="button"
-            onClick={() => {
-              setAuthMode((current) => current === "signin" ? "signup" : "signin");
-              setError("");
-              setPassword("");
-            }}
-          >
-            {authMode === "signin" ? "Buat akun baru" : "Kembali ke Sign In"}
-          </button>
-        </p>
+        {(registrationAllowed || authMode === "signup") && (
+          <p className="auth-switch">
+            {authMode === "signin"
+              ? "Belum memiliki akun?"
+              : "Sudah memiliki akun?"}{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode((current) =>
+                  current === "signin" ? "signup" : "signin",
+                );
+                setError("");
+                setPassword("");
+              }}
+            >
+              {authMode === "signin" ? "Buat akun baru" : "Kembali ke Sign In"}
+            </button>
+          </p>
+        )}
       </form>
     </main>
   );
@@ -823,7 +851,9 @@ function GeminiAssistant({
         [
           `halaman=${page}`,
           project ? `project=${project.name}` : "project=tidak dipilih",
-          member ? `pengguna=${member.name}, role=${member.role}` : "pengguna=unknown",
+          member
+            ? `pengguna=${member.name}, role=${member.role}`
+            : "pengguna=unknown",
         ].join("; "),
       );
       setMessages((current) => [
@@ -850,7 +880,9 @@ function GeminiAssistant({
       {open && (
         <section className="gemini-panel" aria-label="Salnova AI Assistant">
           <header>
-            <span className="gemini-avatar"><Sparkles /></span>
+            <span className="gemini-avatar">
+              <Sparkles />
+            </span>
             <div>
               <b>Salnova Assistant</b>
               <small>Powered by Gemini</small>
@@ -871,7 +903,9 @@ function GeminiAssistant({
             ))}
             {busy && (
               <div className="gemini-message assistant typing">
-                <i /><i /><i />
+                <i />
+                <i />
+                <i />
               </div>
             )}
             <div ref={endRef} />
@@ -890,11 +924,17 @@ function GeminiAssistant({
                 }
               }}
             />
-            <button type="submit" disabled={busy || !input.trim()} aria-label="Kirim pesan">
+            <button
+              type="submit"
+              disabled={busy || !input.trim()}
+              aria-label="Kirim pesan"
+            >
               <Send />
             </button>
           </form>
-          <small className="gemini-note">Gemini dapat membuat kesalahan. Periksa kembali konfigurasi penting.</small>
+          <small className="gemini-note">
+            Gemini dapat membuat kesalahan. Periksa kembali konfigurasi penting.
+          </small>
         </section>
       )}
       <button
@@ -925,7 +965,9 @@ function WorkspaceBoot({
   return (
     <main className="workspace-boot">
       <section className="workspace-boot-card">
-        <span className="brand-mark"><Boxes /></span>
+        <span className="brand-mark">
+          <Boxes />
+        </span>
         <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
         {failed ? (
           <>
@@ -946,15 +988,21 @@ function WorkspaceBoot({
           </>
         )}
         <div className="workspace-boot-steps">
-          <span className="done"><Check /> Sesi login terverifikasi</span>
+          <span className="done">
+            <Check /> Sesi login terverifikasi
+          </span>
           <span className={failed ? "failed" : "active"}>
             {failed ? <X /> : <LoaderCircle />} Memuat data dari backend
           </span>
-          <span><CircleHelp /> Menyiapkan tutorial dan halaman project</span>
+          <span>
+            <CircleHelp /> Menyiapkan tutorial dan halaman project
+          </span>
         </div>
         {!failed && (
           <div className="workspace-boot-progress">
-            <div><i style={{ width: `${progress}%` }} /></div>
+            <div>
+              <i style={{ width: `${progress}%` }} />
+            </div>
             <b>{progress}%</b>
           </div>
         )}
@@ -963,7 +1011,11 @@ function WorkspaceBoot({
             Coba lagi
           </button>
         )}
-        <button className="workspace-switch-account" type="button" onClick={switchAccount}>
+        <button
+          className="workspace-switch-account"
+          type="button"
+          onClick={switchAccount}
+        >
           Gunakan akun lain
         </button>
       </section>
@@ -983,7 +1035,9 @@ function AccountResume({
   return (
     <main className="auth-page">
       <section className="auth-card account-resume-card">
-        <span className="brand-mark"><Boxes /></span>
+        <span className="brand-mark">
+          <Boxes />
+        </span>
         <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
         <h1>Lanjutkan sesi?</h1>
         <p>Pilih akun sebelum Salnova memuat workspace.</p>
@@ -997,7 +1051,11 @@ function AccountResume({
         <button className="primary" type="button" onClick={proceed}>
           Lanjut sebagai {member.name}
         </button>
-        <button className="workspace-switch-account" type="button" onClick={switchAccount}>
+        <button
+          className="workspace-switch-account"
+          type="button"
+          onClick={switchAccount}
+        >
           Gunakan akun lain
         </button>
       </section>
@@ -1005,14 +1063,18 @@ function AccountResume({
   );
 }
 
+// Matched against a project's demoKey, not its id: every member gets their own
+// private copy of the tutorial projects, so the ids differ per account while the
+// key stays the same. Falling back to the id keeps the original seed projects
+// working on installs that predate per-account copies.
 const TOUR_PROJECTS = {
-  detection: { id: "e2e-coco8-detection-20260828-153649-2637" },
-  instance: { id: "e2e-coco8-instance-segmentation-20260829-tour-5af4" },
-  semantic: { id: "e2e-coco8-semantic-segmentation-20260829-175031-3006" },
-  obb: { id: "e2e-obb-20260829-181530-0418" },
-  keypoint: { id: "e2e-coco8-pose-20260829-182820-485e" },
-  single: { id: "e2e-single-label-20260829-181530-cc1b" },
-  multi: { id: "e2e-multi-label-20260829-182820-77f6" },
+  detection: { key: "e2e-coco8-detection-20260828-153649-2637" },
+  instance: { key: "e2e-coco8-instance-segmentation-20260829-tour-5af4" },
+  semantic: { key: "e2e-coco8-semantic-segmentation-20260829-175031-3006" },
+  obb: { key: "e2e-obb-20260829-181530-0418" },
+  keypoint: { key: "e2e-coco8-pose-20260829-182820-485e" },
+  single: { key: "e2e-single-label-20260829-181530-cc1b" },
+  multi: { key: "e2e-multi-label-20260829-182820-77f6" },
 } as const;
 type TourProjectKey = keyof typeof TOUR_PROJECTS;
 type TourStep = {
@@ -1137,7 +1199,8 @@ function OnboardingTour({
   finish: () => Promise<void>;
 }) {
   const item = steps[step];
-  const model = project?.models.find((candidate) => candidate.stage === "production") ||
+  const model =
+    project?.models.find((candidate) => candidate.stage === "production") ||
     project?.models.at(-1);
   return (
     <div className="onboarding-layer" role="dialog" aria-modal="true">
@@ -1168,7 +1231,12 @@ function OnboardingTour({
               <b>{project.assets.length}</b> images
             </span>
             <span>
-              <b>{project.assets.reduce((total, asset) => total + asset.boxes.length, 0)}</b>{" "}
+              <b>
+                {project.assets.reduce(
+                  (total, asset) => total + asset.boxes.length,
+                  0,
+                )}
+              </b>{" "}
               boxes
             </span>
             <span>
@@ -1230,6 +1298,9 @@ function App() {
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
   const [profile, setProfile] = useState(false);
+  const [jobCenter, setJobCenter] = useState(false);
+  const [jobs, setJobs] = useState<GlobalJob[]>([]);
+  const [notifications, setNotifications] = useState<WorkspaceNotification[]>([]);
   const [backend, setBackend] = useState<"checking" | "online" | "offline">(
     "checking",
   );
@@ -1260,7 +1331,9 @@ function App() {
       .then(setAuth)
       // Never fall through to the workspace when the auth backend is
       // unreachable. A failed status check must remain a locked state.
-      .catch(() => setAuth({ required: true, setupRequired: false, member: null }));
+      .catch(() =>
+        setAuth({ required: true, setupRequired: false, member: null }),
+      );
   }, []);
   useEffect(() => {
     if (!auth || (auth.required && (!auth.member || !sessionConfirmed))) return;
@@ -1304,21 +1377,55 @@ function App() {
     if (backend !== "online" || !auth?.member) return;
     const url = new URL(window.location.href);
     const inviteCode = (url.searchParams.get("invite") || "").toUpperCase();
-    if (!/^[A-Z0-9]{8}$/.test(inviteCode) || inviteHandled.current === inviteCode) return;
+    if (
+      !/^[A-Z0-9]{8}$/.test(inviteCode) ||
+      inviteHandled.current === inviteCode
+    )
+      return;
     inviteHandled.current = inviteCode;
-    api.requestProjectJoin(inviteCode).then((result) => {
+    api
+      .requestProjectJoin(inviteCode)
+      .then((result) => {
         notify(
           result.status === "accepted"
             ? "Anda sudah menjadi kolaborator project"
             : "Permintaan bergabung dikirim. Tunggu persetujuan kolaborator.",
         );
         url.searchParams.delete("invite");
-        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      }).catch((joinError) => {
+        window.history.replaceState(
+          {},
+          "",
+          `${url.pathname}${url.search}${url.hash}`,
+        );
+      })
+      .catch((joinError) => {
         inviteHandled.current = "";
-        notify(joinError instanceof Error ? joinError.message : "Undangan tidak dapat diproses");
+        notify(
+          joinError instanceof Error
+            ? joinError.message
+            : "Undangan tidak dapat diproses",
+        );
       });
   }, [backend, auth?.member?.id]);
+  useEffect(() => {
+    if (backend !== "online") return;
+    let cancelled = false;
+    const loadJobs = () =>
+      Promise.all([api.jobs(), api.notifications()])
+        .then(([nextJobs, nextNotifications]) => {
+          if (!cancelled) {
+            setJobs(nextJobs);
+            setNotifications(nextNotifications);
+          }
+        })
+        .catch(() => {});
+    loadJobs();
+    const timer = window.setInterval(loadJobs, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [backend]);
   useEffect(() => {
     const sync = () => {
       const route = parseRoute();
@@ -1348,6 +1455,34 @@ function App() {
   const project =
     projects.find((p) => p.id === selectedId) ||
     (backend === "checking" ? undefined : projects[0]);
+  useEffect(() => {
+    if (
+      backend !== "online" ||
+      !PROJECT_PAGES.includes(page) ||
+      !project?.summary
+    )
+      return;
+    let cancelled = false;
+    api
+      .project(project.id)
+      .then((loaded) => {
+        if (cancelled) return;
+        setProjects((current) =>
+          current.map((item) => (item.id === loaded.id ? loaded : item)),
+        );
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setToast(
+          error instanceof Error
+            ? error.message
+            : "Gagal memuat detail project",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, page, project?.id, project?.summary]);
   const update = (fn: (p: Project) => Project) =>
     setProjects((ps) => ps.map((p) => (p.id === selectedId ? fn(p) : p)));
   const go = (p: Page, id?: string) => {
@@ -1366,11 +1501,15 @@ function App() {
   };
   const resolvedTourProjects = useMemo(() => {
     const result = {} as Partial<Record<TourProjectKey, Project>>;
-    (Object.entries(TOUR_PROJECTS) as Array<
-      [TourProjectKey, (typeof TOUR_PROJECTS)[TourProjectKey]]
-    >).forEach(([key, target]) => {
+    (
+      Object.entries(TOUR_PROJECTS) as Array<
+        [TourProjectKey, (typeof TOUR_PROJECTS)[TourProjectKey]]
+      >
+    ).forEach(([key, target]) => {
       result[key] = projects.find(
-        (candidate) => !candidate.archived && candidate.id === target.id,
+        (candidate) =>
+          !candidate.archived &&
+          (candidate.demoKey === target.key || candidate.id === target.key),
       );
     });
     return result;
@@ -1378,7 +1517,8 @@ function App() {
   const tourSteps = useMemo(
     () =>
       ONBOARDING_TOUR.filter(
-        (item) => !item.projectKey || Boolean(resolvedTourProjects[item.projectKey]),
+        (item) =>
+          !item.projectKey || Boolean(resolvedTourProjects[item.projectKey]),
       ),
     [resolvedTourProjects],
   );
@@ -1388,9 +1528,9 @@ function App() {
     : undefined;
   const tourActive = Boolean(
     auth?.member &&
-      (auth.member.onboardingCompleted === false || manualTour) &&
-      backend === "online" &&
-      activeTourStep,
+    (auth.member.onboardingCompleted === false || manualTour) &&
+    backend === "online" &&
+    activeTourStep,
   );
   useEffect(() => {
     if (!tourActive || !activeTourStep) return;
@@ -1409,7 +1549,8 @@ function App() {
     notify("Tutorial selesai. Anda dapat membukanya kembali dari Dashboard.");
   };
   const startTour = () => {
-    const projectCount = Object.values(resolvedTourProjects).filter(Boolean).length;
+    const projectCount =
+      Object.values(resolvedTourProjects).filter(Boolean).length;
     if (!projectCount) {
       notify("Project contoh belum tersedia untuk menjalankan tutorial");
       return;
@@ -1417,7 +1558,9 @@ function App() {
     setTourStep(0);
     setManualTour(true);
     if (projectCount < Object.keys(TOUR_PROJECTS).length) {
-      notify(`Tutorial dimulai dengan ${projectCount} tipe project yang tersedia`);
+      notify(
+        `Tutorial dimulai dengan ${projectCount} tipe project yang tersedia`,
+      );
     }
   };
   const switchAccount = async () => {
@@ -1432,6 +1575,7 @@ function App() {
     return (
       <AuthGate
         setup={auth.setupRequired}
+        registrationAllowed={auth.registrationAllowed !== false}
         onAuthenticated={async () => {
           setAuth(await api.authStatus());
           setSessionConfirmed(true);
@@ -1483,8 +1627,35 @@ function App() {
           onBack={() => go(page === "project" ? "dashboard" : "project")}
           onSearch={() => setPalette(true)}
           onHelp={() => setHelp(true)}
+          unreadNotifications={notifications.filter((item) => !item.read).length}
+          onJobs={() => setJobCenter((value) => !value)}
           onProfile={() => setProfile((value) => !value)}
         />
+        {jobCenter && (
+          <JobCenter
+            jobs={jobs}
+            notifications={notifications}
+            close={() => setJobCenter(false)}
+            openTarget={async (target, notificationId) => {
+              if (notificationId) {
+                await api.readNotification(notificationId).catch(() => undefined);
+                setNotifications((current) =>
+                  current.map((item) =>
+                    item.id === notificationId ? { ...item, read: true } : item,
+                  ),
+                );
+              }
+              if (target) window.location.hash = target.replace(/^#/, "");
+              setJobCenter(false);
+            }}
+            readAll={async () => {
+              await api.readAllNotifications();
+              setNotifications((current) =>
+                current.map((item) => ({ ...item, read: true })),
+              );
+            }}
+          />
+        )}
         {page === "dashboard" && (
           <Dashboard
             projects={projects}
@@ -1519,6 +1690,43 @@ function App() {
                 );
               }
             }}
+            remove={async (target) => {
+              if (
+                !confirm(
+                  `Hapus project "${target.name}" beserta seluruh gambar, anotasi, versi, dan model? Tindakan ini tidak dapat dibatalkan.`,
+                )
+              )
+                return;
+              try {
+                await api.deleteProject(target.id);
+                const remaining = projects.filter(
+                  (item) => item.id !== target.id,
+                );
+                setProjects(remaining);
+                if (selectedId === target.id) {
+                  setSelectedId(remaining[0]?.id || "");
+                }
+                notify("Project dan seluruh file berhasil dihapus");
+              } catch (error) {
+                notify(
+                  error instanceof Error
+                    ? error.message
+                    : "Gagal menghapus project",
+                );
+              }
+            }}
+          />
+        )}
+        {page === "advance" && (
+          <AdvanceWorkspace
+            projects={projects}
+            go={go}
+            notify={notify}
+            onProjectUpdated={(loaded) =>
+              setProjects((current) =>
+                current.map((item) => (item.id === loaded.id ? loaded : item)),
+              )
+            }
           />
         )}
         {page === "project" && project && (
@@ -1559,7 +1767,7 @@ function App() {
           />
         )}
         {page === "insights" && project && (
-          <ProjectInsights project={project} go={go} notify={notify} />
+          <ProjectInsights project={project} go={go} notify={notify} update={update} />
         )}
         {page === "annotate" &&
           project &&
@@ -1718,10 +1926,16 @@ function App() {
           uploadPhoto={async (file) => {
             try {
               const member = await api.uploadProfilePhoto(file);
-              setAuth((current) => (current ? { ...current, member } : current));
+              setAuth((current) =>
+                current ? { ...current, member } : current,
+              );
               notify("Foto profil berhasil diperbarui");
             } catch (error) {
-              notify(error instanceof Error ? error.message : "Foto profil gagal diunggah");
+              notify(
+                error instanceof Error
+                  ? error.message
+                  : "Foto profil gagal diunggah",
+              );
             }
           }}
           settings={() => {
@@ -1766,6 +1980,594 @@ function App() {
   );
 }
 
+function AdvanceWorkspace({
+  projects,
+  go,
+  notify,
+  onProjectUpdated,
+}: {
+  projects: Project[];
+  go: (page: Page, id?: string) => void;
+  notify: (message: string) => void;
+  onProjectUpdated: (project: Project) => void;
+}) {
+  const availableProjects = projects.filter((project) => !project.archived);
+  const [categories, setCategories] = useState<AdvanceCategory[]>([]);
+  const [categoryId, setCategoryId] = useState("text-auto-label");
+  const [engineId, setEngineId] = useState("yoloe");
+  const [projectId, setProjectId] = useState(availableProjects[0]?.id || "");
+  const [confidence, setConfidence] = useState(0.35);
+  const [limit, setLimit] = useState(100);
+  const [overwrite, setOverwrite] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [samModel, setSamModel] = useState("sam2.1_s.pt");
+  const [slicing, setSlicing] = useState(false);
+  const [jobs, setJobs] = useState<AdvanceJob[]>([]);
+  const [selectedJob, setSelectedJob] = useState<AdvanceJob | null>(null);
+  const [busy, setBusy] = useState(false);
+  const selectedProject = projects.find((project) => project.id === projectId);
+  const runtime = categories.find((category) => category.id === "runtime");
+  const categoryOrder = [
+    "smart-segmentation",
+    "batch-masks",
+    "text-auto-label",
+    "model-assisted",
+    "video-propagation",
+    "quality-review",
+  ];
+  const featureCategories = categories
+    .filter((category) => category.id !== "runtime")
+    .sort(
+      (left, right) =>
+        categoryOrder.indexOf(left.id) - categoryOrder.indexOf(right.id),
+    );
+  const category = featureCategories.find((item) => item.id === categoryId);
+  const engine = category?.engines.find((item) => item.id === engineId);
+
+  const loadJobs = async (focusId?: string) => {
+    const items = await api.advanceJobs(projectId || undefined);
+    setJobs(items);
+    const target = focusId || selectedJob?.id;
+    if (target) {
+      const detail = await api.advanceJob(target);
+      setSelectedJob(detail);
+    }
+  };
+
+  useEffect(() => {
+    api
+      .advanceProviders()
+      .then(({ categories: items }) => setCategories(items))
+      .catch((error) =>
+        notify(
+          error instanceof Error
+            ? error.message
+            : "Advance providers gagal dimuat",
+        ),
+      );
+  }, []);
+  useEffect(() => {
+    if (!projectId && availableProjects[0])
+      setProjectId(availableProjects[0].id);
+  }, [availableProjects[0]?.id]);
+  useEffect(() => {
+    if (!projectId) return;
+    void loadJobs();
+  }, [projectId]);
+  useEffect(() => {
+    const active =
+      jobs.some((job) => ["queued", "running"].includes(job.status)) ||
+      (selectedJob && ["queued", "running"].includes(selectedJob.status));
+    if (!active) return;
+    const timer = window.setInterval(() => void loadJobs(), 1500);
+    return () => window.clearInterval(timer);
+  }, [jobs, selectedJob?.status, projectId]);
+
+  const chooseCategory = (next: AdvanceCategory) => {
+    setCategoryId(next.id);
+    setEngineId(
+      next.engines.find((item) => item.ready)?.id || next.engines[0]?.id || "",
+    );
+    setSelectedJob(null);
+  };
+  const chooseEngine = (id: string) => {
+    setEngineId(id);
+    if (categoryId === "smart-segmentation")
+      localStorage.setItem("vf-advance-smart-engine", id);
+  };
+  const run = async () => {
+    if (!projectId || !engine?.ready) return;
+    if (categoryId === "smart-segmentation") {
+      localStorage.setItem("vf-advance-smart-engine", engine.id);
+      go("annotate", projectId);
+      notify(`${engine.name} dipilih untuk Smart Mask`);
+      return;
+    }
+    if (categoryId === "quality-review") {
+      const latest = jobs.find((job) => job.status === "completed") || jobs[0];
+      if (latest) {
+        setSelectedJob(await api.advanceJob(latest.id));
+        return;
+      }
+      notify("Belum ada AI draft untuk direview");
+      return;
+    }
+    setBusy(true);
+    try {
+      const created = await api.createAdvanceJob({
+        project_id: projectId,
+        category: categoryId,
+        engine: engine.id,
+        confidence,
+        limit,
+        overwrite,
+        prompt: prompt || selectedProject?.classes[0] || "",
+        model_id:
+          categoryId === "model-assisted"
+            ? selectedProject?.models.find((model) => modelCanDeploy(model))?.id
+            : undefined,
+        sam_model: samModel,
+        slicing,
+      });
+      setSelectedJob(created);
+      await loadJobs(created.id);
+      notify(`${engine.name} job dimulai`);
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Advance job gagal dibuat",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const review = async (draftId: string, action: "accept" | "reject") => {
+    if (!selectedJob) return;
+    await api.reviewAdvanceDraft(draftId, action);
+    setSelectedJob(await api.advanceJob(selectedJob.id));
+    if (action === "accept" && projectId)
+      onProjectUpdated(await api.project(projectId));
+    notify(action === "accept" ? "AI draft diterima" : "AI draft ditolak");
+  };
+  const reviewAll = async (action: "accept" | "reject") => {
+    if (!selectedJob) return;
+    const result = await api.reviewAdvanceJob(selectedJob.id, action);
+    setSelectedJob(await api.advanceJob(selectedJob.id));
+    if (action === "accept" && projectId)
+      onProjectUpdated(await api.project(projectId));
+    notify(
+      `${result.reviewed} draft ${action === "accept" ? "diterima" : "ditolak"}`,
+    );
+  };
+  const openDraft = (assetId: string) => {
+    if (!projectId) return;
+    localStorage.setItem(`vf-annotate-${projectId}`, assetId);
+    go("annotate", projectId);
+  };
+  const pendingDrafts =
+    selectedJob?.drafts?.filter((draft) => draft.status === "pending") || [];
+  const isInteractive = categoryId === "smart-segmentation";
+  const isReview = categoryId === "quality-review";
+  const modeLabel = isInteractive
+    ? "Interactive · one image at a time"
+    : isReview
+      ? "Review · no generation"
+      : "Automatic batch · many images";
+
+  return (
+    <div className="content advance-page">
+      <section className="advance-hero">
+        <div>
+          <span className="eyebrow">ADVANCED AI ANNOTATION</span>
+          <h1>Detect, segment, propagate, and review.</h1>
+          <p>
+            Pilih kategori dan engine sesuai dataset. Semua hasil batch disimpan
+            sebagai draft sampai Anda menerimanya.
+          </p>
+        </div>
+        <div className="advance-runtime">
+          <BrainCircuit />
+          <span>
+            <b>{runtime?.name || "Checking runtime"}</b>
+            <small>
+              {runtime?.description || "Mendeteksi model dan hardware"}
+            </small>
+          </span>
+        </div>
+      </section>
+
+      <div className="advance-categories">
+        {featureCategories.map((item) => (
+          <button
+            key={item.id}
+            className={item.id === categoryId ? "active" : ""}
+            onClick={() => chooseCategory(item)}
+          >
+            {item.id === "smart-segmentation" ? <WandSparkles /> : null}
+            {item.id === "text-auto-label" ? <Sparkles /> : null}
+            {item.id === "model-assisted" ? <BrainCircuit /> : null}
+            {item.id === "batch-masks" ? <Layers3 /> : null}
+            {item.id === "video-propagation" ? <Play /> : null}
+            {item.id === "quality-review" ? <CheckSquare /> : null}
+            <span>
+              <strong>
+                <b>{item.name}</b>
+                <em>
+                  {item.id === "smart-segmentation"
+                    ? "Interactive"
+                    : item.id === "quality-review"
+                      ? "Review"
+                      : "Batch auto"}
+                </em>
+              </strong>
+              <small>{item.description}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <section
+        className={`advance-mode-summary ${isInteractive ? "interactive" : "batch"}`}
+      >
+        <span>{isInteractive ? <PenTool /> : <Layers3 />}</span>
+        <div>
+          <small>MODE YANG DIPILIH</small>
+          <b>{modeLabel}</b>
+          <p>
+            {isInteractive
+              ? "Smart Mask tidak memproses semua gambar. Mode ini membuka Annotator agar Anda klik objek dan memperoleh satu mask presisi yang langsung bisa diedit."
+              : isReview
+                ? "Pilih job yang sudah selesai, periksa hasilnya, lalu accept atau reject draft."
+                : `Sistem memproses hingga ${limit} gambar secara otomatis. Hasil disimpan sebagai draft dan tidak menimpa anotasi sebelum Anda menerimanya.`}
+          </p>
+        </div>
+        {isInteractive && (
+          <button
+            className="secondary"
+            onClick={() => {
+              const batch = featureCategories.find(
+                (item) => item.id === "batch-masks",
+              );
+              if (batch) chooseCategory(batch);
+            }}
+          >
+            <Layers3 /> Auto-generate semua gambar
+          </button>
+        )}
+      </section>
+
+      <div className="advance-layout">
+        <section className="panel advance-config">
+          <div className="panel-head">
+            <div>
+              <span className="eyebrow">1. TARGET & ENGINE</span>
+              <h2>{category?.name || "Choose a category"}</h2>
+            </div>
+          </div>
+          <label>
+            Project
+            <select
+              value={projectId}
+              onChange={(event) => setProjectId(event.target.value)}
+            >
+              {availableProjects.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · {item.type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="advance-engines">
+            {category?.engines.map((item) => (
+              <button
+                key={item.id}
+                disabled={!item.ready}
+                className={item.id === engineId ? "active" : ""}
+                onClick={() => chooseEngine(item.id)}
+                title={item.reason || item.note}
+              >
+                <span>
+                  <b>{item.name}</b>
+                  <em>{item.tier}</em>
+                </span>
+                <small>{item.reason || item.note}</small>
+                <i className={item.ready ? "ready" : "blocked"}>
+                  {item.ready ? "Ready" : "Unavailable"}
+                </i>
+              </button>
+            ))}
+          </div>
+          {!availableProjects.length && (
+            <p className="advance-warning">
+              Buat project terlebih dahulu sebelum menjalankan Advance.
+            </p>
+          )}
+        </section>
+
+        <section className="panel advance-run-config">
+          <span className="eyebrow">2. RUN SETTINGS</span>
+          <h2>
+            {isInteractive
+              ? "Interactive mask settings"
+              : isReview
+                ? "Review existing drafts"
+                : "Automatic batch settings"}
+          </h2>
+          {categoryId === "smart-segmentation" ? (
+            <div className="advance-explainer">
+              <WandSparkles />
+              <div>
+                <b>Untuk satu gambar, dengan klik.</b>
+                <p>
+                  Pilih engine lalu buka Annotator. Pilih class dan klik objek
+                  untuk membuat polygon yang dapat diedit per vertex.
+                </p>
+                <small>
+                  Ini bukan auto-label seluruh dataset. Gunakan Automatic Batch
+                  Masks untuk memproses banyak gambar sekaligus.
+                </small>
+              </div>
+            </div>
+          ) : categoryId === "quality-review" ? (
+            <div className="advance-explainer">
+              <CheckSquare />
+              <p>
+                Buka job yang selesai, periksa confidence dan provenance, lalu
+                accept atau reject setiap draft.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="advance-form-grid">
+                <label>
+                  Confidence
+                  <input
+                    type="number"
+                    min="0.01"
+                    max="0.99"
+                    step="0.01"
+                    value={confidence}
+                    onChange={(event) =>
+                      setConfidence(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <label>
+                  Image limit
+                  <input
+                    type="number"
+                    min="1"
+                    max="5000"
+                    value={limit}
+                    onChange={(event) => setLimit(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+              <div className="advance-batch-scope">
+                <Layers3 />
+                <span>
+                  <b>Maksimal {limit} gambar diproses otomatis</b>
+                  <small>
+                    Default hanya gambar yang belum dianotasi. Setelah job
+                    selesai, periksa draft pada langkah 3 lalu pilih Accept.
+                  </small>
+                </span>
+              </div>
+              <label>
+                Class for classless mask proposals
+                <select
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                >
+                  <option value="">Use first project class</option>
+                  {selectedProject?.classes.map((name) => (
+                    <option key={name}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              {(engineId.includes("sam2") || engineId === "grounded-sam2") && (
+                <label>
+                  SAM refinement model
+                  <select
+                    value={samModel}
+                    onChange={(event) => setSamModel(event.target.value)}
+                  >
+                    <option value="sam2.1_t.pt">SAM 2.1 Tiny</option>
+                    <option value="sam2.1_s.pt">SAM 2.1 Small</option>
+                    <option value="sam2.1_b.pt">SAM 2.1 Base+</option>
+                    <option value="sam2.1_l.pt">SAM 2.1 Large</option>
+                  </select>
+                </label>
+              )}
+              <label className="advance-check">
+                <input
+                  type="checkbox"
+                  checked={overwrite}
+                  onChange={(event) => setOverwrite(event.target.checked)}
+                />
+                Include already annotated images; accepted drafts replace
+                existing labels
+              </label>
+              <label className="advance-check">
+                <input
+                  type="checkbox"
+                  checked={slicing}
+                  onChange={(event) => setSlicing(event.target.checked)}
+                />
+                High-resolution slicing metadata (SAHI-compatible provider)
+              </label>
+            </>
+          )}
+          <button
+            className="primary advance-run"
+            disabled={busy || !projectId || !engine?.ready}
+            onClick={() => void run()}
+          >
+            {busy ? (
+              <LoaderCircle className="spin" />
+            ) : categoryId === "quality-review" ? (
+              <CheckSquare />
+            ) : categoryId === "smart-segmentation" ? (
+              <PenTool />
+            ) : (
+              <Play />
+            )}
+            {categoryId === "smart-segmentation"
+              ? "Open annotator"
+              : categoryId === "quality-review"
+                ? "Open latest drafts"
+                : "Generate AI drafts"}
+          </button>
+          {engine?.weight && (
+            <small className="advance-download-note">
+              Checkpoint {engine.weight} is downloaded on first use.
+            </small>
+          )}
+        </section>
+      </div>
+
+      <section className="panel advance-jobs">
+        <div className="panel-head">
+          <div>
+            <span className="eyebrow">3. JOBS & REVIEW</span>
+            <h2>AI draft history</h2>
+          </div>
+          <div className="advance-job-toolbar">
+            {projectId && (
+              <>
+                <button
+                  className="secondary"
+                  onClick={() => go("dataset", projectId)}
+                >
+                  <Eye /> View dataset
+                </button>
+                <a
+                  className="secondary advance-export-link"
+                  href={api.annotatedExportUrl(projectId, "yolo")}
+                  download
+                >
+                  <Download /> Download YOLO
+                </a>
+                <a
+                  className="secondary advance-export-link"
+                  href={api.annotatedExportUrl(projectId, "coco")}
+                  download
+                >
+                  <Download /> Download COCO
+                </a>
+              </>
+            )}
+            <button className="secondary" onClick={() => void loadJobs()}>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div className="advance-job-list">
+          {jobs.map((job) => (
+            <button
+              key={job.id}
+              className={selectedJob?.id === job.id ? "active" : ""}
+              onClick={async () => setSelectedJob(await api.advanceJob(job.id))}
+            >
+              <span>
+                <b>{job.engine}</b>
+                <small>
+                  {job.category} · {new Date(job.createdAt).toLocaleString()}
+                </small>
+              </span>
+              <span className={`advance-status ${job.status}`}>
+                {job.status}
+              </span>
+              <div>
+                <i style={{ width: `${job.progress}%` }} />
+              </div>
+              <em>
+                {job.processed}/{job.total || "?"} · {job.progress}%
+              </em>
+            </button>
+          ))}
+          {!jobs.length && <p>No Advance jobs for this project yet.</p>}
+        </div>
+        {selectedJob && (
+          <div className="advance-review">
+            <header>
+              <div>
+                <h3>{selectedJob.engine} drafts</h3>
+                <p>
+                  {selectedJob.error ||
+                    `${selectedJob.drafts?.length || 0} images processed with stored provenance.`}
+                </p>
+              </div>
+              {!!pendingDrafts.length && (
+                <span>
+                  <button onClick={() => void reviewAll("reject")}>
+                    Reject pending
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={() => void reviewAll("accept")}
+                  >
+                    Accept pending
+                  </button>
+                </span>
+              )}
+            </header>
+            <div className="advance-drafts">
+              {selectedJob.drafts?.map((draft) => (
+                <article key={draft.id}>
+                  <button
+                    className="advance-draft-preview"
+                    onClick={() => openDraft(draft.assetId)}
+                    title="Buka hasil ini di annotator"
+                  >
+                    <img
+                      src={`/files/${draft.assetId}`}
+                      alt="AI draft preview"
+                    />
+                    <span>
+                      <Eye /> View result
+                    </span>
+                  </button>
+                  <div>
+                    <span className={`advance-status ${draft.status}`}>
+                      {draft.status}
+                    </span>
+                    <h4>{draft.annotations.length} annotations</h4>
+                    <p>Confidence {(draft.confidence * 100).toFixed(1)}%</p>
+                    <small>
+                      {String(draft.provenance.weights || draft.engine)}
+                    </small>
+                  </div>
+                  <footer>
+                    <button
+                      className="secondary"
+                      onClick={() => openDraft(draft.assetId)}
+                    >
+                      <Eye /> View
+                    </button>
+                    {draft.status === "pending" && (
+                      <>
+                        <button onClick={() => void review(draft.id, "reject")}>
+                          <X /> Reject
+                        </button>
+                        <button
+                          className="primary"
+                          onClick={() => void review(draft.id, "accept")}
+                        >
+                          <Check /> Accept
+                        </button>
+                      </>
+                    )}
+                  </footer>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function MemberAvatar({
   member,
   className = "",
@@ -1806,6 +2608,7 @@ function Sidebar({
   const nav = [
     ["dashboard", LayoutDashboard, "Projects"],
     ["workflows", Workflow, "Workflows"],
+    ["advance", Sparkles, "Advance"],
     ["deploy", Rocket, "Deployments"],
   ] as const;
   return (
@@ -1895,6 +2698,8 @@ function Topbar({
   onBack,
   onSearch,
   onHelp,
+  onJobs,
+  unreadNotifications,
   onProfile,
 }: {
   page: Page;
@@ -1904,6 +2709,8 @@ function Topbar({
   onBack: () => void;
   onSearch: () => void;
   onHelp: () => void;
+  onJobs: () => void;
+  unreadNotifications: number;
   onProfile: () => void;
 }) {
   return (
@@ -1921,13 +2728,16 @@ function Topbar({
         ) : (
           <>
             <h2>
-              {({
-                dashboard: "Projects",
-                workflows: "Workflows",
-                models: "Model Library",
-                templates: "Templates",
-                settings: "Settings",
-              } as Partial<Record<Page, string>>)[page] || "Salnova"}
+              {(
+                {
+                  dashboard: "Projects",
+                  workflows: "Workflows",
+                  advance: "Advance",
+                  models: "Model Library",
+                  templates: "Templates",
+                  settings: "Settings",
+                } as Partial<Record<Page, string>>
+              )[page] || "Salnova"}
             </h2>
           </>
         )}
@@ -1950,6 +2760,15 @@ function Topbar({
           <CircleHelp size={18} />
         </button>
         <button
+          className="icon ghost notification-trigger"
+          onClick={onJobs}
+          title="Jobs and notifications"
+          aria-label={`Jobs and notifications${unreadNotifications ? `, ${unreadNotifications} unread` : ""}`}
+        >
+          <Bell size={18} />
+          {!!unreadNotifications && <i>{Math.min(99, unreadNotifications)}</i>}
+        </button>
+        <button
           className="user"
           onClick={onProfile}
           title={`Akun ${member?.name || "Salnova User"}`}
@@ -1959,6 +2778,69 @@ function Topbar({
         </button>
       </div>
     </header>
+  );
+}
+
+function JobCenter({
+  jobs,
+  notifications,
+  close,
+  openTarget,
+  readAll,
+}: {
+  jobs: GlobalJob[];
+  notifications: WorkspaceNotification[];
+  close: () => void;
+  openTarget: (target?: string, notificationId?: string) => void;
+  readAll: () => void;
+}) {
+  const [tab, setTab] = useState<"jobs" | "notifications">("jobs");
+  return (
+    <div className="job-center" role="dialog" aria-label="Jobs and notifications">
+      <header>
+        <div>
+          <b>Workspace activity</b>
+          <small>Long-running work keeps going on the server.</small>
+        </div>
+        <button className="icon ghost" onClick={close} aria-label="Close jobs">
+          <X />
+        </button>
+      </header>
+      <nav>
+        <button className={tab === "jobs" ? "active" : ""} onClick={() => setTab("jobs")}>Jobs</button>
+        <button className={tab === "notifications" ? "active" : ""} onClick={() => setTab("notifications")}>
+          Notifications {notifications.some((item) => !item.read) && <i />}
+        </button>
+        {tab === "notifications" && notifications.some((item) => !item.read) && (
+          <button className="ghost read-all" onClick={readAll}>Mark all read</button>
+        )}
+      </nav>
+      <div className="job-center-list">
+        {tab === "jobs" && jobs.map((job) => (
+          <button key={`${job.kind}-${job.id}`} onClick={() => openTarget(job.target)}>
+            <span className={`job-kind ${job.kind}`}><Activity /></span>
+            <span>
+              <b>{job.name}</b>
+              <small>{job.projectName || job.kind} · {job.detail || job.status}</small>
+              {!["ready", "completed", "failed", "cancelled", "paused"].includes(job.status) && (
+                <progress value={job.progress} max="100" />
+              )}
+            </span>
+            <em className={`status ${job.status}`}>{job.status}</em>
+          </button>
+        ))}
+        {tab === "notifications" && notifications.map((item) => (
+          <button key={item.id} className={item.read ? "" : "unread"} onClick={() => openTarget(item.target, item.id)}>
+            <span className={`job-kind ${item.kind}`}><Bell /></span>
+            <span><b>{item.title}</b><small>{item.message}</small></span>
+            <time>{item.createdAt.slice(0, 16).replace("T", " ")}</time>
+          </button>
+        ))}
+        {((tab === "jobs" && !jobs.length) || (tab === "notifications" && !notifications.length)) && (
+          <div className="job-center-empty"><Check /><span>Nothing pending here.</span></div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2180,7 +3062,7 @@ function HelpCenter({ close }: { close: () => void }) {
         <footer>
           <a
             className="secondary"
-            href="http://127.0.0.1:8000/docs"
+            href="/docs"
             target="_blank"
             rel="noreferrer"
           >
@@ -2224,9 +3106,7 @@ function ProfileMenu({
         <div>
           <b>{member?.name || "Salnova User"}</b>
           <small>
-            {member
-              ? `Full access | ${member.email}`
-              : "Local workspace owner"}
+            {member ? `Full access | ${member.email}` : "Local workspace owner"}
           </small>
         </div>
       </div>
@@ -2360,6 +3240,7 @@ function Dashboard({
   startTour,
   duplicate,
   archive,
+  remove,
 }: {
   projects: Project[];
   go: (p: Page, id?: string) => void;
@@ -2367,10 +3248,12 @@ function Dashboard({
   startTour: () => void;
   duplicate: (id: string) => void;
   archive: (id: string, archived: boolean) => void;
+  remove: (project: Project) => Promise<void>;
 }) {
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [menu, setMenu] = useState<string | null>(null);
+  const [deletingProject, setDeletingProject] = useState<string | null>(null);
   const filtered = projects.filter(
     (p) =>
       p.archived === showArchived &&
@@ -2388,7 +3271,10 @@ function Dashboard({
           </p>
         </div>
         <div className="dashboard-welcome-actions">
-          <button className="secondary dashboard-tour-button" onClick={startTour}>
+          <button
+            className="secondary dashboard-tour-button"
+            onClick={startTour}
+          >
             <BookOpen size={16} />
             Tutorial 7 project
           </button>
@@ -2407,15 +3293,17 @@ function Dashboard({
         />
         <Stat
           icon={ImageIcon}
-          val={projects.reduce((a, p) => a + p.assets.length, 0)}
+          val={projects.reduce(
+            (a, p) => a + (p.assetCount ?? p.assets.length),
+            0,
+          )}
           label="Dataset images"
           tone="blue"
         />
         <Stat
           icon={BrainCircuit}
           val={projects.reduce(
-            (a, p) =>
-              a + p.models.filter(modelCanDeploy).length,
+            (a, p) => a + p.models.filter(modelCanDeploy).length,
             0,
           )}
           label="Trained models"
@@ -2458,91 +3346,115 @@ function Dashboard({
         </div>
         <div className="project-grid">
           {filtered.map((p, i) => {
-            const coverImage = p.assets[0]?.src;
+            const coverImage = p.coverImage || p.assets[0]?.src;
             return (
-            <article className="project-card" key={p.id}>
-              <button
-                className="project-card-main"
-                onClick={() => go("project", p.id)}
-              >
-                <div
-                  className={
-                    "project-cover cover-" +
-                    (i % 4) +
-                    (coverImage ? " has-dataset-cover" : "")
-                  }
-                  style={
-                    coverImage
-                      ? {
-                          backgroundImage: `linear-gradient(180deg, rgba(20, 15, 34, 0.08), rgba(20, 15, 34, 0.58)), url(${JSON.stringify(coverImage)})`,
-                        }
-                      : undefined
-                  }
+              <article className="project-card" key={p.id}>
+                <button
+                  className="project-card-main"
+                  onClick={() => go("project", p.id)}
                 >
-                  <Boxes />
-                  <span className="project-type-pill">{p.type}</span>
-                  {p.archived && (
-                    <span className="project-archive-pill">
-                      <Archive /> Archived
-                    </span>
-                  )}
-                </div>
-                <div className="project-info">
-                  <div>
-                    <h3>{p.name}</h3>
-                    <span />
-                  </div>
-                  <p>{p.description}</p>
-                  <div className="meta">
-                    <span>
-                      <ImageIcon size={14} />
-                      {p.assets.length || (i ? 0 : 248)} images
-                    </span>
-                    <span>
-                      <Tag size={14} />
-                      {p.classes.length} classes
-                    </span>
-                  </div>
-                  <div className="card-foot">
-                    <span>
-                      {p.models.length
-                        ? p.models.length + " model ready"
-                        : "Not trained"}
-                    </span>
-                    <ChevronRight size={16} />
-                  </div>
-                </div>
-              </button>
-              <button
-                className="project-card-menu"
-                aria-label={`Actions for ${p.name}`}
-                aria-expanded={menu === p.id}
-                onClick={() => setMenu(menu === p.id ? "" : p.id)}
-              >
-                <MoreHorizontal />
-              </button>
-              {menu === p.id && (
-                <div className="project-card-popover">
-                  <button
-                    onClick={() => {
-                      setMenu("");
-                      duplicate(p.id);
-                    }}
+                  <div
+                    className={
+                      "project-cover cover-" +
+                      (i % 4) +
+                      (coverImage ? " has-dataset-cover" : "")
+                    }
+                    style={
+                      coverImage
+                        ? {
+                            backgroundImage: `linear-gradient(180deg, rgba(20, 15, 34, 0.08), rgba(20, 15, 34, 0.58)), url(${JSON.stringify(coverImage)})`,
+                          }
+                        : undefined
+                    }
                   >
-                    <Copy /> Duplicate
-                  </button>
-                  <button
-                    className="archive-action"
-                    onClick={() => {
-                      setMenu("");
-                      archive(p.id, !p.archived);
-                    }}
-                  >
-                    <Archive /> {p.archived ? "Restore" : "Archive"}
-                  </button>
-                </div>
-              )}
-            </article>
+                    <Boxes />
+                    <span className="project-type-pill">{p.type}</span>
+                    {p.archived && (
+                      <span className="project-archive-pill">
+                        <Archive /> Archived
+                      </span>
+                    )}
+                  </div>
+                  <div className="project-info">
+                    <div>
+                      <h3>{p.name}</h3>
+                      <span />
+                    </div>
+                    <p>{p.description}</p>
+                    <div className="meta">
+                      <span>
+                        <ImageIcon size={14} />
+                        {(p.assetCount ?? p.assets.length) ||
+                          (i ? 0 : 248)}{" "}
+                        images
+                      </span>
+                      <span>
+                        <Tag size={14} />
+                        {p.classes.length} classes
+                      </span>
+                    </div>
+                    <div className="card-foot">
+                      <span>
+                        {p.models.length
+                          ? p.models.length + " model ready"
+                          : "Not trained"}
+                      </span>
+                      <ChevronRight size={16} />
+                    </div>
+                  </div>
+                </button>
+                <button
+                  className="project-card-menu"
+                  aria-label={`Actions for ${p.name}`}
+                  aria-expanded={menu === p.id}
+                  onClick={() => setMenu(menu === p.id ? "" : p.id)}
+                >
+                  <MoreHorizontal />
+                </button>
+                {menu === p.id && (
+                  <div className="project-card-popover">
+                    <button
+                      onClick={() => {
+                        setMenu("");
+                        duplicate(p.id);
+                      }}
+                    >
+                      <Copy /> Duplicate
+                    </button>
+                    <button
+                      className="archive-action"
+                      onClick={() => {
+                        setMenu("");
+                        archive(p.id, !p.archived);
+                      }}
+                    >
+                      <Archive /> {p.archived ? "Restore" : "Archive"}
+                    </button>
+                    <button
+                      className="delete-action"
+                      disabled={deletingProject === p.id}
+                      onClick={async () => {
+                        setDeletingProject(p.id);
+                        try {
+                          await remove(p);
+                          setMenu("");
+                        } finally {
+                          setDeletingProject(null);
+                        }
+                      }}
+                    >
+                      {deletingProject === p.id ? (
+                        <LoaderCircle className="delete-spinner" />
+                      ) : (
+                        <Trash2 />
+                      )}
+                      {deletingProject === p.id
+                        ? "Deleting project…"
+                        : "Delete permanently"}
+                    </button>
+                  </div>
+                )}
+              </article>
             );
           })}
           <button className="new-card" onClick={create}>
@@ -2659,12 +3571,14 @@ function ProjectHome({
   update: (fn: (p: Project) => Project) => void;
   notify: (s: string) => void;
   edit: () => void;
-  remove: () => void;
+  remove: () => Promise<void>;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [draggingUpload, setDraggingUpload] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStage, setUploadStage] = useState<TransferStage>("uploading");
+  const [deletingProject, setDeletingProject] = useState(false);
+  const [deletingAsset, setDeletingAsset] = useState<string | null>(null);
   const [collaboration, setCollaboration] = useState<ProjectCollaboration>({
     invites: [],
     requests: [],
@@ -2672,7 +3586,10 @@ function ProjectHome({
   });
   const [joinCode, setJoinCode] = useState("");
   const loadCollaboration = () =>
-    api.projectCollaboration(project.id).then(setCollaboration).catch(() => undefined);
+    api
+      .projectCollaboration(project.id)
+      .then(setCollaboration)
+      .catch(() => undefined);
   useEffect(() => {
     void loadCollaboration();
     const refresh = window.setInterval(() => void loadCollaboration(), 5000);
@@ -2690,7 +3607,11 @@ function ProjectHome({
           : `Undangan dibuat. Bagikan kode ${invite.code}.`,
       );
     } catch (inviteError) {
-      notify(inviteError instanceof Error ? inviteError.message : "Gagal membuat undangan");
+      notify(
+        inviteError instanceof Error
+          ? inviteError.message
+          : "Gagal membuat undangan",
+      );
     }
   };
   const joinWithCode = async () => {
@@ -2708,16 +3629,26 @@ function ProjectHome({
           : "Join request terkirim. Pengundang akan melihatnya otomatis.",
       );
     } catch (joinError) {
-      notify(joinError instanceof Error ? joinError.message : "Kode undangan gagal diproses");
+      notify(
+        joinError instanceof Error
+          ? joinError.message
+          : "Kode undangan gagal diproses",
+      );
     }
   };
   const reviewJoin = async (requestId: string, action: "accept" | "reject") => {
     try {
       await api.reviewProjectJoin(project.id, requestId, action);
       await loadCollaboration();
-      notify(action === "accept" ? "Kolaborator diterima" : "Permintaan ditolak");
+      notify(
+        action === "accept" ? "Kolaborator diterima" : "Permintaan ditolak",
+      );
     } catch (reviewError) {
-      notify(reviewError instanceof Error ? reviewError.message : "Gagal memproses permintaan");
+      notify(
+        reviewError instanceof Error
+          ? reviewError.message
+          : "Gagal memproses permintaan",
+      );
     }
   };
   const upload = async (files: FileList | null) => {
@@ -2742,13 +3673,19 @@ function ProjectHome({
   };
   const deleteImage = async (id: string) => {
     if (!confirm("Hapus gambar ini dari dataset?")) return;
+    setDeletingAsset(id);
     try {
       await api.deleteAsset(project.id, id);
-      const saved = await api.project(project.id);
-      update(() => saved);
+      update((current) => ({
+        ...current,
+        assets: current.assets.filter((asset) => asset.id !== id),
+        assetCount: Math.max(0, (current.assetCount ?? current.assets.length) - 1),
+      }));
       notify("Gambar dihapus");
     } catch (e) {
       notify(e instanceof Error ? e.message : "Gagal menghapus gambar");
+    } finally {
+      setDeletingAsset(null);
     }
   };
   return (
@@ -2765,9 +3702,24 @@ function ProjectHome({
             <Pencil size={16} />
             Edit
           </button>
-          <button className="danger" onClick={remove}>
-            <Trash2 size={16} />
-            Delete
+          <button
+            className="danger"
+            disabled={deletingProject}
+            onClick={async () => {
+              setDeletingProject(true);
+              try {
+                await remove();
+              } finally {
+                setDeletingProject(false);
+              }
+            }}
+          >
+            {deletingProject ? (
+              <LoaderCircle className="delete-spinner" size={16} />
+            ) : (
+              <Trash2 size={16} />
+            )}
+            {deletingProject ? "Deleting…" : "Delete"}
           </button>
           <button className="primary" onClick={() => input.current?.click()}>
             <Upload size={17} />
@@ -2884,10 +3836,15 @@ function ProjectHome({
                       <span>{a.boxes.length} labels</span>
                       <button
                         className="thumb-delete"
+                        disabled={deletingAsset === a.id}
                         onClick={() => deleteImage(a.id)}
                         title="Delete image"
                       >
-                        <Trash2 />
+                        {deletingAsset === a.id ? (
+                          <LoaderCircle className="delete-spinner" />
+                        ) : (
+                          <Trash2 />
+                        )}
                       </button>
                     </div>
                   ))}
@@ -2941,7 +3898,9 @@ function ProjectHome({
             <div className="collaboration-title">
               <div>
                 <h3>Collaborators</h3>
-                <small>Semua kolaborator memiliki fungsi project yang sama.</small>
+                <small>
+                  Semua kolaborator memiliki fungsi project yang sama.
+                </small>
               </div>
               <button className="primary small" onClick={createInvite}>
                 <Plus /> Invite
@@ -2958,7 +3917,9 @@ function ProjectHome({
                     const code = collaboration.invites[0].code;
                     const link = `${window.location.origin}${window.location.pathname}?invite=${code}#/dashboard`;
                     const copied = await copyText(link);
-                    notify(copied ? "Link undangan disalin" : `Bagikan kode ${code}`);
+                    notify(
+                      copied ? "Link undangan disalin" : `Bagikan kode ${code}`,
+                    );
                   }}
                 >
                   <Copy /> Copy link
@@ -2968,20 +3929,27 @@ function ProjectHome({
             <div className="join-code-form">
               <span>
                 <b>Punya kode undangan?</b>
-                <small>Masukkan kode dari project lain untuk mengirim join request.</small>
+                <small>
+                  Masukkan kode dari project lain untuk mengirim join request.
+                </small>
               </span>
               <input
                 value={joinCode}
                 maxLength={8}
                 placeholder="8 karakter"
                 onChange={(event) =>
-                  setJoinCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())
+                  setJoinCode(
+                    event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase(),
+                  )
                 }
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void joinWithCode();
                 }}
               />
-              <button onClick={() => void joinWithCode()} disabled={joinCode.length !== 8}>
+              <button
+                onClick={() => void joinWithCode()}
+                disabled={joinCode.length !== 8}
+              >
                 Join project
               </button>
             </div>
@@ -2994,10 +3962,16 @@ function ProjectHome({
                       <b>{request.name}</b>
                       <small>{request.email}</small>
                     </span>
-                    <button className="accept" onClick={() => reviewJoin(request.id, "accept")}>
+                    <button
+                      className="accept"
+                      onClick={() => reviewJoin(request.id, "accept")}
+                    >
                       <Check />
                     </button>
-                    <button className="reject" onClick={() => reviewJoin(request.id, "reject")}>
+                    <button
+                      className="reject"
+                      onClick={() => reviewJoin(request.id, "reject")}
+                    >
                       <X />
                     </button>
                   </div>
@@ -3136,6 +4110,7 @@ function Annotate({
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">(
     "saved",
   );
+  const [lockedBy, setLockedBy] = useState("");
   const copied = useRef<Box | null>(null);
   const [editing, setEditing] = useState<{
     id: string;
@@ -3157,6 +4132,18 @@ function Annotate({
     setZoom(1);
     if (asset) localStorage.setItem(`vf-annotate-${project.id}`, asset.id);
   }, [asset?.id]);
+  useEffect(() => {
+    if (!asset) return;
+    let released = false;
+    const acquire = () => api.acquireAnnotationLock(project.id, asset.id).then(() => !released && setLockedBy("")).catch((error) => !released && setLockedBy(error instanceof Error ? error.message : "Image is locked"));
+    acquire();
+    const heartbeat = window.setInterval(acquire, 120_000);
+    return () => {
+      released = true;
+      window.clearInterval(heartbeat);
+      api.releaseAnnotationLock(project.id, asset.id).catch(() => undefined);
+    };
+  }, [project.id, asset?.id]);
   const point = (e: any) => {
     const r = canvas.current!.getBoundingClientRect();
     return {
@@ -3166,6 +4153,10 @@ function Annotate({
   };
   const saveBoxes = (boxes: Box[]) => {
     if (!asset) return;
+    if (lockedBy) {
+      notify(lockedBy);
+      return;
+    }
     const sequence = ++saveSequence.current;
     setSaveState("saving");
     update((p) => ({
@@ -3385,6 +4376,7 @@ function Annotate({
     }
   };
   const down = (e: any) => {
+    if (lockedBy) return;
     if (e.button !== 0) return;
     setSelected(null);
     const p = point(e);
@@ -3469,6 +4461,7 @@ function Annotate({
     );
   return (
     <div className="annotator">
+      {lockedBy && <div className="annotation-lock-warning"><WifiOff /> {lockedBy}. Editing is disabled until the lock is released.</div>}
       <div className="annotator-head">
         <div>
           <b>Annotate</b>
@@ -3927,7 +4920,11 @@ function ClassificationAnnotate({
               <span className="eyebrow">LABEL GAMBAR</span>
               <strong>{asset.boxes.length} dipilih</strong>
             </div>
-            <button onClick={addClass} title="Tambah class" aria-label="Tambah class">
+            <button
+              onClick={addClass}
+              title="Tambah class"
+              aria-label="Tambah class"
+            >
               <Plus />
             </button>
           </div>
@@ -3953,7 +4950,10 @@ function ClassificationAnnotate({
                       {selected ? <Check /> : null}
                     </span>
                   </button>
-                  <label className="classification-color" title="Ubah warna class">
+                  <label
+                    className="classification-color"
+                    title="Ubah warna class"
+                  >
                     <input
                       type="color"
                       value={classColor(project, name, i)}
@@ -3981,7 +4981,9 @@ function ClassificationAnnotate({
             })}
           </div>
           <div className="classification-shortcuts">
-            <span className="classification-shortcut-icon"><Check /></span>
+            <span className="classification-shortcut-icon">
+              <Check />
+            </span>
             <div>
               <b>Tersimpan otomatis</b>
               <span>
@@ -4400,7 +5402,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     annotatedVideoUrl: string;
     annotatedVideoName: string;
   } | null>(null);
-  const [videoSource, setVideoSource] = useState<{ url: string; name: string } | null>(null);
+  const [videoSource, setVideoSource] = useState<{
+    url: string;
+    name: string;
+  } | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [keys, setKeys] = useState<
     Array<{
@@ -4413,17 +5418,8 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     }>
   >([]);
   const [revealedKey, setRevealedKey] = useState("");
-  const [metrics, setMetrics] = useState<{
-    requests: number;
-    averageLatencyMs: number;
-    errors: number;
-    recent: Array<{
-      created_at: string;
-      latency_ms: number;
-      predictions: number;
-      status: string;
-    }>;
-  } | null>(null);
+  const [metrics, setMetrics] = useState<Awaited<ReturnType<typeof api.deploymentMetrics>> | null>(null);
+  const [deploymentConfig, setDeploymentConfig] = useState<Awaited<ReturnType<typeof api.deploymentConfig>> | null>(null);
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const timer = useRef<number | null>(null);
@@ -4485,12 +5481,12 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     setResult(null);
     try {
       const nextResult = await api.infer(
-          project.id,
-          file,
-          threshold / 100,
-          setTransferProgress,
-          () => setTransferStage("processing"),
-        );
+        project.id,
+        file,
+        threshold / 100,
+        setTransferProgress,
+        () => setTransferStage("processing"),
+      );
       if (requestId === thresholdRequest.current) {
         setResult(nextResult);
         setAppliedThreshold(threshold);
@@ -4528,7 +5524,8 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
     setError("");
     fetch(example.src)
       .then((response) => {
-        if (!response.ok) throw new Error("Gambar contoh deployment tidak tersedia");
+        if (!response.ok)
+          throw new Error("Gambar contoh deployment tidak tersedia");
         return response.blob();
       })
       .then((blob) =>
@@ -4643,7 +5640,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             .join(","),
         ),
       ].join("\n");
-      downloadBlob(new Blob([csv], { type: "text/csv" }), "salnova-batch-results.csv");
+      downloadBlob(
+        new Blob([csv], { type: "text/csv" }),
+        "salnova-batch-results.csv",
+      );
       return;
     }
     downloadJson(batchResults, "salnova-batch-results.json");
@@ -4779,7 +5779,22 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
       .deploymentMetrics(project.id)
       .then(setMetrics)
       .catch(() => {});
+    api.deploymentConfig(project.id).then(setDeploymentConfig).catch(() => {});
   }, [project.id]);
+  const saveDeploymentConfig = async (next = deploymentConfig) => {
+    if (!next) return;
+    try {
+      setDeploymentConfig(await api.updateDeploymentConfig(project.id, {
+        primary_model_id: next.primaryModelId || null,
+        canary_model_id: next.canaryModelId || null,
+        canary_percent: next.canaryPercent,
+        capture_samples: next.captureSamples,
+      }));
+      setMetrics(await api.deploymentMetrics(project.id));
+    } catch (configError) {
+      setError(configError instanceof Error ? configError.message : "Deployment configuration failed");
+    }
+  };
   const createKey = async () => {
     const name = prompt("Nama API key", "Local application")?.trim();
     if (!name) return;
@@ -4815,10 +5830,13 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
   const viewerRatio = viewerSize.width / Math.max(1, viewerSize.height);
   const predictionGroups = result
     ? Object.entries(
-        result.predictions.reduce<Record<string, number>>((groups, prediction) => {
-          groups[prediction.class] = (groups[prediction.class] || 0) + 1;
-          return groups;
-        }, {}),
+        result.predictions.reduce<Record<string, number>>(
+          (groups, prediction) => {
+            groups[prediction.class] = (groups[prediction.class] || 0) + 1;
+            return groups;
+          },
+          {},
+        ),
       ).sort((a, b) => b[1] - a[1])
     : [];
   const drawResult = (
@@ -4997,7 +6015,8 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                     </button>
                   </div>
                   <small className="inference-viewer-hint">
-                    Drag untuk menggeser · scroll untuk zoom · klik dua kali untuk reset
+                    Drag untuk menggeser · scroll untuk zoom · klik dua kali
+                    untuk reset
                   </small>
                   <button
                     className="inference-preview-close"
@@ -5038,8 +6057,9 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                     <span>
                       <b>Webcam memerlukan koneksi aman</b>
                       <small>
-                        Alamat HTTP LAN seperti {window.location.hostname} diblokir browser.
-                        Gunakan HTTPS, atau buka localhost jika Salnova berjalan di komputer ini.
+                        Alamat HTTP LAN seperti {window.location.hostname}{" "}
+                        diblokir browser. Gunakan HTTPS, atau buka localhost
+                        jika Salnova berjalan di komputer ini.
                       </small>
                     </span>
                   </div>
@@ -5064,7 +6084,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   {cameraOn ? "Stop camera" : "Start camera"}
                 </button>
                 {cameraOn && result && (
-                  <button className="secondary media-download" onClick={downloadWebcamSnapshot}>
+                  <button
+                    className="secondary media-download"
+                    onClick={downloadWebcamSnapshot}
+                  >
                     <Download /> Download snapshot
                   </button>
                 )}
@@ -5163,7 +6186,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                         {videoResult.durationSeconds}s video
                         <button
                           onClick={() =>
-                            downloadJson(videoResult, "salnova-video-analysis.json")
+                            downloadJson(
+                              videoResult,
+                              "salnova-video-analysis.json",
+                            )
                           }
                         >
                           <Download /> Download report
@@ -5233,7 +6259,10 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
             <div className="endpoint">
               <span>POST</span>
               <code>{endpoint}</code>
-              <button onClick={() => void copyText(endpoint)} title="Copy endpoint">
+              <button
+                onClick={() => void copyText(endpoint)}
+                title="Copy endpoint"
+              >
                 <Copy />
               </button>
             </div>
@@ -5306,14 +6335,28 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
               <small>Recent requests</small>
             </span>
             <span>
-              <b>{metrics?.averageLatencyMs || 0} ms</b>
-              <small>Average latency</small>
+              <b>{metrics?.p95LatencyMs || 0} ms</b>
+              <small>P95 latency</small>
             </span>
             <span>
-              <b>{metrics?.errors || 0}</b>
-              <small>Errors</small>
+              <b>{metrics?.errorRate || 0}%</b>
+              <small>Error rate</small>
+            </span>
+            <span>
+              <b>{metrics?.driftScore || 0}%</b>
+              <small>Class drift</small>
             </span>
           </div>
+          {deploymentConfig && (
+            <div className="traffic-routing">
+              <div><b>Traffic routing</b><small>Promote gradually, observe, and roll back without changing the endpoint.</small></div>
+              <label>Primary model<select value={deploymentConfig.primaryModelId || ""} onChange={(event) => setDeploymentConfig({ ...deploymentConfig, primaryModelId: event.target.value || null })}><option value="">Automatic production model</option>{ready.map((model) => <option key={model.id} value={model.id}>{model.alias || model.name}</option>)}</select></label>
+              <label>Canary model<select value={deploymentConfig.canaryModelId || ""} onChange={(event) => setDeploymentConfig({ ...deploymentConfig, canaryModelId: event.target.value || null, canaryPercent: event.target.value ? deploymentConfig.canaryPercent : 0 })}><option value="">No canary</option>{ready.filter((model) => model.id !== deploymentConfig.primaryModelId).map((model) => <option key={model.id} value={model.id}>{model.alias || model.name}</option>)}</select></label>
+              <label>Canary traffic <b>{deploymentConfig.canaryPercent}%</b><input type="range" min="0" max="50" step="5" disabled={!deploymentConfig.canaryModelId} value={deploymentConfig.canaryPercent} onChange={(event) => setDeploymentConfig({ ...deploymentConfig, canaryPercent: Number(event.target.value) })} /></label>
+              <label className="capture-samples"><span><input type="checkbox" checked={deploymentConfig.captureSamples} onChange={(event) => setDeploymentConfig({ ...deploymentConfig, captureSamples: event.target.checked })} /> Capture feedback samples</span><small>Incorrect requests become private active-learning items. Keep off for sensitive inputs.</small></label>
+              <div className="traffic-actions"><button className="primary" onClick={() => saveDeploymentConfig()}><Check /> Save routing</button><button disabled={!deploymentConfig.previousModelId} onClick={async () => { if (!confirm("Roll back to the previous production model?")) return; setDeploymentConfig(await api.rollbackDeployment(project.id)); setMetrics(await api.deploymentMetrics(project.id)); }}><History /> Roll back</button></div>
+            </div>
+          )}
           <div className="key-list">
             {keys.map((key) => (
               <div className={key.revoked ? "revoked" : ""} key={key.id}>
@@ -5345,17 +6388,21 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                 <span>Status</span>
                 <span>Predictions</span>
                 <span>Latency</span>
+                <span>Feedback</span>
               </div>
               {metrics.recent.map((entry, index) => (
                 <div key={`${entry.created_at}-${index}`}>
                   <span>{entry.created_at.slice(0, 19).replace("T", " ")}</span>
                   <span
-                    className={entry.status === "success" ? "success" : "error"}
+                    className={entry.status === "ok" ? "success" : "error"}
                   >
                     {entry.status}
                   </span>
                   <span>{entry.predictions}</span>
                   <span>{Math.round(entry.latency_ms)} ms</span>
+                  <span className="request-feedback">
+                    {entry.feedback || <><button title="Correct prediction" onClick={async () => { await api.inferenceFeedback(project.id, entry.id, "correct"); setMetrics(await api.deploymentMetrics(project.id)); }}>✓</button><button title="Incorrect · send to review" onClick={async () => { const note = prompt("What was wrong with this prediction?", "") || ""; await api.inferenceFeedback(project.id, entry.id, "incorrect", note); setMetrics(await api.deploymentMetrics(project.id)); }}>×</button></>}
+                  </span>
                 </div>
               ))}
             </div>
@@ -5389,9 +6436,7 @@ function Workflows({
       y: 115,
       title: "Object Detection",
       subtitle: "Latest ready model",
-      projectId: projects.find((p) =>
-        p.models.some(modelCanDeploy),
-      )?.id,
+      projectId: projects.find((p) => p.models.some(modelCanDeploy))?.id,
     },
     {
       id: "count",
@@ -5642,8 +6687,7 @@ function Workflows({
         subtitle,
         projectId:
           type === "model"
-            ? projects.find((p) => p.models.some(modelCanDeploy))
-                ?.id
+            ? projects.find((p) => p.models.some(modelCanDeploy))?.id
             : undefined,
         config,
       },
@@ -6076,9 +7120,7 @@ function Workflows({
                   >
                     <option value="">Latest ready model</option>
                     {projects
-                      .filter((item) =>
-                        item.models.some(modelCanDeploy),
-                      )
+                      .filter((item) => item.models.some(modelCanDeploy))
                       .map((item) => (
                         <option key={item.id} value={item.id}>
                           {item.name}
@@ -6286,10 +7328,12 @@ function ProjectInsights({
   project,
   go,
   notify,
+  update,
 }: {
   project: Project;
   go: (page: Page) => void;
   notify: (message: string) => void;
+  update: (fn: (project: Project) => Project) => void;
 }) {
   const [health, setHealth] = useState<DatasetHealth | null>(null);
   const [jobs, setJobs] = useState<AnnotationJob[]>([]);
@@ -6300,6 +7344,8 @@ function ProjectInsights({
     Partial<DatasetHealthProgress>
   >({});
   const [loadingHealth, setLoadingHealth] = useState(false);
+  const [selectedIssues, setSelectedIssues] = useState<Set<string>>(() => new Set());
+  const [healthActionBusy, setHealthActionBusy] = useState(false);
   const [healthProgress, setHealthProgress] = useState<DatasetHealthProgress>({
     scanning: false,
     progress: 0,
@@ -6387,6 +7433,23 @@ function ProjectInsights({
     localStorage.setItem(`vf-annotate-${project.id}`, assetId);
     go("annotate");
   };
+  const applyIssueAction = async (action: "delete" | "review" | "approve" | "train" | "valid" | "test") => {
+    const ids = [...selectedIssues];
+    if (!ids.length) return;
+    if (action === "delete" && !confirm(`Delete ${ids.length} selected assets and their files?`)) return;
+    setHealthActionBusy(true);
+    try {
+      const saved = await api.applyHealthAction(project.id, ids, action);
+      update(() => saved);
+      setSelectedIssues(new Set());
+      setHealth(await api.datasetHealth(project.id));
+      notify(`${ids.length} dataset issues updated`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Dataset action failed");
+    } finally {
+      setHealthActionBusy(false);
+    }
+  };
   return (
     <div className="content insights-page">
       <ProjectTabs active="insights" go={go} />
@@ -6420,7 +7483,8 @@ function ProjectInsights({
           <footer>
             <span>{healthProgress.stage}</span>
             <span>
-              {healthProgress.processed}/{healthProgress.total || project.assets.length} files
+              {healthProgress.processed}/
+              {healthProgress.total || project.assets.length} files
               {healthProgress.etaSeconds > 0
                 ? ` · sekitar ${Math.ceil(healthProgress.etaSeconds / 60)} menit lagi`
                 : ""}
@@ -6467,14 +7531,26 @@ function ProjectInsights({
               Create cleanup job
             </button>
           </div>
+          {!!health?.issues.length && (
+            <div className="health-actions">
+              <label><input type="checkbox" checked={selectedIssues.size === health.issues.length} onChange={(event) => setSelectedIssues(event.target.checked ? new Set(health.issues.map((item) => item.assetId)) : new Set())} /> {selectedIssues.size || "Select"} affected</label>
+              <button disabled={!selectedIssues.size || healthActionBusy} onClick={() => applyIssueAction("review")}>Needs fix</button>
+              <button disabled={!selectedIssues.size || healthActionBusy} onClick={() => applyIssueAction("approve")}>Approve</button>
+              <button disabled={!selectedIssues.size || healthActionBusy} onClick={() => applyIssueAction("valid")}>Move to valid</button>
+              <button className="delete" disabled={!selectedIssues.size || healthActionBusy} onClick={() => applyIssueAction("delete")}><Trash2 /> Delete</button>
+            </div>
+          )}
           {health?.issues.slice(0, 100).map((item) => (
-            <button key={item.assetId} onClick={() => openAsset(item.assetId)}>
+            <div className="health-issue-row" key={item.assetId}>
+              <input aria-label={`Select ${item.name}`} type="checkbox" checked={selectedIssues.has(item.assetId)} onChange={() => setSelectedIssues((current) => { const next = new Set(current); if (next.has(item.assetId)) next.delete(item.assetId); else next.add(item.assetId); return next; })} />
+              <button onClick={() => openAsset(item.assetId)}>
               <span>
                 <b>{item.name}</b>
                 <small>{item.issues.join(" · ")}</small>
               </span>
               <ChevronRight />
-            </button>
+              </button>
+            </div>
           ))}
           {health && !health.issues.length && (
             <div className="zero mini">
@@ -6544,10 +7620,7 @@ function ProjectInsights({
           </div>
           <button
             className="primary small"
-            disabled={
-              scanning ||
-              !project.models.some(modelCanDeploy)
-            }
+            disabled={scanning || !project.models.some(modelCanDeploy)}
             onClick={async () => {
               try {
                 await api.startActiveLearning(project.id, {
@@ -6568,7 +7641,9 @@ function ProjectInsights({
         {scanning && (
           <div className="active-learning-progress" aria-live="polite">
             <span>
-              <b>{activeLearningProgress.stage || "Scanning uncertain images"}</b>
+              <b>
+                {activeLearningProgress.stage || "Scanning uncertain images"}
+              </b>
               <strong>{activeLearningProgress.progress || 1}%</strong>
             </span>
             <progress max="100" value={activeLearningProgress.progress || 1} />
@@ -6660,10 +7735,16 @@ function SquareResizePreview({ src, size }: { src: string; size: number }) {
       <canvas
         ref={canvasRef}
         className="square-resize-canvas"
-        style={{ "--preview-scale": `${(size / 1280) * 100}%` } as CSSProperties}
+        style={
+          { "--preview-scale": `${(size / 1280) * 100}%` } as CSSProperties
+        }
       />
       {loading && <LoaderCircle className="spin" />}
-      <span>{sourceSize ? `${sourceSize} to ${size} x ${size}` : `${size} x ${size}`}</span>
+      <span>
+        {sourceSize
+          ? `${sourceSize} to ${size} x ${size}`
+          : `${size} x ${size}`}
+      </span>
     </div>
   );
 }
@@ -6682,6 +7763,7 @@ function DatasetVersions({
   const [resize, setResize] = useState(640);
   const [augment, setAugment] = useState(true);
   const [copies, setCopies] = useState(2);
+  const [enforceQuality, setEnforceQuality] = useState(true);
   const [splits, setSplits] = useState<[number, number, number]>([70, 20, 10]);
   const [recipe, setRecipe] =
     useState<AugmentationRecipe>(defaultAugmentations);
@@ -6823,6 +7905,7 @@ function DatasetVersions({
         splits,
         augmentations: recipe,
         augmentation_copies: copies,
+        enforce_quality: enforceQuality,
       });
       setGenerationProgress(100);
       setGenerationStage("Immutable version selesai");
@@ -7021,7 +8104,10 @@ function DatasetVersions({
             {previewAsset && (
               <div className="preprocess-preview">
                 <figure>
-                  <img src={previewAsset.src} alt={`${previewAsset.name} original`} />
+                  <img
+                    src={previewAsset.src}
+                    alt={`${previewAsset.name} original`}
+                  />
                   <figcaption>Original</figcaption>
                 </figure>
                 <figure className="square-preview">
@@ -7225,6 +8311,10 @@ function DatasetVersions({
               ))}
             </div>
           </section>
+          <label className="quality-gate-toggle">
+            <input type="checkbox" checked={enforceQuality} onChange={(event) => setEnforceQuality(event.target.checked)} />
+            <span><b>Enforce dataset quality gate</b><small>Block immutable versions while assets are unlabeled, marked needs-fix, or contain invalid geometry.</small></span>
+          </label>
           <button
             className="primary generate-version"
             disabled={generating || !project.assets.length}
@@ -7424,6 +8514,13 @@ function DatasetTrain({
           : project.type.includes("Classification")
             ? "cls"
             : "detect";
+  const trainingLabel = {
+    detect: "detection",
+    segment: "segmentation",
+    pose: "keypoint detection",
+    obb: "oriented object detection",
+    cls: "classification",
+  }[trainingTask];
   const [architecture, setArchitecture] = useState(
     trainingTask === "detect"
       ? "yolo26n.pt"
@@ -7461,7 +8558,8 @@ function DatasetTrain({
   const [workerToken, setWorkerToken] = useState("");
   const [starting, setStarting] = useState(false);
   const colabTarget = executionTarget.startsWith("colab-");
-  const gpuTarget = executionTarget === "remote-gpu" || executionTarget === "colab-gpu";
+  const gpuTarget =
+    executionTarget === "remote-gpu" || executionTarget === "colab-gpu";
   const selectableWorkers = workers.filter(
     (worker) =>
       !worker.revoked &&
@@ -7504,7 +8602,10 @@ function DatasetTrain({
   }, [active, project.id]);
   useEffect(() => {
     const latestVersionId = project.versions.at(-1)?.id || "";
-    if (!versionId || !project.versions.some((version) => version.id === versionId)) {
+    if (
+      !versionId ||
+      !project.versions.some((version) => version.id === versionId)
+    ) {
       setVersionId(latestVersionId);
     }
   }, [project.versions, versionId]);
@@ -7536,7 +8637,8 @@ function DatasetTrain({
   };
   const downloadColabNotebook = async () => {
     const requestedTarget = colabTarget ? executionTarget : "colab-gpu";
-    const suggested = window.location.protocol === "https:" ? workerServer : "https://";
+    const suggested =
+      window.location.protocol === "https:" ? workerServer : "https://";
     const entered = prompt(
       "URL HTTPS publik Salnova yang dapat diakses Google Colab",
       suggested,
@@ -7576,8 +8678,8 @@ function DatasetTrain({
         'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/visionflow_worker.py", "visionflow_worker.py")',
         'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/requirements.txt", "requirements.txt")',
         'subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])',
-        'import torch',
-        'CUDA_READY = torch.cuda.is_available()',
+        "import torch",
+        "CUDA_READY = torch.cuda.is_available()",
         'print("PyTorch:", torch.__version__, "| CUDA runtime:", torch.version.cuda, "| GPU ready:", CUDA_READY)',
         'if CUDA_READY: print("GPU:", torch.cuda.get_device_name(0))',
         'if REQUESTED_TARGET == "colab-gpu" and not CUDA_READY: raise RuntimeError("GPU Colab belum aktif. Pilih Runtime > Change runtime type > T4 GPU, lalu restart dan Run all.")',
@@ -7601,7 +8703,13 @@ function DatasetTrain({
               "Keep this notebook private because it contains a worker token. For GPU training select **Runtime > Change runtime type > T4 GPU**, save it, then choose **Runtime > Run all**. The setup cell now stops with a clear message when CUDA is unavailable.\n",
             ],
           },
-          { cell_type: "code", execution_count: null, metadata: {}, outputs: [], source },
+          {
+            cell_type: "code",
+            execution_count: null,
+            metadata: {},
+            outputs: [],
+            source,
+          },
         ],
       };
       const url = URL.createObjectURL(
@@ -7614,9 +8722,13 @@ function DatasetTrain({
       anchor.download = "Salnova-Colab-Worker.ipynb";
       anchor.click();
       URL.revokeObjectURL(url);
-      notify("Notebook Colab dibuat. Jangan bagikan karena berisi token worker.");
+      notify(
+        "Notebook Colab dibuat. Jangan bagikan karena berisi token worker.",
+      );
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Gagal membuat notebook Colab");
+      notify(
+        error instanceof Error ? error.message : "Gagal membuat notebook Colab",
+      );
     }
   };
   const downloadWorkerSetup = () => {
@@ -7624,7 +8736,12 @@ function DatasetTrain({
     const quote = (value: string) => value.replace(/'/g, "''");
     const script = `# Salnova Windows training worker bootstrap
 # Generated by Salnova. Keep this file private because it contains a worker token.
-$ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 converts stderr from native programs (Python, pip,
+# nvidia-smi, and winget) into PowerShell error records.  Keeping the global
+# preference at Stop would abort expected compatibility probes before their
+# exit codes can be inspected and the CPU fallback can run.
+$ErrorActionPreference = "Continue"
+$PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
 $ProgressPreference = "SilentlyContinue"
 $server = '${quote(workerServer)}'
 $token = '${quote(workerToken)}'
@@ -7708,6 +8825,7 @@ if (!(Test-Path $venvPython)) {
 
 Write-Step "Memperbarui pip dan package build"
 & $venvPython -m pip install --upgrade pip setuptools wheel
+if ($LASTEXITCODE -ne 0) { throw "Gagal memperbarui pip dan package build. Periksa internet dan ruang disk." }
 $cudaProbe = "import sys,torch,torchvision; sys.exit(1) if not torch.cuda.is_available() else torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]],device='cuda'),torch.tensor([1.],device='cuda'),0.5)"
 $cpuProbe = "import torch,torchvision; torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]]),torch.tensor([1.]),0.5)"
 $hasNvidia = $null -ne (Get-Command nvidia-smi -ErrorAction SilentlyContinue)
@@ -7790,15 +8908,15 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
       'raw_base="$server/api/training-workers/setup"',
       'step() { printf "\\n[Salnova setup] %s\\n" "$1"; }',
       'as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; elif command -v sudo >/dev/null 2>&1; then sudo "$@"; else echo "sudo/root diperlukan untuk memasang package sistem"; exit 1; fi; }',
-      'install_system_dependencies() {',
-      '  if command -v apt-get >/dev/null 2>&1; then as_root apt-get update; as_root apt-get install -y python3 python3-pip python3-venv curl ca-certificates;',
-      '  elif command -v dnf >/dev/null 2>&1; then as_root dnf install -y python3 python3-pip curl ca-certificates;',
-      '  elif command -v yum >/dev/null 2>&1; then as_root yum install -y python3 python3-pip curl ca-certificates;',
-      '  elif command -v pacman >/dev/null 2>&1; then as_root pacman -Sy --needed --noconfirm python python-pip curl ca-certificates;',
-      '  elif command -v zypper >/dev/null 2>&1; then as_root zypper --non-interactive install python3 python3-pip curl ca-certificates;',
-      '  elif command -v brew >/dev/null 2>&1; then brew install python curl;',
+      "install_system_dependencies() {",
+      "  if command -v apt-get >/dev/null 2>&1; then as_root apt-get update; as_root apt-get install -y python3 python3-pip python3-venv curl ca-certificates;",
+      "  elif command -v dnf >/dev/null 2>&1; then as_root dnf install -y python3 python3-pip curl ca-certificates;",
+      "  elif command -v yum >/dev/null 2>&1; then as_root yum install -y python3 python3-pip curl ca-certificates;",
+      "  elif command -v pacman >/dev/null 2>&1; then as_root pacman -Sy --needed --noconfirm python python-pip curl ca-certificates;",
+      "  elif command -v zypper >/dev/null 2>&1; then as_root zypper --non-interactive install python3 python3-pip curl ca-certificates;",
+      "  elif command -v brew >/dev/null 2>&1; then brew install python curl;",
       '  else echo "Package manager tidak dikenali. Install Python 3.10+, python3-venv, dan curl lalu jalankan setup.sh lagi."; exit 1; fi',
-      '}',
+      "}",
       'if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then step "Memasang Python, venv, pip, curl, dan sertifikat"; install_system_dependencies; fi',
       'python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" || { echo "Python 3.10+ diperlukan."; exit 1; }',
       'available_kb=$(df -Pk "${worker_root%/*}" 2>/dev/null | awk "NR==2 {print \\$4}" || echo 0)',
@@ -7815,14 +8933,14 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
       '"$venv_python" -m pip install --upgrade pip setuptools wheel',
       'cuda_probe="import sys,torch,torchvision; sys.exit(1) if not torch.cuda.is_available() else torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]],device=\\\"cuda\\\"),torch.tensor([1.],device=\\\"cuda\\\"),0.5)"',
       'cpu_probe="import torch,torchvision; torchvision.ops.nms(torch.tensor([[0.,0.,1.,1.]]),torch.tensor([1.]),0.5)"',
-      'has_nvidia=0; gpu_ready=0; command -v nvidia-smi >/dev/null 2>&1 && has_nvidia=1',
+      "has_nvidia=0; gpu_ready=0; command -v nvidia-smi >/dev/null 2>&1 && has_nvidia=1",
       'if [ "$has_nvidia" -eq 1 ] && "$venv_python" -c "$cuda_probe" 2>/dev/null; then gpu_ready=1; fi',
       'if [ "$has_nvidia" -eq 1 ] && [ "$gpu_ready" -eq 0 ]; then',
       '  cuda_version="$(nvidia-smi | sed -n "s/.*CUDA Version: \\([0-9][0-9]*\\.[0-9][0-9]*\\).*/\\1/p" | head -n 1)"',
       '  cuda_level="$(printf "%s" "${cuda_version:-12.6}" | awk -F. "{print (\\$1 * 10) + \\$2}")"',
       '  cuda_candidates=""; [ "$cuda_level" -ge 128 ] && cuda_candidates="$cuda_candidates cu128"; [ "$cuda_level" -ge 126 ] && cuda_candidates="$cuda_candidates cu126"; [ "$cuda_level" -ge 124 ] && cuda_candidates="$cuda_candidates cu124"; [ "$cuda_level" -ge 121 ] && cuda_candidates="$cuda_candidates cu121"; [ "$cuda_level" -ge 118 ] && cuda_candidates="$cuda_candidates cu118"',
       '  for cuda_build in $cuda_candidates; do step "Mencoba runtime NVIDIA $cuda_build yang cocok dengan driver"; if "$venv_python" -m pip install --upgrade --force-reinstall torch torchvision --index-url "https://download.pytorch.org/whl/$cuda_build" && "$venv_python" -c "$cuda_probe" 2>/dev/null; then gpu_ready=1; echo "Runtime GPU $cuda_build siap."; break; fi; done',
-      'fi',
+      "fi",
       'if [ "$gpu_ready" -eq 0 ]; then echo "CUDA tidak tersedia atau tidak kompatibel. Worker otomatis menggunakan CPU."; if ! "$venv_python" -c "$cpu_probe" 2>/dev/null; then step "Memasang runtime CPU yang kompatibel"; "$venv_python" -m pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu; "$venv_python" -c "$cpu_probe"; fi; fi',
       'step "Memasang requests, Ultralytics, dan dependency training"',
       '"$venv_python" -m pip install --prefer-binary -r "$worker_root/worker/requirements.txt"',
@@ -7840,7 +8958,9 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
     anchor.download = "setup.sh";
     anchor.click();
     URL.revokeObjectURL(url);
-    notify("Setup Linux/macOS diunduh. Script akan memasang dependency yang belum tersedia.");
+    notify(
+      "Setup Linux/macOS diunduh. Script akan memasang dependency yang belum tersedia.",
+    );
   };
   const start = async () => {
     if (!versionId) {
@@ -8007,19 +9127,20 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
             <span className="eyebrow">MULTI-LABEL DATASET</span>
             <h1>Training belum tersedia untuk proyek multi-label</h1>
             <p>
-              Anotasi, immutable dataset version, dan export tetap dapat digunakan
-              secara penuh.
+              Anotasi, immutable dataset version, dan export tetap dapat
+              digunakan secara penuh.
             </p>
           </div>
         </div>
         <section className="panel">
           <div className="config-guide-note">
-            <b>Mengapa tidak ada tombol Start training?</b> Checkpoint klasifikasi
-            YOLO memakai satu label eksklusif per gambar. Dataset proyek ini dapat
-            memiliki beberapa label pada gambar yang sama, sehingga memaksakan
-            training akan menghasilkan model yang salah. Gunakan export untuk
-            trainer multi-label berbasis sigmoid/BCE, atau buat proyek Single-Label
-            Classification jika setiap gambar hanya memiliki satu kelas.
+            <b>Mengapa tidak ada tombol Start training?</b> Checkpoint
+            klasifikasi YOLO memakai satu label eksklusif per gambar. Dataset
+            proyek ini dapat memiliki beberapa label pada gambar yang sama,
+            sehingga memaksakan training akan menghasilkan model yang salah.
+            Gunakan export untuk trainer multi-label berbasis sigmoid/BCE, atau
+            buat proyek Single-Label Classification jika setiap gambar hanya
+            memiliki satu kelas.
           </div>
           <div className="train-actions">
             <button className="secondary" onClick={() => go("dataset")}>
@@ -8039,7 +9160,7 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
       <div className="project-title">
         <div>
           <span className="eyebrow">LOCAL MODEL TRAINING</span>
-          <h1>Train a {project.type.toLowerCase()} model</h1>
+          <h1>Train a {trainingLabel} model</h1>
           <p>Select an immutable dataset version and tune the training run.</p>
         </div>
         {active && (
@@ -8113,13 +9234,12 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                 }}
               >
                 <option value="">Official pretrained checkpoint</option>
-                {project.models
-                  .filter(modelCanDeploy)
-                  .map((model) => (
-                    <option value={model.id} key={model.id}>
-                      {model.alias || model.name} · v{model.version} · {model.status}
-                    </option>
-                  ))}
+                {project.models.filter(modelCanDeploy).map((model) => (
+                  <option value={model.id} key={model.id}>
+                    {model.alias || model.name} · v{model.version} ·{" "}
+                    {model.status}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -8284,11 +9404,11 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                 >
                   <option value="">Any compatible worker</option>
                   {selectableWorkers.map((worker) => (
-                      <option value={worker.id} key={worker.id}>
-                        {worker.name} · {worker.status}
-                        {worker.capabilities.cuda ? " · CUDA" : ""}
-                      </option>
-                    ))}
+                    <option value={worker.id} key={worker.id}>
+                      {worker.name} · {worker.status}
+                      {worker.capabilities.cuda ? " · CUDA" : ""}
+                    </option>
+                  ))}
                 </select>
               </label>
             )}
@@ -8309,15 +9429,17 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
               <article>
                 <b>Dataset version</b>
                 <p>
-                  Snapshot dataset yang akan dilatih. Isi gambar, anotasi, class,
-                  resize, dan pembagian train/valid tidak berubah selama run.
+                  Snapshot dataset yang akan dilatih. Isi gambar, anotasi,
+                  class, resize, dan pembagian train/valid tidak berubah selama
+                  run.
                 </p>
               </article>
               <article>
                 <b>Initial weights / fine-tune</b>
                 <p>
                   Pilih pretrained resmi untuk run baru, atau best.pt sebelumnya
-                  agar pengetahuan model lama dilanjutkan ke dataset/config baru.
+                  agar pengetahuan model lama dilanjutkan ke dataset/config
+                  baru.
                 </p>
               </article>
               <article>
@@ -8338,21 +9460,24 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                 <b>Batch size</b>
                 <p>
                   Jumlah gambar yang diproses sekali update. Batch besar lebih
-                  stabil tetapi membutuhkan memori lebih besar; turunkan jika OOM.
+                  stabil tetapi membutuhkan memori lebih besar; turunkan jika
+                  OOM.
                 </p>
               </article>
               <article>
                 <b>Optimizer</b>
                 <p>
-                  Algoritma pembaruan bobot. Auto paling aman; SGD cenderung stabil,
-                  sedangkan Adam/AdamW sering lebih cepat untuk fine-tuning.
+                  Algoritma pembaruan bobot. Auto paling aman; SGD cenderung
+                  stabil, sedangkan Adam/AdamW sering lebih cepat untuk
+                  fine-tuning.
                 </p>
               </article>
               <article>
                 <b>Learning rate</b>
                 <p>
-                  Besar langkah setiap pembaruan bobot. Terlalu tinggi dapat tidak
-                  stabil, terlalu rendah membuat proses belajar sangat lambat.
+                  Besar langkah setiap pembaruan bobot. Terlalu tinggi dapat
+                  tidak stabil, terlalu rendah membuat proses belajar sangat
+                  lambat.
                 </p>
               </article>
               <article>
@@ -8365,22 +9490,24 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
               <article>
                 <b>Freeze first layers</b>
                 <p>
-                  Mengunci layer awal agar tidak diperbarui. Berguna untuk dataset
-                  kecil atau fine-tuning cepat; nilai 0 melatih semua layer.
+                  Mengunci layer awal agar tidak diperbarui. Berguna untuk
+                  dataset kecil atau fine-tuning cepat; nilai 0 melatih semua
+                  layer.
                 </p>
               </article>
               <article>
                 <b>Weight decay</b>
                 <p>
                   Regularisasi untuk menahan bobot agar tidak terlalu besar dan
-                  mengurangi overfitting. Default 0.0005 cocok sebagai titik awal.
+                  mengurangi overfitting. Default 0.0005 cocok sebagai titik
+                  awal.
                 </p>
               </article>
               <article>
                 <b>Close mosaic epochs</b>
                 <p>
-                  Menonaktifkan augmentasi mosaic pada beberapa epoch terakhir agar
-                  model beradaptasi kembali dengan tampilan gambar normal.
+                  Menonaktifkan augmentasi mosaic pada beberapa epoch terakhir
+                  agar model beradaptasi kembali dengan tampilan gambar normal.
                 </p>
               </article>
               <article>
@@ -8393,8 +9520,8 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
               <article>
                 <b>Precision</b>
                 <p>
-                  AMP lebih cepat dan hemat VRAM pada GPU. FP32 lebih presisi dan
-                  kompatibel, tetapi biasanya lebih berat dan lambat.
+                  AMP lebih cepat dan hemat VRAM pada GPU. FP32 lebih presisi
+                  dan kompatibel, tetapi biasanya lebih berat dan lambat.
                 </p>
               </article>
               <article>
@@ -8406,9 +9533,10 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
               </article>
             </div>
             <div className="config-guide-note">
-              <b>Resume berbeda dengan fine-tune.</b> Resume dari last.pt memakai
-              kembali konfigurasi dan state optimizer run lama. Fine-tune membuat
-              run baru dari best.pt sehingga konfigurasi di atas dapat diubah.
+              <b>Resume berbeda dengan fine-tune.</b> Resume dari last.pt
+              memakai kembali konfigurasi dan state optimizer run lama.
+              Fine-tune membuat run baru dari best.pt sehingga konfigurasi di
+              atas dapat diubah.
             </div>
           </details>
           <div className="train-actions">
@@ -8512,28 +9640,25 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                           </code>
                           <small>3. Jalankan setup:</small>
                           <code className="worker-command">
-                            powershell.exe -NoProfile -ExecutionPolicy Bypass -File
-                            '.\setup.ps1'
+                            powershell.exe -NoProfile -ExecutionPolicy Bypass
+                            -File '.\setup.ps1'
                           </code>
                           <small>
-                            Jika nama file memiliki akhiran, misalnya <code>(2)</code>,
-                            gunakan nama tersebut pada kedua perintah file.
+                            Jika nama file memiliki akhiran, misalnya{" "}
+                            <code>(2)</code>, gunakan nama tersebut pada kedua
+                            perintah file.
                           </small>
                         </div>
                         <div className="worker-platform">
                           <b>Linux / macOS (Terminal)</b>
                           <small>1. Masuk ke folder Downloads:</small>
-                          <code className="worker-command">
-                            cd ~/Downloads
-                          </code>
+                          <code className="worker-command">cd ~/Downloads</code>
                           <small>2. Berikan izin eksekusi:</small>
                           <code className="worker-command">
                             chmod +x setup.sh
                           </code>
                           <small>3. Jalankan setup:</small>
-                          <code className="worker-command">
-                            ./setup.sh
-                          </code>
+                          <code className="worker-command">./setup.sh</code>
                         </div>
                       </div>
                     </li>
@@ -8552,22 +9677,32 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                 <details className="worker-manual">
                   <summary>Advanced: jalankan command manual</summary>
                   <small>
-                    Gunakan bagian ini hanya jika ingin menjalankan worker secara
-                    manual. Pastikan terminal sudah berada di folder
+                    Gunakan bagian ini hanya jika ingin menjalankan worker
+                    secara manual. Pastikan terminal sudah berada di folder
                     <code>VisionFlowWorker</code>.
                   </small>
                   <div className="worker-platforms">
                     <div className="worker-platform">
                       <b>Windows (PowerShell)</b>
                       <code>{workerCommand}</code>
-                      <button onClick={() => { void navigator.clipboard.writeText(workerCommand); notify("Perintah Windows disalin"); }}>
+                      <button
+                        onClick={() => {
+                          void navigator.clipboard.writeText(workerCommand);
+                          notify("Perintah Windows disalin");
+                        }}
+                      >
                         <Copy /> Copy Windows command
                       </button>
                     </div>
                     <div className="worker-platform">
                       <b>Linux / macOS (Terminal)</b>
                       <code>{workerUnixCommand}</code>
-                      <button onClick={() => { void navigator.clipboard.writeText(workerUnixCommand); notify("Perintah Linux/macOS disalin"); }}>
+                      <button
+                        onClick={() => {
+                          void navigator.clipboard.writeText(workerUnixCommand);
+                          notify("Perintah Linux/macOS disalin");
+                        }}
+                      >
                         <Copy /> Copy Linux/macOS command
                       </button>
                     </div>
@@ -8627,15 +9762,15 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                 <strong>
                   {model.status === "ready"
                     ? "Ready"
-                   : model.status === "failed"
+                    : model.status === "failed"
                       ? "Failed"
                       : model.status === "paused"
                         ? "Paused"
-                      : model.status === "cancelled"
-                        ? "Cancelled"
-                        : model.status === "queued"
-                          ? "Queued"
-                          : model.progress + "%"}
+                        : model.status === "cancelled"
+                          ? "Cancelled"
+                          : model.status === "queued"
+                            ? "Queued"
+                            : model.progress + "%"}
                 </strong>
               </div>
               {(model.status === "training" || model.status === "queued") && (
@@ -8647,12 +9782,14 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                     <span>
                       {model.trainingDetail?.stage ||
                         (model.status === "queued"
-                          ? String(model.config?.execution_target || "server") !==
-                            "server"
+                          ? String(
+                              model.config?.execution_target || "server",
+                            ) !== "server"
                             ? "Waiting for external worker"
                             : "Waiting for server compute"
-                          : String(model.config?.execution_target || "server") !==
-                              "server"
+                          : String(
+                                model.config?.execution_target || "server",
+                              ) !== "server"
                             ? `Training on ${workers.find((worker) => worker.id === model.workerId)?.name || "laptop"}`
                             : "Training on server")}
                     </span>
@@ -8682,7 +9819,9 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                       )}
                       {model.trainingDetail.loss !== undefined &&
                         model.trainingDetail.loss !== null && (
-                          <span>Loss {model.trainingDetail.loss.toFixed(4)}</span>
+                          <span>
+                            Loss {model.trainingDetail.loss.toFixed(4)}
+                          </span>
                         )}
                     </div>
                   )}
@@ -8699,7 +9838,9 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                       }
                     }}
                   >
-                    {model.status === "queued" ? "Cancel queued job" : "Pause training"}
+                    {model.status === "queued"
+                      ? "Cancel queued job"
+                      : "Pause training"}
                   </button>
                 </>
               )}
@@ -8724,7 +9865,10 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                       >
                         Download partial best.pt
                       </a>
-                      <button className="secondary" onClick={() => go("deploy")}>
+                      <button
+                        className="secondary"
+                        onClick={() => go("deploy")}
+                      >
                         <Rocket /> Use partial best.pt
                       </button>
                     </>
@@ -8736,7 +9880,9 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
                   <div className="metrics">
                     <span>
                       <b>{model.map}%</b>
-                      <small>{classificationMetrics ? "Top-1 accuracy" : "mAP50"}</small>
+                      <small>
+                        {classificationMetrics ? "Top-1 accuracy" : "mAP50"}
+                      </small>
                     </span>
                     {!classificationMetrics && (
                       <>
@@ -8807,8 +9953,7 @@ function WorkflowNext({
             action: "Continue to training",
             page: "train" as Page,
           }
-        : page === "train" &&
-            project.models.some(modelCanDeploy)
+        : page === "train" && project.models.some(modelCanDeploy)
           ? {
               label: "Model ready",
               action: "Open deployment",
@@ -9106,6 +10251,7 @@ function SegmentationAnnotate({
       const polygon = await api.smartMask(project.id, asset.id, {
         ...point,
         label,
+        engine: localStorage.getItem("vf-advance-smart-engine") || "grabcut",
       });
       await persist([...asset.boxes, polygon]);
       notify("Smart mask dibuat dan dapat diedit per vertex");
@@ -9593,14 +10739,26 @@ function ModelEvaluationArtifacts({
         <ChevronDown />
       </summary>
       <div className="training-results-body">
-        <nav className="training-results-tabs" aria-label="Bagian hasil training">
-          <button className={tab === "summary" ? "active" : ""} onClick={() => setTab("summary")}>
+        <nav
+          className="training-results-tabs"
+          aria-label="Bagian hasil training"
+        >
+          <button
+            className={tab === "summary" ? "active" : ""}
+            onClick={() => setTab("summary")}
+          >
             Ringkasan
           </button>
-          <button className={tab === "curves" ? "active" : ""} onClick={() => setTab("curves")}>
+          <button
+            className={tab === "curves" ? "active" : ""}
+            onClick={() => setTab("curves")}
+          >
             Grafik & kurva <span>{curves.length}</span>
           </button>
-          <button className={tab === "batches" ? "active" : ""} onClick={() => setTab("batches")}>
+          <button
+            className={tab === "batches" ? "active" : ""}
+            onClick={() => setTab("batches")}
+          >
             Train & validation <span>{batches.length}</span>
           </button>
         </nav>
@@ -9613,9 +10771,18 @@ function ModelEvaluationArtifacts({
               </span>
               {!classification && (
                 <>
-                  <span><small>F1 score</small><b>{f1.toFixed(1)}%</b></span>
-                  <span><small>Precision</small><b>{model.precision.toFixed(1)}%</b></span>
-                  <span><small>Recall</small><b>{model.recall.toFixed(1)}%</b></span>
+                  <span>
+                    <small>F1 score</small>
+                    <b>{f1.toFixed(1)}%</b>
+                  </span>
+                  <span>
+                    <small>Precision</small>
+                    <b>{model.precision.toFixed(1)}%</b>
+                  </span>
+                  <span>
+                    <small>Recall</small>
+                    <b>{model.recall.toFixed(1)}%</b>
+                  </span>
                 </>
               )}
             </div>
@@ -9627,19 +10794,45 @@ function ModelEvaluationArtifacts({
                   <small>{history.length} baris terbaru</small>
                 </header>
                 <div className="epoch-results-table">
-                  <span>Epoch</span><span>Box loss</span><span>Class loss</span><span>{classification ? "Accuracy" : "mAP50"}</span>
+                  <span>Epoch</span>
+                  <span>Box loss</span>
+                  <span>Class loss</span>
+                  <span>{classification ? "Accuracy" : "mAP50"}</span>
                   {history.map((entry, index) => {
-                    const boxLoss = historyMetric(entry, ["train/box_loss", "box_loss"]);
-                    const classLoss = historyMetric(entry, ["train/cls_loss", "train/loss", "cls_loss"]);
-                    const score = historyMetric(entry, classification
-                      ? ["accuracy_top1"]
-                      : ["map50(b)", "map50(m)", "map50"]);
+                    const boxLoss = historyMetric(entry, [
+                      "train/box_loss",
+                      "box_loss",
+                    ]);
+                    const classLoss = historyMetric(entry, [
+                      "train/cls_loss",
+                      "train/loss",
+                      "cls_loss",
+                    ]);
+                    const score = historyMetric(
+                      entry,
+                      classification
+                        ? ["accuracy_top1"]
+                        : ["map50(b)", "map50(m)", "map50"],
+                    );
                     return (
                       <div className="epoch-results-row" key={index}>
-                        <b>{model.metricsHistory!.length - history.length + index + 1}</b>
-                        <span>{boxLoss === null ? "-" : boxLoss.toFixed(4)}</span>
-                        <span>{classLoss === null ? "-" : classLoss.toFixed(4)}</span>
-                        <span>{score === null ? "-" : `${(score * 100).toFixed(1)}%`}</span>
+                        <b>
+                          {model.metricsHistory!.length -
+                            history.length +
+                            index +
+                            1}
+                        </b>
+                        <span>
+                          {boxLoss === null ? "-" : boxLoss.toFixed(4)}
+                        </span>
+                        <span>
+                          {classLoss === null ? "-" : classLoss.toFixed(4)}
+                        </span>
+                        <span>
+                          {score === null
+                            ? "-"
+                            : `${(score * 100).toFixed(1)}%`}
+                        </span>
                       </div>
                     );
                   })}
@@ -9650,45 +10843,103 @@ function ModelEvaluationArtifacts({
         )}
         {tab !== "summary" && !!visibleArtifacts.length && (
           <div className="evaluation-gallery training-results-gallery">
-          {visibleArtifacts.map((artifact) => {
-            const url = api.modelEvaluationArtifactUrl(
-              projectId,
-              model.id,
-              artifact.name,
-            );
-            return (
-              <article key={artifact.name}>
-                {artifact.preview ? (
-                  <a href={url} target="_blank" rel="noreferrer">
-                    <img src={url} alt={artifact.label} loading="lazy" />
-                  </a>
-                ) : (
-                  <div className="evaluation-file-icon">
-                    <BarChart3 />
-                  </div>
-                )}
-                <footer>
-                  <span>
-                    <b>{artifact.label}</b>
-                    <small>{Math.max(1, Math.round(artifact.size / 1024))} KB</small>
-                  </span>
-                  <a href={url} download={artifact.name} title={`Download ${artifact.label}`}>
-                    <Download />
-                  </a>
-                </footer>
-              </article>
-            );
-          })}
+            {visibleArtifacts.map((artifact) => {
+              const url = api.modelEvaluationArtifactUrl(
+                projectId,
+                model.id,
+                artifact.name,
+              );
+              return (
+                <article key={artifact.name}>
+                  {artifact.preview ? (
+                    <a href={url} target="_blank" rel="noreferrer">
+                      <img src={url} alt={artifact.label} loading="lazy" />
+                    </a>
+                  ) : (
+                    <div className="evaluation-file-icon">
+                      <BarChart3 />
+                    </div>
+                  )}
+                  <footer>
+                    <span>
+                      <b>{artifact.label}</b>
+                      <small>
+                        {Math.max(1, Math.round(artifact.size / 1024))} KB
+                      </small>
+                    </span>
+                    <a
+                      href={url}
+                      download={artifact.name}
+                      title={`Download ${artifact.label}`}
+                    >
+                      <Download />
+                    </a>
+                  </footer>
+                </article>
+              );
+            })}
           </div>
         )}
         {tab !== "summary" && !loading && !visibleArtifacts.length && (
           <div className="training-results-empty">
             <BarChart3 />
             <b>Belum ada artefak pada bagian ini</b>
-            <span>Artefak akan muncul setelah trainer selesai mengunggah hasil evaluasi.</span>
+            <span>
+              Artefak akan muncul setelah trainer selesai mengunggah hasil
+              evaluasi.
+            </span>
           </div>
         )}
       </div>
+    </details>
+  );
+}
+
+function EvaluationWorkbench({ project, model, notify, go }: { project: Project; model: Model; notify: (message: string) => void; go: (page: Page) => void }) {
+  const [evaluations, setEvaluations] = useState<ModelEvaluation[]>([]);
+  const [split, setSplit] = useState<"train" | "valid" | "test" | "all">("test");
+  const [confidence, setConfidence] = useState(0.25);
+  const [running, setRunning] = useState(false);
+  const active = evaluations.some((item) => ["queued", "running"].includes(item.status));
+  const load = () => api.modelEvaluations(project.id, model.id).then(setEvaluations).catch(() => {});
+  useEffect(() => {
+    load();
+    if (!active) return;
+    const timer = window.setInterval(load, 2000);
+    return () => window.clearInterval(timer);
+  }, [project.id, model.id, active]);
+  const latest = evaluations[0];
+  const run = async () => {
+    setRunning(true);
+    try {
+      const created = await api.createModelEvaluation(project.id, model.id, { split, confidence, iou_threshold: 0.5, limit: 250 });
+      setEvaluations((current) => [created, ...current]);
+      notify("Error analysis queued. You can leave this page.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Evaluation failed to start");
+    } finally { setRunning(false); }
+  };
+  return (
+    <details className="evaluation-workbench">
+      <summary><FlaskConical /> Evaluation workbench</summary>
+      <div className="evaluation-controls">
+        <label>Dataset split<select value={split} onChange={(event) => setSplit(event.target.value as typeof split)}><option value="test">Test</option><option value="valid">Validation</option><option value="train">Train</option><option value="all">All assets</option></select></label>
+        <label>Confidence<input type="number" min="0.01" max="0.95" step="0.05" value={confidence} onChange={(event) => setConfidence(Number(event.target.value))} /></label>
+        <button className="primary" disabled={running || active} onClick={run}><Play /> Run error analysis</button>
+      </div>
+      {latest && <div className="evaluation-result">
+        <header><span><b>{latest.split} split</b><small>{latest.summary.assets || 0} assets · IoU {latest.iouThreshold}</small></span><em className={`status ${latest.status}`}>{latest.status}</em></header>
+        {["queued", "running"].includes(latest.status) && <progress value={latest.progress} max="100" />}
+        {latest.status === "failed" && <p className="error">{latest.error}</p>}
+        {latest.status === "completed" && <>
+          <div className="evaluation-score-grid">
+            <span><b>{latest.summary.precision}%</b><small>Precision</small></span><span><b>{latest.summary.recall}%</b><small>Recall</small></span><span><b>{latest.summary.f1}%</b><small>F1</small></span>
+            <span className={latest.summary.qualityGate ? "pass" : "fail"}><b>{latest.summary.qualityGate ? "PASS" : "REVIEW"}</b><small>Production gate</small></span>
+          </div>
+          <p>Recommended confidence: <b>{Math.round((latest.summary.recommendedThreshold || 0) * 100)}%</b> · {latest.summary.fp || 0} false positives · {latest.summary.fn || 0} false negatives</p>
+          {!!latest.errors.length && <div className="evaluation-errors">{latest.errors.slice(0, 12).map((item, index) => <button key={`${item.assetId}-${item.type}-${index}`} onClick={() => { sessionStorage.setItem(`visionflow-focus-asset-${project.id}`, item.assetId); go("dataset"); }}><span className={item.type}>{item.type === "false-positive" ? "FP" : "FN"}</span><b>{item.name}</b><small>{item.class}{item.confidence ? ` · ${Math.round(item.confidence * 100)}%` : ""}</small></button>)}</div>}
+        </>}
+      </div>}
     </details>
   );
 }
@@ -9945,7 +11196,9 @@ function ModelRegistry({
               <div className="registry-metrics">
                 <span>
                   <b>{model.map}%</b>
-                  <small>{classificationMetrics ? "Top-1 accuracy" : "mAP50"}</small>
+                  <small>
+                    {classificationMetrics ? "Top-1 accuracy" : "mAP50"}
+                  </small>
                 </span>
                 {!classificationMetrics && (
                   <>
@@ -9970,11 +11223,14 @@ function ModelRegistry({
               </div>
             )}
             {modelCanDeploy(model) && (
-              <ModelEvaluationArtifacts
-                projectId={project.id}
-                model={model}
-                classification={classificationMetrics}
-              />
+              <>
+                <ModelEvaluationArtifacts
+                  projectId={project.id}
+                  model={model}
+                  classification={classificationMetrics}
+                />
+                <EvaluationWorkbench project={project} model={model} notify={notify} go={go} />
+              </>
             )}
             <div className="registry-config">
               <span>
@@ -10134,6 +11390,7 @@ function DatasetManager({
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [deletingAsset, setDeletingAsset] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [importStage, setImportStage] = useState<TransferStage>("uploading");
@@ -10167,6 +11424,16 @@ function DatasetManager({
   useEffect(() => {
     if (pageNumber > totalPages) setPageNumber(totalPages);
   }, [pageNumber, totalPages]);
+  useEffect(() => {
+    const focusId = sessionStorage.getItem(`visionflow-focus-asset-${project.id}`);
+    if (!focusId) return;
+    const target = project.assets.find((asset) => asset.id === focusId);
+    if (target) {
+      setQuery(target.name);
+      setPreviewAsset(target);
+    }
+    sessionStorage.removeItem(`visionflow-focus-asset-${project.id}`);
+  }, [project.id]);
   useEffect(
     () =>
       setSelected(
@@ -10206,9 +11473,20 @@ function DatasetManager({
   };
   const remove = async (id: string) => {
     if (!confirm("Hapus gambar dan anotasinya?")) return;
-    await api.deleteAsset(project.id, id);
-    const fresh = await api.project(project.id);
-    update(() => fresh);
+    setDeletingAsset(id);
+    try {
+      await api.deleteAsset(project.id, id);
+      update((current) => ({
+        ...current,
+        assets: current.assets.filter((asset) => asset.id !== id),
+        assetCount: Math.max(0, (current.assetCount ?? current.assets.length) - 1),
+      }));
+      notify("Gambar dan anotasi berhasil dihapus");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Gagal menghapus gambar");
+    } finally {
+      setDeletingAsset(null);
+    }
   };
   const autoLabel = async () => {
     const confidence = Number(
@@ -10450,8 +11728,15 @@ function DatasetManager({
                 title="Preview and edit metadata"
               />
               <span className={asset.status}>{asset.status}</span>
-              <button onClick={() => remove(asset.id)}>
-                <Trash2 />
+              <button
+                disabled={deletingAsset === asset.id}
+                onClick={() => remove(asset.id)}
+              >
+                {deletingAsset === asset.id ? (
+                  <LoaderCircle className="delete-spinner" />
+                ) : (
+                  <Trash2 />
+                )}
               </button>
             </div>
             <h3 title={asset.name}>{asset.name}</h3>
@@ -10569,6 +11854,11 @@ function DatasetManager({
               );
             }
           }}
+          restored={(saved) => {
+            update(() => saved);
+            setPreviewAsset(saved.assets.find((item) => item.id === previewAsset.id) || null);
+            notify("Annotation revision restored and sent back to review");
+          }}
         />
       )}
       {showImport && (
@@ -10668,6 +11958,7 @@ function AssetPreviewModal({
   close,
   annotate,
   save,
+  restored,
 }: {
   project: Project;
   asset: Asset;
@@ -10678,6 +11969,7 @@ function AssetPreviewModal({
     tags: string[];
     metadata: Record<string, string>;
   }) => void;
+  restored: (project: Project) => void;
 }) {
   const [name, setName] = useState(asset.name);
   const [tags, setTags] = useState((asset.tags || []).join(", "));
@@ -10692,7 +11984,8 @@ function AssetPreviewModal({
       id: string;
       actor: string;
       createdAt: string;
-      annotations: number;
+        annotations: number;
+        boxes: Box[];
     }>;
     comments: Array<{
       id: string;
@@ -10701,6 +11994,7 @@ function AssetPreviewModal({
       createdAt: string;
     }>;
   }>({ revisions: [], comments: [] });
+  const [revisionPreview, setRevisionPreview] = useState<Box[] | null>(null);
   const loadCollaboration = () =>
     api
       .assetCollaboration(project.id, asset.id)
@@ -10733,21 +12027,23 @@ function AssetPreviewModal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="asset-preview-image">
-          <img src={asset.src} />
-          {asset.boxes.map((box, index) => (
-            <i
-              key={box.id}
-              style={{
-                left: `${box.x}%`,
-                top: `${box.y}%`,
-                width: `${box.w}%`,
-                height: `${box.h}%`,
-                borderColor: classColor(project, box.label, index),
-              }}
-            >
-              <span>{box.label}</span>
-            </i>
-          ))}
+          <div className="asset-preview-canvas">
+            <img src={asset.src} />
+            {(revisionPreview || asset.boxes).map((box, index) => (
+              <i
+                key={box.id}
+                style={{
+                  left: `${box.x}%`,
+                  top: `${box.y}%`,
+                  width: `${box.w}%`,
+                  height: `${box.h}%`,
+                  borderColor: classColor(project, box.label, index),
+                }}
+              >
+                <span>{box.label}</span>
+              </i>
+            ))}
+          </div>
         </div>
         <div className="asset-preview-details">
           <header>
@@ -10760,6 +12056,7 @@ function AssetPreviewModal({
             </button>
           </header>
           <div className="asset-facts">
+            {revisionPreview && <button className="revision-preview-label" onClick={() => setRevisionPreview(null)}>Previewing saved revision · show current</button>}
             <span>
               <b>{asset.boxes.length}</b> annotations
             </span>
@@ -10835,13 +12132,11 @@ function AssetPreviewModal({
                   {collaboration.revisions.length} saved revisions
                 </summary>
                 {collaboration.revisions.slice(0, 10).map((item) => (
-                  <p key={item.id}>
-                    <b>{item.actor}</b>
-                    <span>{item.annotations} annotations</span>
-                    <small>
-                      {item.createdAt.slice(0, 16).replace("T", " ")}
-                    </small>
-                  </p>
+                  <div className="revision-row" key={item.id}>
+                    <span><b>{item.actor}</b><small>{item.annotations} annotations · {item.createdAt.slice(0, 16).replace("T", " ")}</small></span>
+                    <button onClick={() => setRevisionPreview(item.boxes)}>Preview</button>
+                    <button onClick={async () => { if (!confirm(`Restore revision from ${item.createdAt.slice(0, 16).replace("T", " ")}?`)) return; restored(await api.restoreAnnotationRevision(project.id, asset.id, item.id)); setRevisionPreview(null); loadCollaboration(); }}>Restore</button>
+                  </div>
                 ))}
               </details>
             )}
@@ -11076,7 +12371,9 @@ function LocalSettings({
                 <b>{member.name}</b>
                 <small>{member.email}</small>
               </span>
-              <span className="member-access"><Check /> Full access</span>
+              <span className="member-access">
+                <Check /> Full access
+              </span>
               <button
                 className={activeMemberId === member.id ? "active-member" : ""}
                 onClick={() => activateMember(member)}
