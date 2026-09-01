@@ -1593,7 +1593,7 @@ def create_member(payload: MemberPayload):
     digest, salt = password_digest(payload.password) if payload.password else (None, None)
     try:
         with db() as con:
-            con.execute("INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)", (member_id, payload.name.strip(), payload.email.lower(), "owner", now(), digest, salt))
+            con.execute("INSERT INTO workspace_members (id,name,email,role,created_at,password_hash,password_salt) VALUES (?,?,?,?,?,?,?)", (member_id, payload.name.strip(), payload.email.lower(), payload.role, now(), digest, salt))
             row = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
     except sqlite3.IntegrityError as exc:
         raise HTTPException(409, "A member with this email already exists") from exc
@@ -1609,9 +1609,9 @@ def update_member(member_id: str, payload: MemberPayload):
         try:
             if payload.password:
                 digest, salt = password_digest(payload.password)
-                con.execute("UPDATE workspace_members SET name=?,email=?,role='owner',password_hash=?,password_salt=? WHERE id=?", (payload.name.strip(), payload.email.lower(), digest, salt, member_id))
+                con.execute("UPDATE workspace_members SET name=?,email=?,role=?,password_hash=?,password_salt=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, digest, salt, member_id))
             else:
-                con.execute("UPDATE workspace_members SET name=?,email=?,role='owner' WHERE id=?", (payload.name.strip(), payload.email.lower(), member_id))
+                con.execute("UPDATE workspace_members SET name=?,email=?,role=? WHERE id=?", (payload.name.strip(), payload.email.lower(), payload.role, member_id))
         except sqlite3.IntegrityError as exc:
             raise HTTPException(409, "A member with this email already exists") from exc
         updated = con.execute("SELECT * FROM workspace_members WHERE id=?", (member_id,)).fetchone()
