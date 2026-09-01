@@ -189,7 +189,11 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   await expect(
     page.getByRole("button", { name: /Start training/ }),
   ).toBeDisabled();
-  await expect(page.getByText("Laptop workers", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".laptop-workers > header").getByText("Laptop workers", {
+      exact: true,
+    }),
+  ).toBeVisible();
   const trainingLocation = page.getByLabel("Training location");
   await expect(trainingLocation).toBeVisible();
   await trainingLocation.selectOption("remote-auto");
