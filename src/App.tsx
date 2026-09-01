@@ -1499,6 +1499,34 @@ function App() {
     setToast(s);
     setTimeout(() => setToast(""), 2600);
   };
+  /* Redeeming a code is a workspace-level action, not a project-level one: the
+     project being joined is by definition one the member cannot open yet. */
+  const joinWithCode = async (raw: string) => {
+    const code = raw.trim().toUpperCase();
+    if (!/^[A-Z0-9]{8}$/.test(code)) {
+      notify("Kode undangan harus terdiri dari 8 karakter");
+      return false;
+    }
+    try {
+      const result = await api.requestProjectJoin(code);
+      if (result.status === "accepted") {
+        // Already a collaborator, so the project is visible now: reload the list
+        // rather than leaving the member staring at a dashboard without it.
+        setProjects(await api.projects());
+        notify("Anda sudah menjadi kolaborator project");
+      } else {
+        notify("Join request terkirim. Pengundang akan melihatnya otomatis.");
+      }
+      return true;
+    } catch (joinError) {
+      notify(
+        joinError instanceof Error
+          ? joinError.message
+          : "Kode undangan gagal diproses",
+      );
+      return false;
+    }
+  };
   const resolvedTourProjects = useMemo(() => {
     const result = {} as Partial<Record<TourProjectKey, Project>>;
     (
@@ -1662,6 +1690,7 @@ function App() {
             go={go}
             create={() => setModal(true)}
             startTour={startTour}
+            join={joinWithCode}
             duplicate={async (id) => {
               try {
                 const saved = await api.duplicateProject(id);
@@ -3233,6 +3262,40 @@ function EditProject({
   );
 }
 
+function JoinProjectCard({ join }: { join: (code: string) => Promise<boolean> }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    const ok = await join(code);
+    setBusy(false);
+    if (ok) setCode("");
+  };
+  return (
+    <div className="join-code-form dashboard-join">
+      <span>
+        <b>Punya kode undangan?</b>
+        <small>Masukkan kode untuk bergabung ke project orang lain.</small>
+      </span>
+      <input
+        value={code}
+        maxLength={8}
+        placeholder="8 karakter"
+        aria-label="Kode undangan project"
+        onChange={(event) =>
+          setCode(event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase())
+        }
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && code.length === 8) void submit();
+        }}
+      />
+      <button onClick={() => void submit()} disabled={busy || code.length !== 8}>
+        {busy ? "Mengirim…" : "Join project"}
+      </button>
+    </div>
+  );
+}
+
 function Dashboard({
   projects,
   go,
@@ -3241,6 +3304,7 @@ function Dashboard({
   duplicate,
   archive,
   remove,
+  join,
 }: {
   projects: Project[];
   go: (p: Page, id?: string) => void;
@@ -3249,6 +3313,7 @@ function Dashboard({
   duplicate: (id: string) => void;
   archive: (id: string, archived: boolean) => void;
   remove: (project: Project) => Promise<void>;
+  join: (code: string) => Promise<boolean>;
 }) {
   const [q, setQ] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -3284,6 +3349,7 @@ function Dashboard({
           </button>
         </div>
       </section>
+      <JoinProjectCard join={join} />
       <div className="stats">
         <Stat
           icon={Database}
@@ -3584,7 +3650,6 @@ function ProjectHome({
     requests: [],
     collaborators: [],
   });
-  const [joinCode, setJoinCode] = useState("");
   const loadCollaboration = () =>
     api
       .projectCollaboration(project.id)
@@ -3611,28 +3676,6 @@ function ProjectHome({
         inviteError instanceof Error
           ? inviteError.message
           : "Gagal membuat undangan",
-      );
-    }
-  };
-  const joinWithCode = async () => {
-    const code = joinCode.trim().toUpperCase();
-    if (!/^[A-Z0-9]{8}$/.test(code)) {
-      notify("Kode undangan harus terdiri dari 8 karakter");
-      return;
-    }
-    try {
-      const result = await api.requestProjectJoin(code);
-      setJoinCode("");
-      notify(
-        result.status === "accepted"
-          ? "Anda sudah menjadi kolaborator project"
-          : "Join request terkirim. Pengundang akan melihatnya otomatis.",
-      );
-    } catch (joinError) {
-      notify(
-        joinError instanceof Error
-          ? joinError.message
-          : "Kode undangan gagal diproses",
       );
     }
   };
@@ -3926,33 +3969,9 @@ function ProjectHome({
                 </button>
               </div>
             )}
-            <div className="join-code-form">
-              <span>
-                <b>Punya kode undangan?</b>
-                <small>
-                  Masukkan kode dari project lain untuk mengirim join request.
-                </small>
-              </span>
-              <input
-                value={joinCode}
-                maxLength={8}
-                placeholder="8 karakter"
-                onChange={(event) =>
-                  setJoinCode(
-                    event.target.value.replace(/[^a-z0-9]/gi, "").toUpperCase(),
-                  )
-                }
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void joinWithCode();
-                }}
-              />
-              <button
-                onClick={() => void joinWithCode()}
-                disabled={joinCode.length !== 8}
-              >
-                Join project
-              </button>
-            </div>
+            {/* Redeeming a code now lives on the dashboard. Keeping it here as
+                well would ask a member to open a project in order to join a
+                different one they cannot see yet. */}
             {!!collaboration.requests.length && (
               <div className="join-request-list">
                 <b>Menunggu persetujuan</b>

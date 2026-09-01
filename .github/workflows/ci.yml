@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/roboflow-local]
+    # Was pinned to one feature branch, so work on any other branch went
+    # unverified until it reached main. Match them all instead.
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
 

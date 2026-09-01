@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull the latest Salnova image and restart if it changed
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Docker on UGOS needs root, and the compose files live outside any user home.
+User=root
+WorkingDirectory=/volume1/docker/salnova
+ExecStart=/volume1/docker/salnova/deploy/salnova-autodeploy.sh
+# A pull of a multi-gigabyte image over a home connection can be slow; give it
+# room rather than leaving a half-pulled layer behind.
+TimeoutStartSec=1800

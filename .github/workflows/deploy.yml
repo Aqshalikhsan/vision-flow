@@ -1,0 +1,95 @@
+name: Deploy
+
+# The NAS sits on a home LAN with no inbound ports, so a cloud runner cannot
+# reach it. The flow is inverted: GitHub builds and publishes the image, and the
+# NAS pulls it on its own schedule (see deploy/README.md). Nothing here needs a
+# credential for the NAS, and no self-hosted runner is exposed to this public
+# repository.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # A newer commit makes an in-flight build irrelevant; publishing them out of
+  # order would leave :latest pointing at the older one.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - run: npm ci
+
+      - name: Check frontend formatting
+        run: npm run format:check
+
+      - name: Typecheck frontend
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Compile backend
+        run: python -m compileall -q backend
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The NAS is x86-64 and has no NVIDIA GPU. Building the CUDA torch here
+          # would add gigabytes the target can never use, so publish the CPU
+          # build; a GPU host should build locally with the arg left empty.
+          build-args: TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          # Without a cache every push reinstalls torch from scratch.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image published"
+            echo
+            echo '```'
+            echo "${{ env.IMAGE }}:latest"
+            echo "${{ env.IMAGE }}:${{ github.sha }}"
+            echo '```'
+            echo
+            echo "The NAS picks this up on its next poll; see deploy/README.md."
+          } >> "$GITHUB_STEP_SUMMARY"

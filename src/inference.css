@@ -377,7 +377,7 @@
   background: none;
 }
 .color-field span {
-  font-family: monospace;
+  font-family: var(--mono);
   font-size: 9px;
 }
 .save-class {
@@ -6942,4 +6942,11 @@
     grid-column: 2;
     justify-self: end;
   }
+}
+
+/* The join form also sits on the dashboard, between the welcome banner and the
+   stats row, where it needs the same vertical rhythm as .stats rather than the
+   flush placement it has inside a project's collaboration panel. */
+.join-code-form.dashboard-join {
+  margin: 18px 0;
 }

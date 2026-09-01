@@ -1,17 +1,27 @@
+/* Single source of truth for the application shell. A second :root further down
+   used to redefine the font stack and half of these colours, so whichever
+   values a rule appeared to use here were silently replaced. The surviving
+   values are kept, now stated once. */
 :root {
-  font-family: "DM Sans", Inter, system-ui, sans-serif;
-  color: #25223b;
+  /* Neither DM Sans nor Inter is bundled or fetched, so both entries are
+     aspirational and the system UI font is what actually renders. Keep the
+     stack rather than pretending otherwise, and let everything inherit it:
+     a rule that names a family itself will drift away from the shell. */
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: #1f2937;
   background: #f7f7fb;
   font-synthesis: none;
-  --purple: #6c4ee7;
-  --ink: #25223b;
-  --muted: #7b7890;
-  --line: #e7e5ee;
+  --purple: #6d28d9;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --line: #e5e7eb;
   --panel: #fff;
   --border: var(--line);
   --primary: var(--purple);
   --primary-soft: #f0ecff;
   --surface: #f7f7fb;
+  --danger: #e45252;
 }
 * {
   box-sizing: border-box;
@@ -1464,7 +1474,7 @@ main {
   border: 1px solid #e7e4eb;
   border-radius: 7px;
   padding: 8px;
-  font-family: monospace;
+  font-family: var(--mono);
   font-size: 9px;
   margin: 15px 0;
 }
@@ -2379,20 +2389,8 @@ main {
   width: 14px;
 }
 
-/* Roboflow-aligned application shell. Keep these tokens centralized so the
-   local product remains visually consistent across dataset, train, and deploy. */
-:root {
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  --purple: #6d28d9;
-  --ink: #1f2937;
-  --muted: #6b7280;
-  --line: #e5e7eb;
-}
+/* Roboflow-aligned application shell. These tokens now live in the single
+   :root at the top of this file so they cannot be defined twice. */
 body {
   background: #f7f7f9;
   color: var(--ink);
@@ -2970,13 +2968,16 @@ body {
 }
 /* Operational workspaces: jobs, evaluation, monitoring, and review tooling. */
 .notification-trigger { position: relative; }
-.notification-trigger i { position: absolute; right: 0; top: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #e45252; color: white; font: 700 10px/16px sans-serif; }
+/* Longhand, not the `font:` shorthand: the shorthand resets font-family, which
+   dropped this badge to the browser's generic sans-serif while the rest of the
+   shell renders in the system UI face. */
+.notification-trigger i { position: absolute; right: 0; top: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--danger); color: white; font-weight: 700; font-size: 10px; line-height: 16px; }
 .job-center { position: fixed; z-index: 90; right: 22px; top: 66px; width: min(460px, calc(100vw - 28px)); max-height: min(720px, calc(100vh - 86px)); overflow: hidden; border: 1px solid var(--border); border-radius: 18px; background: var(--panel); box-shadow: 0 24px 70px #17203638; }
 .job-center > header, .job-center > nav { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .job-center > header { justify-content: space-between; } .job-center > header div, .job-center-list button > span:nth-child(2) { display: grid; gap: 3px; text-align: left; }
 .job-center > header small, .job-center-list small { color: var(--muted); font-size: 11px; }
 .job-center > nav button.active { color: var(--primary); background: var(--primary-soft); } .job-center > nav .read-all { margin-left: auto; font-size: 11px; }
-.job-center > nav i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #e45252; }
+.job-center > nav i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
 .job-center-list { max-height: 570px; overflow: auto; padding: 8px; }
 .job-center-list > button { width: 100%; display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; padding: 11px; border: 0; border-radius: 12px; background: transparent; color: inherit; }
 .job-center-list > button:hover, .job-center-list > button.unread { background: var(--primary-soft); }

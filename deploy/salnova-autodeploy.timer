@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for a new Salnova image every few minutes
+
+[Timer]
+# Wait for Docker to settle after a NAS reboot before the first check.
+OnBootSec=3min
+OnUnitActiveSec=3min
+# Without this a NAS that was powered off skips the checks it missed and only
+# catches up on the next interval.
+Persistent=true
+Unit=salnova-autodeploy.service
+
+[Install]
+WantedBy=timers.target

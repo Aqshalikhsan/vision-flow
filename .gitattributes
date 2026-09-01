@@ -1,0 +1,21 @@
+# This repository is developed on Windows with core.autocrlf=true, which rewrites
+# checked-out files to CRLF. Anything executed on the NAS must stay LF: a shell
+# script with CRLF fails at the shebang with "bad interpreter", and systemd
+# refuses to parse a unit whose directives carry a trailing carriage return.
+*.sh          text eol=lf
+*.service     text eol=lf
+*.timer       text eol=lf
+Dockerfile    text eol=lf
+*.dockerignore text eol=lf
+
+# Compose and workflow files are read by Docker and GitHub, both on Linux.
+compose*.yml  text eol=lf
+*.yaml        text eol=lf
+.github/**/*.yml text eol=lf
+
+# Copied to the NAS as-is and sourced by Docker Compose.
+.env*         text eol=lf
+
+# Model weights and datasets are binary; never let git touch their contents.
+*.pt          binary
+*.zip         binary
