@@ -29,7 +29,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
 
       - uses: actions/setup-python@v6
         with:
