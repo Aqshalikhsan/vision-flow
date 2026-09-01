@@ -1,5 +1,12 @@
 # Workspace handoff
 
+Read `OPERASI_SALNOVA.md` before touching the NAS, Cloudflare, or anything about
+deployment. It records the live deployment rather than the generic instructions
+in `PANDUAN_UGREEN_CLOUDFLARE.md`: real addresses, the decisions already made
+deliberately, and the traps that have each cost an hour — the SSH username with
+a space in it, the chrooted SFTP root, the router's cached SERVFAIL, and the
+dev server that looks exactly like production but has its own database.
+
 At the beginning of every Codex session in this workspace, read
 `gpu-diagnostics/ONGOING.md` before taking action. Treat it as the persistent
 handoff for the GPU stability investigation. Inspect the latest files in

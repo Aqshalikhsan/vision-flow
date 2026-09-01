@@ -78,7 +78,20 @@ function Find-WorkerPython {
 
     foreach ($root in $roots) {
         $candidate = Join-Path $root ".venv/Scripts/python.exe"
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        # Existing is not the same as working. A venv whose base interpreter was
+        # uninstalled, or that was copied to another folder, still has its
+        # python.exe but dies with "did not find executable at ...". Run it once
+        # so the failure surfaces here instead of inside the restart loop.
+        # $ErrorActionPreference is Stop for the script, which would turn that
+        # probe's stderr into a thrown error and hide the guidance below.
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & $candidate -c "import sys" *> $null
+        $usable = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = $previous
+        if ($usable) { return $candidate }
+        Write-Warn "Venv rusak, dilewati: $candidate"
     }
     return $null
 }
@@ -195,7 +208,17 @@ Token dari instance lokal tidak akan diterima NAS.
 
 $python = Find-WorkerPython
 $script = Find-WorkerScript
-if (-not $python) { throw "Python venv worker tidak ditemukan. Jalankan setup.ps1 dari halaman Train dulu." }
+if (-not $python) {
+    throw @"
+Tidak ada venv worker yang bisa dijalankan.
+
+Kalau di atas muncul 'Venv rusak', interpreter dasarnya sudah dihapus atau
+foldernya dipindah - venv tidak bisa diperbaiki, harus dibuat ulang.
+
+Unduh setup.ps1 dari halaman Train lalu jalankan; ia akan memasang Python dan
+PyTorch yang cocok, baru setelah itu jalankan skrip ini lagi.
+"@
+}
 if (-not $script) { throw "visionflow_worker.py tidak ditemukan. Jalankan setup.ps1 dari halaman Train dulu." }
 
 Write-Step "Mencari server yang aktif"

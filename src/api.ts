@@ -117,9 +117,21 @@ export type ModelEvaluation = {
     f1?: number;
     perClass?: Record<
       string,
-      { tp: number; fp: number; fn: number; precision: number; recall: number; f1: number }
+      {
+        tp: number;
+        fp: number;
+        fn: number;
+        precision: number;
+        recall: number;
+        f1: number;
+      }
     >;
-    thresholdSweep?: Array<{ threshold: number; precision: number; recall: number; f1: number }>;
+    thresholdSweep?: Array<{
+      threshold: number;
+      precision: number;
+      recall: number;
+      f1: number;
+    }>;
     recommendedThreshold?: number;
     qualityGate?: boolean;
   };
@@ -1052,8 +1064,7 @@ export const api = {
       },
     ),
   jobs: () => request<GlobalJob[]>("/api/jobs"),
-  notifications: () =>
-    request<WorkspaceNotification[]>("/api/notifications"),
+  notifications: () => request<WorkspaceNotification[]>("/api/notifications"),
   readNotification: (id: string) =>
     request<{ id: string; read: boolean }>(`/api/notifications/${id}/read`, {
       method: "POST",

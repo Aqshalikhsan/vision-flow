@@ -78,9 +78,24 @@ AUTH_RATE_LIMIT_LOCK = threading.Lock()
 AUTH_RATE_LIMIT = max(5, int(os.getenv("VISIONFLOW_AUTH_RATE_LIMIT", "30")))
 AUTH_RATE_WINDOW_SECONDS = max(60, int(os.getenv("VISIONFLOW_AUTH_RATE_WINDOW_SECONDS", "300")))
 DB_BUSY_TIMEOUT_MS = max(1000, int(os.getenv("VISIONFLOW_DB_BUSY_TIMEOUT_MS", "30000")))
-REMOTE_QUEUE_TTL_MINUTES = max(
-    5, int(os.getenv("VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES", "120"))
-)
+def _queue_ttl_minutes() -> int:
+    """Minutes a job may wait for a worker; 0 or less means it never expires.
+
+    Expiry assumes a worker is usually available, so a job left queued has been
+    abandoned. When the only GPU belongs to a desktop that is switched off at
+    night, that assumption is wrong and the timeout just pauses work nobody
+    abandoned. Disabling it keeps jobs queued until the machine comes back.
+    """
+    try:
+        configured = int(os.getenv("VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES", "120"))
+    except ValueError:
+        # A typo here should not stop the application from starting.
+        LOGGER.warning("VISIONFLOW_REMOTE_QUEUE_TTL_MINUTES is not a number; using 120")
+        return 120
+    return 0 if configured <= 0 else max(5, configured)
+
+
+REMOTE_QUEUE_TTL_MINUTES = _queue_ttl_minutes()
 for folder in (DATA, UPLOADS, VERSIONS, RUNS, EXPORTS, AVATARS):
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -3800,13 +3815,16 @@ def claim_training_job(request: Request):
             if not str(target).startswith(("remote-", "colab-")):
                 continue
             activated_at = config.get("queue_activated_at") or candidate["created_at"]
-            try:
-                queue_is_current = datetime.fromisoformat(activated_at) >= (
-                    datetime.now(timezone.utc)
-                    - timedelta(minutes=REMOTE_QUEUE_TTL_MINUTES)
-                )
-            except (TypeError, ValueError):
-                queue_is_current = False
+            if REMOTE_QUEUE_TTL_MINUTES <= 0:
+                queue_is_current = True
+            else:
+                try:
+                    queue_is_current = datetime.fromisoformat(activated_at) >= (
+                        datetime.now(timezone.utc)
+                        - timedelta(minutes=REMOTE_QUEUE_TTL_MINUTES)
+                    )
+                except (TypeError, ValueError):
+                    queue_is_current = False
             if not queue_is_current:
                 con.execute(
                     "UPDATE models SET status='paused',worker_id=NULL,error=?,training_detail=? WHERE id=? AND status='queued'",
