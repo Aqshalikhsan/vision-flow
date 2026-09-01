@@ -12,7 +12,7 @@ Terakhir diperbarui: 1 September 2026.
 
 ## Status verifikasi terakhir
 
-Pada 1 September 2026 pukul 18:25 WIB, source aplikasi utama di NAS identik
+Pada 1 September 2026 pukul 19:03 WIB, source aplikasi utama di NAS identik
 dengan workspace dan stack produksi sudah memakai build terbaru. Container
 `salnova` berstatus **healthy**, `salnova-cloudflared` berjalan, dan pemeriksaan
 publik berikut semuanya berhasil:
@@ -27,9 +27,12 @@ publik berikut semuanya berhasil:
 Log aplikasi setelah deploy menunjukkan request normal tanpa traceback atau
 respons 5xx. Worker GPU juga aktif mengirim heartbeat dan mengambil antrean.
 
-Deploy saat ini masih memakai image lokal `salnova:local`. Timer systemd belum
-aktif dan `.env` NAS belum memiliki `VISIONFLOW_IMAGE`; jadi bagian CI/CD di
-§6 tetap harus diselesaikan sebelum deploy otomatis boleh dianggap aktif.
+Deploy otomatis sudah aktif. Container memakai
+`ghcr.io/aqshalikhsan/vision-flow:latest`, package bisa ditarik anonim dari NAS,
+dan `salnova-autodeploy.timer` berstatus enabled + active dengan interval tiga
+menit. Pemeriksaan manual terakhir menghasilkan `OK tidak ada image baru`.
+Salinan `.env` sebelum aktivasi disimpan sebagai
+`.env.bak-autodeploy-20260901` pada project dir NAS.
 
 ## 1. Arsitektur
 
@@ -182,7 +185,7 @@ di `compose.ugreen.yml`. NAS tidak punya GPU, dan torch CUDA menambah beberapa
 GB yang tidak akan pernah terpakai. Default kosong, sehingga
 `compose.gpu.yml` tetap mendapat build CUDA.
 
-## 6. CI/CD — dibangun, belum aktif
+## 6. CI/CD — aktif
 
 Runner GitHub tidak bisa menjangkau NAS, dan repo ini **publik** sehingga
 self-hosted runner berbahaya (PR dari fork akan dieksekusi di NAS). Alurnya
@@ -193,18 +196,14 @@ push ke main → Actions build → ghcr.io/aqshalikhsan/vision-flow:latest
              → timer systemd di NAS polling tiap 3 menit → restart bila berubah
 ```
 
-Tidak ada kredensial NAS yang disimpan di GitHub.
+Tidak ada kredensial NAS yang disimpan di GitHub. Branch kerja sudah masuk ke
+`main`, workflow Deploy sudah menerbitkan image pertama, `.env` NAS sudah berisi
+`VISIONFLOW_IMAGE=ghcr.io/aqshalikhsan/vision-flow:latest`, dan timer systemd
+sudah aktif. Package dapat ditarik NAS tanpa `docker login`.
 
-Empat langkah yang belum dikerjakan, urut:
-
-1. Merge branch kerja ke `main` — memicu build pertama
-2. Buka visibilitas package di tab Packages (GitHub membuatnya privat walau repo
-   publik; kalau dilewat, NAS gagal `pull` dengan `denied`)
-3. Tambahkan `VISIONFLOW_IMAGE=ghcr.io/aqshalikhsan/vision-flow:latest` ke `.env`
-4. Pasang timer — perintahnya di [deploy/README.md](deploy/README.md)
-
-Selama `VISIONFLOW_IMAGE` belum diset, script deploy keluar dengan `SKIP` dan
-tidak melakukan apa pun.
+Workflow pernah gagal sebelum aktivasi karena nama image mempertahankan huruf
+besar dari nama akun GitHub dan post-step cache npm error. Nama image sekarang
+dikunci lowercase dan cache npm pada workflow Deploy sengaja tidak dipakai.
 
 ## 7. Worker training
 
