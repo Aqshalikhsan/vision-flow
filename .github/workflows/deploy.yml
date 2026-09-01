@@ -46,7 +46,7 @@ jobs:
         run: npx tsc --noEmit -p tsconfig.json
 
       - name: Compile backend
-        run: python -m compileall -q backend
+        run: python -m compileall -q backend worker
 
   publish:
     needs: verify

@@ -31,7 +31,9 @@ RUN if [ -n "$TORCH_INDEX_URL" ]; then \
     fi
 RUN pip install --no-cache-dir --timeout 120 --retries 10 -r backend/requirements.txt
 COPY backend ./backend
+COPY worker ./worker
 COPY --from=frontend /app/dist ./dist
+RUN test -f /app/worker/visionflow_worker.py && test -f /app/worker/requirements.txt
 RUN mkdir -p /app/local_data/uploads /app/local_data/versions /app/local_data/runs /app/local_data/exports /app/local_data/cache /app/models
 EXPOSE 8000
 VOLUME ["/app/local_data", "/app/models"]

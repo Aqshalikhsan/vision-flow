@@ -35,7 +35,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Compile backend
-        run: python -m compileall -q backend
+        run: python -m compileall -q backend worker
 
       - name: Check frontend formatting
         run: npm run format:check
@@ -54,6 +54,8 @@ jobs:
             curl --fail --silent http://127.0.0.1:8000/api/health && break
             sleep 1
           done
+          curl --fail --silent http://127.0.0.1:8000/api/training-workers/setup/visionflow_worker.py | grep --quiet "VisionFlow"
+          curl --fail --silent http://127.0.0.1:8000/api/training-workers/setup/requirements.txt | grep --quiet "ultralytics"
           python backend/smoke_test.py
 
       - name: Build and run browser tests
