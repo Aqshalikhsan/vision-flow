@@ -207,10 +207,15 @@ dikunci lowercase dan cache npm pada workflow Deploy sengaja tidak dipakai.
 
 ## 7. Worker training
 
-Tiga pilihan di halaman Train, semuanya sudah berfungsi: laptop sendiri, Google
-Colab, atau komputer orang lain yang dibiarkan menyala. Job diambil dari antrean
-bersama tanpa filter pemilik, jadi worker mana pun dapat melayani user mana pun.
-Pemilihan mesin tertentu lewat dropdown **External worker**.
+Empat pilihan di halaman Train: **PC RTX 5060**, **Device sendiri**, **NAS**, dan
+**Google Colab**. Masing-masing mempunyai tutorial dan unduhan Windows `.ps1`
+serta Linux `.sh` di **Training setup center**; Colab juga mempunyai notebook.
+Panduan pengguna lengkap ada di [TRAINING_SETUP.md](TRAINING_SETUP.md).
+
+PC/device/Colab mengambil job dari antrean bersama tanpa filter pemilik, jadi
+worker mana pun dapat melayani user mana pun. Pemilihan mesin tertentu lewat
+dropdown **External worker**. NAS menjalankan training langsung di container
+dan tidak memakai token worker; script NAS hanya mengecek `/api/ready`.
 
 [worker/run-worker.ps1](worker/run-worker.ps1) menjaga worker tetap hidup:
 restart dengan backoff, Scheduled Task saat login, dan pemilihan alamat otomatis

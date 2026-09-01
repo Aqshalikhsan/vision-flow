@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const API = "http://127.0.0.1:8010";
 let projectId = "";
@@ -190,14 +191,105 @@ test("dashboard to annotation, versions, training, and deployment", async ({
     page.getByRole("button", { name: /Start training/ }),
   ).toBeDisabled();
   await expect(
-    page.locator(".laptop-workers > header").getByText("Laptop workers", {
-      exact: true,
-    }),
+    page
+      .locator(".laptop-workers > header")
+      .getByText("Training setup center", { exact: true }),
   ).toBeVisible();
-  const trainingLocation = page.getByLabel("Training location");
+  const trainingLocation = page.getByRole("radiogroup", {
+    name: "Training location",
+  });
   await expect(trainingLocation).toBeVisible();
-  await trainingLocation.selectOption("remote-auto");
+  for (const location of [
+    "PC RTX 5060",
+    "Device sendiri",
+    "NAS",
+    "Google Colab",
+  ]) {
+    await expect(
+      trainingLocation.getByRole("radio", { name: new RegExp(`^${location}`) }),
+    ).toBeVisible();
+  }
+  await trainingLocation.getByRole("radio", { name: /^PC RTX 5060/ }).click();
   await expect(page.getByLabel("External worker")).toBeVisible();
+  await expect(page.getByLabel("Compute preference")).toHaveValue("auto");
+  await page.getByLabel("Compute preference").selectOption("gpu");
+  await expect(page.getByLabel("Compute preference")).toHaveValue("gpu");
+
+  const setupCenter = page.locator(".laptop-workers");
+  for (const heading of [
+    "1. PC RTX 5060",
+    "2. Device sendiri",
+    "3. NAS",
+    "4. Google Colab",
+  ]) {
+    await expect(setupCenter.getByText(heading, { exact: true })).toBeVisible();
+  }
+  const pcCard = setupCenter.locator(".training-setup-grid article").filter({
+    hasText: "1. PC RTX 5060",
+  });
+  page.once("dialog", (dialog) => dialog.accept("E2E PC RTX 5060"));
+  const [pcWindowsSetup] = await Promise.all([
+    page.waitForEvent("download"),
+    pcCard.getByRole("button", { name: "Windows .ps1" }).click(),
+  ]);
+  expect(pcWindowsSetup.suggestedFilename()).toBe("salnova-this-pc-setup.ps1");
+  const pcWindowsPath = await pcWindowsSetup.path();
+  expect(pcWindowsPath).toBeTruthy();
+  const pcWindowsScript = await readFile(pcWindowsPath!, "utf8");
+  expect(pcWindowsScript).toContain("$provider = 'local'");
+  expect(pcWindowsScript).toContain("--provider $provider");
+
+  const deviceCard = setupCenter
+    .locator(".training-setup-grid article")
+    .filter({ hasText: "2. Device sendiri" });
+  page.once("dialog", (dialog) => dialog.accept("E2E Linux Device"));
+  const [deviceLinuxSetup] = await Promise.all([
+    page.waitForEvent("download"),
+    deviceCard.getByRole("button", { name: "Linux .sh" }).click(),
+  ]);
+  expect(deviceLinuxSetup.suggestedFilename()).toBe(
+    "salnova-own-device-setup.sh",
+  );
+  const deviceLinuxPath = await deviceLinuxSetup.path();
+  expect(deviceLinuxPath).toBeTruthy();
+  const deviceLinuxScript = await readFile(deviceLinuxPath!, "utf8");
+  expect(deviceLinuxScript).toContain("provider='local'");
+  expect(deviceLinuxScript).toContain('--provider "$provider"');
+
+  const nasCard = setupCenter.locator(".training-setup-grid article").filter({
+    hasText: "3. NAS",
+  });
+  const [windowsSetup] = await Promise.all([
+    page.waitForEvent("download"),
+    nasCard.getByRole("button", { name: "Windows .ps1" }).click(),
+  ]);
+  expect(windowsSetup.suggestedFilename()).toBe("salnova-nas-setup.ps1");
+  const windowsSetupPath = await windowsSetup.path();
+  expect(windowsSetupPath).toBeTruthy();
+  expect(await readFile(windowsSetupPath!, "utf8")).toContain("/api/ready");
+  const [linuxSetup] = await Promise.all([
+    page.waitForEvent("download"),
+    nasCard.getByRole("button", { name: "Linux .sh" }).click(),
+  ]);
+  expect(linuxSetup.suggestedFilename()).toBe("salnova-nas-setup.sh");
+  const linuxSetupPath = await linuxSetup.path();
+  expect(linuxSetupPath).toBeTruthy();
+  expect(await readFile(linuxSetupPath!, "utf8")).toContain("/api/ready");
+
+  const colabCard = setupCenter
+    .locator(".training-setup-grid article")
+    .filter({ hasText: "4. Google Colab" });
+  page.once("dialog", (dialog) => dialog.accept("E2E Colab Runner"));
+  const [colabLinuxSetup] = await Promise.all([
+    page.waitForEvent("download"),
+    colabCard.getByRole("button", { name: "Linux .sh" }).click(),
+  ]);
+  expect(colabLinuxSetup.suggestedFilename()).toBe("salnova-colab-setup.sh");
+  const colabLinuxPath = await colabLinuxSetup.path();
+  expect(colabLinuxPath).toBeTruthy();
+  expect(await readFile(colabLinuxPath!, "utf8")).toContain(
+    "provider='google-colab'",
+  );
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

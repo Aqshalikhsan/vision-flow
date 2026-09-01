@@ -1179,6 +1179,41 @@
   font-weight: 700;
   color: #625c6c;
 }
+.training-location-field {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+  color: #625c6c;
+  font-size: 8px;
+  font-weight: 700;
+}
+.training-location-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.training-location-grid button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #ded9e6;
+  border-radius: 8px;
+  color: #544d60;
+  background: #fff;
+  text-align: left;
+}
+.training-location-grid button small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 500;
+}
+.training-location-grid button.active {
+  border-color: #7659e7;
+  color: #5f45bd;
+  background: #f4f0ff;
+  box-shadow: 0 0 0 3px #7659e713;
+}
 .training-fields select,
 .training-fields input {
   display: block;
@@ -1311,6 +1346,50 @@
   flex: 0 0 auto;
   padding: 7px 10px;
   font-size: 10px;
+}
+.training-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.training-setup-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e5e0eb;
+  border-radius: 9px;
+  background: #fff;
+}
+.training-setup-grid article > b {
+  color: #49358e;
+  font-size: 11px;
+}
+.training-setup-grid ol {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: #746d7e;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.training-setup-grid .worker-downloads {
+  align-self: end;
+}
+.training-setup-grid button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid #d8caef;
+  border-radius: 6px;
+  color: #5c43b4;
+  background: #f9f7ff;
+  font-size: 9px;
+}
+.training-setup-grid button svg {
+  width: 12px;
 }
 .worker-row {
   padding: 9px 0;
@@ -5275,6 +5354,10 @@
   .health-summary,
   .training-fields,
   .registry-config {
+    grid-template-columns: 1fr;
+  }
+  .training-location-grid,
+  .training-setup-grid {
     grid-template-columns: 1fr;
   }
   .config-guide-grid {
