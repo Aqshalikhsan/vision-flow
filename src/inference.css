@@ -7772,3 +7772,133 @@
 .shortcut-list {
   color: #f7ece5 !important;
 }
+
+/* Contrast safety net for page-specific cards that previously kept light UI tokens. */
+.auth-card input,
+.auth-card input:-webkit-autofill,
+.auth-card input:-webkit-autofill:hover,
+.auth-card input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #fff8ef !important;
+  caret-color: #ffd1a8;
+  background: #ffffff0d !important;
+  border-color: #ffc59b52 !important;
+  box-shadow: 0 0 0 1000px #211326 inset !important;
+}
+.content
+  :is(
+    .panel,
+    .stat,
+    .model-card,
+    .model-library-grid > article,
+    .template-card,
+    .template-grid > article,
+    .dataset-item,
+    .dataset-stats span,
+    .version-section,
+    .version-history-card,
+    .version-side .panel,
+    .train-config,
+    .train-grid > article,
+    .training-location-card,
+    .laptop-workers,
+    .advance-runtime,
+    .advance-categories,
+    .advance-engines,
+    .advance-review,
+    .advance-drafts,
+    .project-card,
+    .project-overview-card,
+    .collaboration-panel,
+    .invite-card,
+    .join-code-form,
+    .member-list,
+    .project-invite
+  ) {
+  color: #fff4ec !important;
+  background: linear-gradient(145deg, #211429f2, #120d20f2) !important;
+  border-color: #ffbc8a35 !important;
+  box-shadow:
+    0 14px 30px #03010d45,
+    inset 0 1px #ffffff0c !important;
+}
+.content
+  :is(
+    .panel,
+    .model-card,
+    .template-card,
+    .dataset-item,
+    .version-section,
+    .version-history-card,
+    .train-config,
+    .train-grid,
+    .advance-page,
+    .collaboration-panel,
+    .invite-card,
+    .join-code-form
+  )
+  :is(h1, h2, h3, h4, b, strong, label) {
+  color: #fff6ef !important;
+}
+.content
+  :is(
+    .panel,
+    .model-card,
+    .template-card,
+    .dataset-item,
+    .version-section,
+    .train-config,
+    .advance-page,
+    .collaboration-panel,
+    .invite-card,
+    .join-code-form
+  )
+  :is(p, small, span, em) {
+  color: #d5bec1;
+}
+.content
+  :is(
+    .model-card,
+    .template-card,
+    .dataset-item,
+    .version-section,
+    .train-config,
+    .advance-page,
+    .collaboration-panel,
+    .invite-card,
+    .join-code-form
+  )
+  :is(input, select, textarea) {
+  color: #fff7ef !important;
+  background: #ffffff0b !important;
+  border-color: #ffbc8a45 !important;
+}
+.content
+  :is(
+    .model-card,
+    .template-card,
+    .dataset-item,
+    .version-section,
+    .train-config,
+    .advance-page,
+    .collaboration-panel,
+    .invite-card,
+    .join-code-form
+  )
+  :is(input, select, textarea)::placeholder {
+  color: #b9a4ab;
+}
+.content .dataset-item footer,
+.content .template-card > div:last-child,
+.content .project-info,
+.content .card-foot,
+.content .version-history-head {
+  background: transparent !important;
+  border-color: #ffffff14 !important;
+}
+.content .dataset-toolbar,
+.content .dataset-pagination,
+.content .version-tags,
+.content .model-library-grid,
+.content .template-grid {
+  color: #ead8d5;
+}
