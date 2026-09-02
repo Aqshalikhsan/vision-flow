@@ -8004,7 +8004,7 @@ main :is(article, section, aside, .panel, .card, .modal),
       #05040b36 72%,
       #05040b14
     ),
-    url("/assets/supernova-login.gif") center / cover no-repeat;
+    url("/assets/supernova-login.gif?v=20260902") center / cover no-repeat;
   animation: login-nebula-drift 24s ease-in-out infinite alternate;
   transform-origin: center;
 }
