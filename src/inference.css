@@ -8488,6 +8488,41 @@ main :is(article, section, aside, .panel, .card, .modal),
   object-fit: contain;
   background: #090711;
 }
+.auth-slide.detection,
+.auth-slide.keypoint {
+  grid-template-columns: minmax(0, 0.82fr) minmax(270px, 1.18fr);
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  align-items: center;
+  column-gap: 28px;
+}
+.auth-slide.detection .slide-kicker,
+.auth-slide.keypoint .slide-kicker {
+  grid-column: 1;
+  align-self: end;
+}
+.auth-slide.detection h2,
+.auth-slide.keypoint h2,
+.auth-slide.detection p,
+.auth-slide.keypoint p {
+  grid-column: 1;
+}
+.auth-slide.detection h2,
+.auth-slide.keypoint h2 {
+  font-size: clamp(25px, 2.45vw, 34px);
+}
+.auth-slide.detection .inference-preview,
+.auth-slide.keypoint .inference-preview {
+  grid-column: 2;
+  grid-row: 1 / 4;
+  width: 100%;
+  height: 390px;
+  margin: 0;
+}
+.auth-slide.segment .inference-preview {
+  width: min(100%, 560px);
+  height: 285px;
+}
 .detection-preview {
   background: linear-gradient(#57698c 0 53%, #303847 53% 100%);
 }
@@ -8656,6 +8691,20 @@ main :is(article, section, aside, .panel, .card, .modal),
   }
   .auth-layout .auth-card::before {
     border-radius: 22px;
+  }
+}
+@media (min-width: 861px) and (max-width: 1020px) {
+  .auth-showcase {
+    padding-inline: 28px;
+  }
+  .auth-slide.detection,
+  .auth-slide.keypoint {
+    grid-template-columns: minmax(0, 0.78fr) minmax(220px, 1.22fr);
+    column-gap: 18px;
+  }
+  .auth-slide.detection .inference-preview,
+  .auth-slide.keypoint .inference-preview {
+    height: 350px;
   }
 }
 @media (max-width: 460px) {
