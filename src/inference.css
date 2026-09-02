@@ -7950,3 +7950,35 @@ main :is(article, section, aside, .panel, .card, .modal),
 .sidebar :is(b, small, p, button, span) {
   color: inherit;
 }
+
+/* Account-resume/login shapes: keep every surface dark for the saved eric123 session too. */
+.auth-page :is(.auth-card, .account-resume-card, .workspace-boot-card) {
+  background: linear-gradient(145deg, #1c1225f2, #0d0917f2) !important;
+  border-color: #ffffff24 !important;
+  color: #fff8f1 !important;
+}
+.auth-page .account-resume-identity,
+.auth-page .workspace-boot-progress > div,
+.auth-page .auth-methods,
+.auth-page .otp-hint,
+.auth-page .otp-delivery {
+  background: #0d0918 !important;
+  border-color: #ffffff20 !important;
+  color: #eadbe0 !important;
+}
+.auth-page .account-resume-identity > span {
+  color: #fff1df !important;
+  background: linear-gradient(145deg, #843040, #4a1830) !important;
+  box-shadow: inset 0 1px #ffffff1c;
+}
+.auth-page .account-resume-identity b {
+  color: #fffaf3 !important;
+}
+.auth-page .account-resume-identity small,
+.auth-page .workspace-boot-card small,
+.auth-page .workspace-boot-card p {
+  color: #d5c3cb !important;
+}
+.auth-page .workspace-switch-account {
+  color: #ffc08a !important;
+}
