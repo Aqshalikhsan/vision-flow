@@ -279,6 +279,7 @@ def init_db() -> None:
               id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
               prefix TEXT NOT NULL, capabilities TEXT NOT NULL DEFAULT '{}',
               profile TEXT NOT NULL DEFAULT 'own-device',
+              owner_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
               status TEXT NOT NULL DEFAULT 'offline', current_model_id TEXT,
               last_seen TEXT, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
             );
@@ -429,6 +430,11 @@ def init_db() -> None:
             con.execute("ALTER TABLE training_workers ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
         if "profile" not in worker_columns:
             con.execute("ALTER TABLE training_workers ADD COLUMN profile TEXT NOT NULL DEFAULT 'own-device'")
+        if "owner_id" not in worker_columns:
+            # Personal workers created before ownership existed are deliberately
+            # not assigned to an arbitrary account. They stay hidden; the owner
+            # can register the device again to get a user-bound token.
+            con.execute("ALTER TABLE training_workers ADD COLUMN owner_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL")
         member_columns = {row["name"] for row in con.execute("PRAGMA table_info(workspace_members)")}
         if "password_hash" not in member_columns:
             con.execute("ALTER TABLE workspace_members ADD COLUMN password_hash TEXT")
@@ -3737,7 +3743,7 @@ def worker_from_request(request: Request) -> sqlite3.Row:
     return worker
 
 
-def worker_json(row: sqlite3.Row) -> dict[str, Any]:
+def worker_json(row: sqlite3.Row, requester_id: str | None = None) -> dict[str, Any]:
     last_seen = row["last_seen"]
     online = False
     if last_seen:
@@ -3750,6 +3756,7 @@ def worker_json(row: sqlite3.Row) -> dict[str, Any]:
         "name": row["name"],
         "prefix": row["prefix"] or "legacy",
         "profile": row["profile"] or "own-device",
+        "manageable": bool(requester_id and row["owner_id"] == requester_id),
         "capabilities": json.loads(row["capabilities"] or "{}"),
         "status": "revoked" if row["revoked"] else (row["status"] if online else "offline"),
         "currentModelId": row["current_model_id"],
@@ -3794,10 +3801,17 @@ def remote_job_json(con: sqlite3.Connection, model: sqlite3.Row) -> dict[str, An
 
 
 @app.get("/api/training-workers")
-def list_training_workers():
+def list_training_workers(request: Request):
     with db() as con:
-        rows = con.execute("SELECT * FROM training_workers ORDER BY created_at DESC").fetchall()
-    return [worker_json(row) for row in rows]
+        member_id = request_member_id(request, con)
+        # The RTX workstation is a shared pool resource. Every other worker is
+        # a personal device and must never be observable or selectable by a
+        # different account.
+        rows = con.execute(
+            "SELECT * FROM training_workers WHERE profile='this-pc' OR owner_id=? ORDER BY created_at DESC",
+            (member_id,),
+        ).fetchall()
+    return [worker_json(row, member_id) for row in rows]
 
 
 @app.get("/api/training-workers/setup/{filename}")
@@ -3813,7 +3827,7 @@ def training_worker_setup_file(filename: str):
 
 
 @app.post("/api/training-workers", status_code=201)
-def create_training_worker(payload: TrainingWorkerPayload):
+def create_training_worker(payload: TrainingWorkerPayload, request: Request):
     worker_name = payload.name.strip()
     if not worker_name:
         raise HTTPException(400, "Worker name is required")
@@ -3821,8 +3835,11 @@ def create_training_worker(payload: TrainingWorkerPayload):
     worker_id = uid()
     prefix = raw_token[:12]
     with db() as con:
+        member_id = request_member_id(request, con)
+        if not member_id:
+            raise HTTPException(401, "Login required to register a training worker")
         con.execute(
-            "INSERT INTO training_workers (id,name,token_hash,prefix,capabilities,profile,status,last_seen,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO training_workers (id,name,token_hash,prefix,capabilities,profile,owner_id,status,last_seen,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 worker_id,
                 worker_name,
@@ -3830,6 +3847,7 @@ def create_training_worker(payload: TrainingWorkerPayload):
                 prefix,
                 "{}",
                 payload.profile,
+                member_id,
                 "offline",
                 "1970-01-01T00:00:00+00:00",
                 now(),
@@ -3837,15 +3855,18 @@ def create_training_worker(payload: TrainingWorkerPayload):
         )
         row = con.execute("SELECT * FROM training_workers WHERE id=?", (worker_id,)).fetchone()
         log_activity(con, "training-worker.created", worker_name)
-    return {**worker_json(row), "token": raw_token}
+    return {**worker_json(row, member_id), "token": raw_token}
 
 
 @app.delete("/api/training-workers/{worker_id}", status_code=204)
-def revoke_training_worker(worker_id: str):
+def revoke_training_worker(worker_id: str, request: Request):
     with db() as con:
+        member_id = request_member_id(request, con)
         worker = con.execute("SELECT * FROM training_workers WHERE id=?", (worker_id,)).fetchone()
         if not worker:
             raise HTTPException(404, "Training worker not found")
+        if worker["owner_id"] != member_id:
+            raise HTTPException(403, "Only the worker owner can revoke this device")
         if worker["current_model_id"]:
             active = con.execute("SELECT status FROM models WHERE id=?", (worker["current_model_id"],)).fetchone()
             if active and active["status"] == "training":
@@ -4415,7 +4436,7 @@ def resume_training_queue() -> None:
 
 
 @app.post("/api/projects/{project_id}/train", status_code=202)
-def start_training(project_id: str, payload: TrainPayload):
+def start_training(project_id: str, payload: TrainPayload, request: Request):
     with db() as con:
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if not project:
@@ -4458,6 +4479,12 @@ def start_training(project_id: str, payload: TrainPayload):
             worker = con.execute("SELECT * FROM training_workers WHERE id=? AND revoked=0", (payload.worker_id,)).fetchone()
             if not worker:
                 raise HTTPException(404, "Selected laptop worker was not found")
+            member_id = request_member_id(request, con)
+            if worker["profile"] != "this-pc" and worker["owner_id"] != member_id:
+                # Do not rely on the filtered UI: this protects direct API
+                # calls too, so a personal token-bound device cannot be used by
+                # another member even if its ID is guessed.
+                raise HTTPException(404, "Selected training worker was not found")
             capabilities = json.loads(worker["capabilities"] or "{}")
             worker_profile = worker["profile"] or "own-device"
             selected_worker_online = worker_json(worker)["status"] in {"online", "busy"}
@@ -4487,7 +4514,7 @@ def start_training(project_id: str, payload: TrainPayload):
 
 
 @app.post("/api/projects/{project_id}/train/sweep", status_code=202)
-def start_training_sweep(project_id: str, payload: TrainingSweepPayload):
+def start_training_sweep(project_id: str, payload: TrainingSweepPayload, request: Request):
     allowed_optimizers = {"auto", "SGD", "Adam", "AdamW", "NAdam", "RAdam", "RMSProp"}
     if any(optimizer not in allowed_optimizers for optimizer in payload.optimizers):
         raise HTTPException(400, "Sweep contains an unsupported optimizer")
@@ -4498,7 +4525,7 @@ def start_training_sweep(project_id: str, payload: TrainingSweepPayload):
         raise HTTPException(400, "A sweep supports up to 8 experiments")
     first_optimizer, first_rate = combinations[0]
     first = payload.base.model_copy(update={"optimizer": first_optimizer, "learning_rate": first_rate})
-    start_training(project_id, first)
+    start_training(project_id, first, request)
     with db() as con:
         project = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         version = con.execute("SELECT * FROM versions WHERE id=? AND project_id=?", (payload.base.version_id, project_id)).fetchone() if payload.base.version_id else con.execute("SELECT * FROM versions WHERE project_id=? ORDER BY number DESC LIMIT 1", (project_id,)).fetchone()

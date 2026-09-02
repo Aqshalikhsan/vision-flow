@@ -8945,7 +8945,6 @@ function DatasetTrain({
   const [trainingRoute, setTrainingRoute] = useState<TrainingRoute>("nas");
   const [workerId, setWorkerId] = useState("");
   const [workers, setWorkers] = useState<TrainingWorker[]>([]);
-  const [workerToken, setWorkerToken] = useState("");
   const [starting, setStarting] = useState(false);
   const colabTarget = executionTarget.startsWith("colab-");
   const gpuTarget =
@@ -8960,12 +8959,6 @@ function DatasetTrain({
   // Use the browser origin so laptop workers go through the same Vite/NAS
   // proxy as the UI. The API itself remains private on localhost in dev mode.
   const workerServer = window.location.origin;
-  const workerCommand = workerToken
-    ? `$env:VISIONFLOW_WORKER_TOKEN="${workerToken}"; python worker/visionflow_worker.py --server "${workerServer}"`
-    : "";
-  const workerUnixCommand = workerToken
-    ? `VISIONFLOW_WORKER_TOKEN="${workerToken}" python3 worker/visionflow_worker.py --server "${workerServer}"`
-    : "";
   const computePreference = executionTarget.endsWith("-gpu")
     ? "gpu"
     : executionTarget.endsWith("-cpu")
@@ -9055,11 +9048,6 @@ function DatasetTrain({
       const worker = await api.createTrainingWorker(name, profile);
       setWorkers((current) => [worker, ...current]);
       setWorkerId(worker.id);
-      setWorkerToken(worker.token);
-      await navigator.clipboard.writeText(worker.token).catch(() => {});
-      notify(
-        "Token worker dibuat dan disalin. Token hanya ditampilkan sekali.",
-      );
       return worker;
     } catch (error) {
       notify(error instanceof Error ? error.message : "Gagal membuat worker");
@@ -9097,7 +9085,6 @@ function DatasetTrain({
       };
       setWorkers((current) => [colabWorker, ...current]);
       setWorkerId(worker.id);
-      setWorkerToken(worker.token);
       setTrainingRoute("colab");
       setExecutionTarget(requestedTarget);
       const server = publicServer.toString().replace(/\/$/, "");
@@ -9165,9 +9152,9 @@ function DatasetTrain({
     }
   };
   const downloadWorkerSetup = (
-    profile: Exclude<TrainingRoute, "nas"> = "own-device",
-    tokenValue = workerToken,
-    workerIdValue = workerId,
+    profile: Exclude<TrainingRoute, "nas">,
+    tokenValue: string,
+    workerIdValue: string,
   ) => {
     if (!tokenValue || !workerIdValue) return;
     const quote = (value: string) => value.replace(/'/g, "''");
@@ -9338,9 +9325,9 @@ Write-Host "Log dan checkpoint device disimpan di $deviceRoot" -ForegroundColor 
     );
   };
   const downloadUnixWorkerSetup = (
-    profile: Exclude<TrainingRoute, "nas"> = "own-device",
-    tokenValue = workerToken,
-    workerIdValue = workerId,
+    profile: Exclude<TrainingRoute, "nas">,
+    tokenValue: string,
+    workerIdValue: string,
   ) => {
     if (!tokenValue || !workerIdValue) return;
     const quote = (value: string) => value.replace(/'/g, "'\"'\"'");
@@ -9881,12 +9868,12 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                     [
                       "this-pc",
                       "PC RTX 5060",
-                      "Komputer yang dipakai sekarang",
+                      "PC RTX bersama untuk seluruh pengguna",
                     ],
                     [
                       "own-device",
                       "Device sendiri",
-                      "Laptop atau workstation lain",
+                      "Hanya tampil untuk akun pemilik device",
                     ],
                     ["nas", "NAS", "Jalankan langsung di server"],
                     ["colab", "Google Colab", "Runtime cloud dengan opsi GPU"],
@@ -9964,9 +9951,9 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
               <article>
                 <b>PC RTX 5060</b>
                 <p>
-                  Gunakan GPU/CPU komputer yang sedang membuka Salnova. Unduh
-                  setup di Training setup center, jalankan, dan biarkan terminal
-                  terbuka selama training.
+                  PC bersama: semua pengguna dapat memilihnya selama worker
+                  online. Pemilik PC perlu menyalakan worker dan membiarkannya
+                  aktif selama training.
                 </p>
               </article>
               <article>
@@ -9974,7 +9961,8 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                 <p>
                   Hubungkan laptop atau workstation Windows/Linux lain ke NAS.
                   Script memasang environment terisolasi dan memilih GPU NVIDIA
-                  jika kompatibel, dengan fallback CPU.
+                  jika kompatibel, dengan fallback CPU. Device ini hanya tampil
+                  dan dapat dipilih oleh akun yang mendaftarkannya.
                 </p>
               </article>
               <article>
@@ -10176,14 +10164,6 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                   Setup Windows/Linux untuk seluruh lokasi training.
                 </small>
               </div>
-              <span className="worker-downloads">
-                <button
-                  className="secondary"
-                  onClick={() => void createWorker("own-device")}
-                >
-                  <Plus /> Add worker
-                </button>
-              </span>
             </header>
             <p className="muted">
               Setiap tombol worker membuat token sekali pakai dan langsung
@@ -10280,122 +10260,6 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                 </span>
               </article>
             </div>
-            {workerToken && (
-              <div className="worker-token">
-                <b>Hubungkan worker training</b>
-                <small>
-                  Untuk worker baru, unduh setup otomatis di bawah. Script akan
-                  membuat virtual environment, memasang dependensi, lalu
-                  menjalankan worker. Token hanya ditampilkan sekali.
-                </small>
-                <div className="worker-guide">
-                  <b>Setup worker langkah demi langkah</b>
-                  <ol>
-                    <li>
-                      Buka web dari alamat LAN server, misalnya{" "}
-                      <code>{workerServer}</code>, bukan localhost.
-                    </li>
-                    <li>
-                      Download setup sesuai sistem operasi. Script memeriksa
-                      Python, CPU/GPU, ruang disk, CUDA, dan seluruh dependency.
-                      Komponen yang belum tersedia akan dipasang otomatis. Jika
-                      CUDA tidak didukung, setup tetap selesai memakai CPU.
-                      <span className="worker-downloads">
-                        <button onClick={() => downloadWorkerSetup()}>
-                          <Download /> Windows (.ps1)
-                        </button>
-                        <button onClick={() => downloadUnixWorkerSetup()}>
-                          <Download /> Linux / macOS (.sh)
-                        </button>
-                      </span>
-                    </li>
-                    <li>
-                      Jalankan file di laptop target sesuai sistem operasi:
-                      <div className="worker-platforms">
-                        <div className="worker-platform">
-                          <b>Windows (PowerShell)</b>
-                          <small>1. Masuk ke folder Downloads:</small>
-                          <code className="worker-command">
-                            cd "$env:USERPROFILE\Downloads"
-                          </code>
-                          <small>2. Buka blokir file hasil download:</small>
-                          <code className="worker-command">
-                            Unblock-File '.\salnova-own-device-setup.ps1'
-                          </code>
-                          <small>3. Jalankan setup:</small>
-                          <code className="worker-command">
-                            powershell.exe -NoProfile -ExecutionPolicy Bypass
-                            -File '.\salnova-own-device-setup.ps1'
-                          </code>
-                          <small>
-                            Jika nama file memiliki akhiran, misalnya{" "}
-                            <code>(2)</code>, gunakan nama tersebut pada kedua
-                            perintah file.
-                          </small>
-                        </div>
-                        <div className="worker-platform">
-                          <b>Linux / macOS (Terminal)</b>
-                          <small>1. Masuk ke folder Downloads:</small>
-                          <code className="worker-command">cd ~/Downloads</code>
-                          <small>2. Berikan izin eksekusi:</small>
-                          <code className="worker-command">
-                            chmod +x salnova-own-device-setup.sh
-                          </code>
-                          <small>3. Jalankan setup:</small>
-                          <code className="worker-command">
-                            ./salnova-own-device-setup.sh
-                          </code>
-                        </div>
-                      </div>
-                    </li>
-                    <li>
-                      Tunggu status worker berubah menjadi <b>online</b>, lalu
-                      pilih lokasi training dan klik <b>Start training</b>.
-                    </li>
-                  </ol>
-                  <small>
-                    Jangan tutup terminal worker selama training. Untuk cek
-                    jaringan Windows gunakan{" "}
-                    <code>Test-NetConnection SERVER -Port 5173</code>; Linux dan
-                    macOS dapat memakai <code>curl SERVER</code>.
-                  </small>
-                </div>
-                <details className="worker-manual">
-                  <summary>Advanced: jalankan command manual</summary>
-                  <small>
-                    Gunakan bagian ini hanya jika ingin menjalankan worker
-                    secara manual. Pastikan terminal sudah berada di folder
-                    <code>VisionFlowWorker</code>.
-                  </small>
-                  <div className="worker-platforms">
-                    <div className="worker-platform">
-                      <b>Windows (PowerShell)</b>
-                      <code>{workerCommand}</code>
-                      <button
-                        onClick={() => {
-                          void navigator.clipboard.writeText(workerCommand);
-                          notify("Perintah Windows disalin");
-                        }}
-                      >
-                        <Copy /> Copy Windows command
-                      </button>
-                    </div>
-                    <div className="worker-platform">
-                      <b>Linux / macOS (Terminal)</b>
-                      <code>{workerUnixCommand}</code>
-                      <button
-                        onClick={() => {
-                          void navigator.clipboard.writeText(workerUnixCommand);
-                          notify("Perintah Linux/macOS disalin");
-                        }}
-                      >
-                        <Copy /> Copy Linux/macOS command
-                      </button>
-                    </div>
-                  </div>
-                </details>
-              </div>
-            )}
             {workers
               .filter((worker) => !worker.revoked)
               .map((worker) => (
@@ -10416,25 +10280,27 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                         "Not connected yet"}
                     </small>
                   </span>
-                  <button
-                    title="Revoke worker"
-                    onClick={async () => {
-                      if (!confirm(`Cabut akses ${worker.name}?`)) return;
-                      try {
-                        await api.revokeTrainingWorker(worker.id);
-                        setWorkers(await api.trainingWorkers());
-                        if (workerId === worker.id) setWorkerId("");
-                      } catch (error) {
-                        notify(
-                          error instanceof Error
-                            ? error.message
-                            : "Gagal mencabut worker",
-                        );
-                      }
-                    }}
-                  >
-                    <Trash2 />
-                  </button>
+                  {worker.manageable && (
+                    <button
+                      title="Revoke worker"
+                      onClick={async () => {
+                        if (!confirm(`Cabut akses ${worker.name}?`)) return;
+                        try {
+                          await api.revokeTrainingWorker(worker.id);
+                          setWorkers(await api.trainingWorkers());
+                          if (workerId === worker.id) setWorkerId("");
+                        } catch (error) {
+                          notify(
+                            error instanceof Error
+                              ? error.message
+                              : "Gagal mencabut worker",
+                          );
+                        }
+                      }}
+                    >
+                      <Trash2 />
+                    </button>
+                  )}
                 </div>
               ))}
             {!workers.some((worker) => !worker.revoked) && (

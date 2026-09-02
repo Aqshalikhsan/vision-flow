@@ -258,6 +258,7 @@ export type TrainingWorker = {
     provider?: "local" | "google-colab" | "cloud-vm";
   };
   status: "online" | "busy" | "offline" | "revoked";
+  manageable: boolean;
   currentModelId?: string;
   lastSeen?: string;
   createdAt: string;
