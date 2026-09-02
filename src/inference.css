@@ -6006,6 +6006,9 @@
   background: linear-gradient(135deg, #8f203c, #e85b3d 56%, #ffb24c);
   box-shadow: 0 0 22px #f363488c;
 }
+.auth-card > .brand-mark {
+  display: none;
+}
 .auth-card h1,
 .auth-card label {
   color: #fff8ed;
@@ -6031,9 +6034,56 @@
 .otp-delivery small {
   color: #ffb178 !important;
 }
+.auth-card > .primary {
+  color: #160d25 !important;
+  background: #ffb36b !important;
+  border-color: #ffd8a9 !important;
+  font-weight: 850;
+}
+.auth-switch button {
+  color: #ffca8a !important;
+}
+.auth-back:hover,
+.auth-switch button:hover {
+  color: #ffe0b8 !important;
+}
 .auth-error {
   color: #ffd7d6 !important;
   background: #7e223747;
+}
+
+/* Keep inference output and deployment copy distinct from the dark canvas. */
+.deploy-page .panel,
+.deploy-page .preview,
+.deploy-page .inference-viewer {
+  background-color: #0d0a18;
+  border-color: #9d7cff55;
+  color: #f7f0ff;
+}
+.deploy-page .inference-viewer {
+  background: #05040b;
+  box-shadow: inset 0 0 0 1px #ffffff12, 0 14px 36px #0008;
+}
+.deploy-page .inference-viewer .inference-canvas > img {
+  box-shadow: 0 0 0 2px #ffb36b66, 0 10px 30px #000b;
+}
+.deploy-page .play-tabs button {
+  color: #d8cde8 !important;
+}
+.deploy-page .play-tabs button.active {
+  color: #fff4de !important;
+  background: #633f9d !important;
+}
+.deploy-page :is(h1, h2, h3, h4, b, label, .panel-head p, .deployment-summary span) {
+  color: #f8f1ff;
+}
+.deploy-page :is(p, small, .inference-viewer-hint, .test-drop span, .threshold span, .threshold > small, .api > p, .deployment-security > .panel-head p, .deployment-summary small, .key-list small, .key-list em) {
+  color: #cfc1dc !important;
+}
+.deploy-page :is(.endpoint, .code pre, .secure-endpoint code, .threshold, .deploy-note, .revealed-key, .secure-endpoint, .deployment-summary, .key-list > div) {
+  color: #f3e9ff !important;
+  background: #171124 !important;
+  border-color: #a889e755 !important;
 }
 
 /* Prevent late feature styles from reintroducing white screens or low contrast. */
