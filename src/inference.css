@@ -8298,7 +8298,7 @@ main :is(article, section, aside, .panel, .card, .modal),
   position: relative;
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(340px, 420px) minmax(430px, 610px);
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
   width: min(1100px, calc(100vw - 48px));
   min-height: min(650px, calc(100vh - 48px));
   overflow: hidden;
@@ -8470,16 +8470,23 @@ main :is(article, section, aside, .panel, .card, .modal),
 }
 .inference-preview {
   position: relative;
-  width: min(100%, 450px);
-  height: 235px;
+  width: min(100%, 520px);
+  height: 250px;
   overflow: hidden;
-  margin-top: 8px;
+  margin: 8px 0 0;
   border: 1px solid #ffffff28;
   border-radius: 16px;
   background: #0a0c19;
   box-shadow:
     0 22px 40px #05020b70,
     inset 0 1px #ffffff14;
+}
+.inference-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #090711;
 }
 .detection-preview {
   background: linear-gradient(#57698c 0 53%, #303847 53% 100%);

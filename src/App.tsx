@@ -622,7 +622,7 @@ function AuthGate({
   const [activeSlide, setActiveSlide] = useState(0);
   useEffect(() => {
     const timer = window.setInterval(() => {
-      setActiveSlide((current) => (current + 1) % 3);
+      setActiveSlide((current) => (current + 1) % 4);
     }, 5000);
     return () => window.clearInterval(timer);
   }, []);
@@ -879,29 +879,35 @@ function AuthGate({
                 Bounding box, class, dan confidence tampil langsung pada hasil
                 inference model Anda.
               </p>
-              <div
-                className="inference-preview detection-preview"
-                aria-hidden="true"
-              >
-                <div className="preview-sky" />
-                <div className="preview-floor" />
-                <span className="det-object det-person">
-                  <b>person</b>
-                  <em>96%</em>
-                </span>
-                <span className="det-object det-helmet">
-                  <b>helmet</b>
-                  <em>98%</em>
-                </span>
-                <span className="det-object det-vehicle">
-                  <b>forklift</b>
-                  <em>93%</em>
-                </span>
-              </div>
+              <figure className="inference-preview detection-preview">
+                <img
+                  src="/assets/login-object-detection.png"
+                  alt="Hasil inference object detection dengan bounding box pada kuda dan manusia"
+                />
+              </figure>
             </section>
             <section
-              className={`auth-slide segment ${activeSlide === 2 ? "active" : ""}`}
+              className={`auth-slide keypoint ${activeSlide === 2 ? "active" : ""}`}
               aria-hidden={activeSlide !== 2}
+            >
+              <span className="slide-kicker">
+                KEYPOINT DETECTION · POSE ESTIMATION
+              </span>
+              <h2>Pahami pose dari titik-titik penting.</h2>
+              <p>
+                Keypoint detection mengenali sendi dan struktur pose untuk
+                analisis gerakan maupun interaksi manusia.
+              </p>
+              <figure className="inference-preview keypoint-preview">
+                <img
+                  src="/assets/login-keypoint.png"
+                  alt="Hasil inference keypoint detection pada dua orang"
+                />
+              </figure>
+            </section>
+            <section
+              className={`auth-slide segment ${activeSlide === 3 ? "active" : ""}`}
+              aria-hidden={activeSlide !== 3}
             >
               <span className="slide-kicker">
                 SEGMENTATION · PIXEL-LEVEL RESULT
@@ -911,16 +917,12 @@ function AuthGate({
                 Segmentasi membantu model membedakan bentuk dan batas setiap
                 objek secara presisi.
               </p>
-              <div
-                className="inference-preview segment-preview"
-                aria-hidden="true"
-              >
-                <div className="segment-road" />
-                <div className="segment-mask mask-a" />
-                <div className="segment-mask mask-b" />
-                <span className="segment-tag tag-a">road · 99%</span>
-                <span className="segment-tag tag-b">vehicle · 97%</span>
-              </div>
+              <figure className="inference-preview segment-preview">
+                <img
+                  src="/assets/login-segmentation.png"
+                  alt="Hasil inference segmentation berupa mask pada jerapah"
+                />
+              </figure>
             </section>
           </div>
           <div
@@ -928,19 +930,22 @@ function AuthGate({
             role="tablist"
             aria-label="Slide informasi Salnova"
           >
-            {["Tentang Salnova", "Object detection", "Segmentation"].map(
-              (label, index) => (
-                <button
-                  key={label}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeSlide === index}
-                  aria-label={label}
-                  className={activeSlide === index ? "active" : ""}
-                  onClick={() => setActiveSlide(index)}
-                />
-              ),
-            )}
+            {[
+              "Tentang Salnova",
+              "Object detection",
+              "Keypoint detection",
+              "Segmentation",
+            ].map((label, index) => (
+              <button
+                key={label}
+                type="button"
+                role="tab"
+                aria-selected={activeSlide === index}
+                aria-label={label}
+                className={activeSlide === index ? "active" : ""}
+                onClick={() => setActiveSlide(index)}
+              />
+            ))}
           </div>
         </aside>
       </div>
