@@ -8136,31 +8136,31 @@ main :is(article, section, aside, .panel, .card, .modal),
 }
 .auth-card .brand-mark,
 .brandmark {
-  background: #ff6a3d !important;
-  border: 2px solid #fff3df;
+  background: #0b0b10 !important;
+  border: 2px solid #ffffff;
   box-shadow:
-    0 0 0 1px #ff6a3d,
-    0 5px 16px #ff6a3d66;
+    0 0 0 1px #ffffff,
+    0 5px 16px #00000088;
 }
 .auth-card .brand-mark .supernova-core,
 .brandmark .supernova-core {
   width: 9px;
   height: 9px;
-  background: #fff8df;
+  background: #ffffff;
   box-shadow: none;
 }
 .auth-card .brand-mark .supernova-flare,
 .brandmark .supernova-flare {
   width: 22px;
   height: 2px;
-  background: #fff8df;
+  background: #ffffff;
   filter: none;
 }
 .auth-card .brand-mark .supernova-ring,
 .brandmark .supernova-ring {
   width: 19px;
   height: 9px;
-  border: 1px solid #fff8df;
+  border: 1px solid #ffffff;
   box-shadow: none;
 }
 @media (prefers-reduced-motion: reduce) {
