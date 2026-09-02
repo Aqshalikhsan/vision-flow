@@ -619,6 +619,13 @@ function AuthGate({
   const [devCode, setDevCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [activeSlide, setActiveSlide] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveSlide((current) => (current + 1) % 3);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
@@ -669,166 +676,274 @@ function AuthGate({
         <div className="auth-supernova-stars" />
         <SupernovaMark className="auth-supernova-mark" />
       </div>
-      <form className="auth-card" onSubmit={submit}>
-        <i className="auth-led-edge edge-top" aria-hidden="true" />
-        <i className="auth-led-edge edge-right" aria-hidden="true" />
-        <i className="auth-led-edge edge-bottom" aria-hidden="true" />
-        <i className="auth-led-edge edge-left" aria-hidden="true" />
-        <span className="brand-mark">
-          <SupernovaMark />
-        </span>
-        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
-        <h1>
-          {authMode === "signup" ? "Buat akun baru" : "Selamat datang kembali"}
-        </h1>
-        <p>
-          {authMode === "signup"
-            ? "Daftarkan username, email, dan password untuk menggunakan Salnova."
-            : "Sign In memakai akun yang sudah pernah didaftarkan."}
-        </p>
-        {authMode === "signup" && (
-          <label>
-            Username akun
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              minLength={2}
-              maxLength={80}
-              required
-              autoFocus
-            />
-          </label>
-        )}
-        {false && (
-          <div className="auth-methods">
-            <button
-              type="button"
-              className={mode === "otp" ? "active" : ""}
-              onClick={() => {
-                setMode("otp");
-                setError("");
-              }}
-            >
-              Gmail OTP
-            </button>
-            <button
-              type="button"
-              className={mode === "password" ? "active" : ""}
-              onClick={() => {
-                setMode("password");
-                setError("");
-              }}
-            >
-              Password
-            </button>
-          </div>
-        )}
-        <label>
-          Email
-          <input
-            type="email"
-            value={email}
-            disabled={mode === "otp" && otpSent}
-            placeholder="nama@example.com"
-            onChange={(event) => setEmail(event.target.value)}
-            required
-          />
-        </label>
-        {setup && setupStep === "profile" ? (
-          <label>
-            Password akun
-            <input
-              type="password"
-              minLength={8}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete={
-                authMode === "signup" ? "new-password" : "current-password"
-              }
-              required
-              autoFocus
-            />
-          </label>
-        ) : mode === "otp" && otpSent ? (
-          <>
+      <div className="auth-layout">
+        <form className="auth-card" onSubmit={submit}>
+          <i className="auth-led-edge edge-top" aria-hidden="true" />
+          <i className="auth-led-edge edge-right" aria-hidden="true" />
+          <i className="auth-led-edge edge-bottom" aria-hidden="true" />
+          <i className="auth-led-edge edge-left" aria-hidden="true" />
+          <span className="brand-mark">
+            <SupernovaMark />
+          </span>
+          <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
+          <h1>
+            {authMode === "signup"
+              ? "Buat akun baru"
+              : "Selamat datang kembali"}
+          </h1>
+          <p>
+            {authMode === "signup"
+              ? "Daftarkan username, email, dan password untuk menggunakan Salnova."
+              : "Sign In memakai akun yang sudah pernah didaftarkan."}
+          </p>
+          {authMode === "signup" && (
             <label>
-              Kode OTP 6 digit
+              Username akun
               <input
-                className="otp-input"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                value={code}
-                placeholder="000000"
-                onChange={(event) =>
-                  setCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                minLength={2}
+                maxLength={80}
+                required
+                autoFocus
+              />
+            </label>
+          )}
+          {false && (
+            <div className="auth-methods">
+              <button
+                type="button"
+                className={mode === "otp" ? "active" : ""}
+                onClick={() => {
+                  setMode("otp");
+                  setError("");
+                }}
+              >
+                Gmail OTP
+              </button>
+              <button
+                type="button"
+                className={mode === "password" ? "active" : ""}
+                onClick={() => {
+                  setMode("password");
+                  setError("");
+                }}
+              >
+                Password
+              </button>
+            </div>
+          )}
+          <label>
+            Email
+            <input
+              type="email"
+              value={email}
+              disabled={mode === "otp" && otpSent}
+              placeholder="nama@example.com"
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </label>
+          {setup && setupStep === "profile" ? (
+            <label>
+              Password akun
+              <input
+                type="password"
+                minLength={8}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete={
+                  authMode === "signup" ? "new-password" : "current-password"
                 }
                 required
                 autoFocus
               />
             </label>
-            <p className="otp-delivery">
-              Kode dikirim ke <b>{email}</b> dan berlaku selama 10 menit.
-              {devCode && <small>Development OTP: {devCode}</small>}
+          ) : mode === "otp" && otpSent ? (
+            <>
+              <label>
+                Kode OTP 6 digit
+                <input
+                  className="otp-input"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={code}
+                  placeholder="000000"
+                  onChange={(event) =>
+                    setCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  required
+                  autoFocus
+                />
+              </label>
+              <p className="otp-delivery">
+                Kode dikirim ke <b>{email}</b> dan berlaku selama 10 menit.
+                {devCode && <small>Development OTP: {devCode}</small>}
+              </p>
+              <button
+                type="button"
+                className="auth-back"
+                onClick={() => {
+                  setOtpSent(false);
+                  setCode("");
+                  setDevCode("");
+                }}
+              >
+                Ganti email atau kirim ulang
+              </button>
+            </>
+          ) : mode === "password" ? (
+            <label>
+              Password
+              <input
+                type="password"
+                minLength={8}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+            </label>
+          ) : (
+            <p className="otp-hint">
+              Kami akan mengirim kode sekali pakai melalui Gmail. Tidak perlu
+              mengingat password.
             </p>
-            <button
-              type="button"
-              className="auth-back"
-              onClick={() => {
-                setOtpSent(false);
-                setCode("");
-                setDevCode("");
-              }}
+          )}
+          {error && <p className="auth-error">{error}</p>}
+          <button className="primary" disabled={busy}>
+            {busy
+              ? "Mohon tunggu…"
+              : authMode === "signup"
+                ? "Daftar & masuk"
+                : "Sign In"}
+          </button>
+          {(registrationAllowed || authMode === "signup") && (
+            <p className="auth-switch">
+              {authMode === "signin"
+                ? "Belum memiliki akun?"
+                : "Sudah memiliki akun?"}{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode((current) =>
+                    current === "signin" ? "signup" : "signin",
+                  );
+                  setError("");
+                  setPassword("");
+                }}
+              >
+                {authMode === "signin"
+                  ? "Buat akun baru"
+                  : "Kembali ke Sign In"}
+              </button>
+            </p>
+          )}
+        </form>
+        <aside className="auth-showcase" aria-label="Tentang Salnova">
+          <div className="auth-showcase-topline">
+            <span className="auth-showcase-pulse" />
+            <span>COMPUTER VISION WORKSPACE</span>
+          </div>
+          <div className="auth-slides">
+            <section
+              className={`auth-slide intro ${activeSlide === 0 ? "active" : ""}`}
+              aria-hidden={activeSlide !== 0}
             >
-              Ganti email atau kirim ulang
-            </button>
-          </>
-        ) : mode === "password" ? (
-          <label>
-            Password
-            <input
-              type="password"
-              minLength={8}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-          </label>
-        ) : (
-          <p className="otp-hint">
-            Kami akan mengirim kode sekali pakai melalui Gmail. Tidak perlu
-            mengingat password.
-          </p>
-        )}
-        {error && <p className="auth-error">{error}</p>}
-        <button className="primary" disabled={busy}>
-          {busy
-            ? "Mohon tunggu…"
-            : authMode === "signup"
-              ? "Daftar & masuk"
-              : "Sign In"}
-        </button>
-        {(registrationAllowed || authMode === "signup") && (
-          <p className="auth-switch">
-            {authMode === "signin"
-              ? "Belum memiliki akun?"
-              : "Sudah memiliki akun?"}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                setAuthMode((current) =>
-                  current === "signin" ? "signup" : "signin",
-                );
-                setError("");
-                setPassword("");
-              }}
+              <span className="slide-kicker">
+                SATU WORKSPACE, DARI DATA KE PRODUKSI
+              </span>
+              <h2>Bangun visi komputer yang siap dipakai.</h2>
+              <p>
+                Salnova membantu tim mengelola dataset, anotasi, training,
+                evaluasi, dan inference dalam satu alur kerja yang rapi.
+              </p>
+              <div className="slide-flow" aria-hidden="true">
+                <span>Dataset</span>
+                <i />
+                <span>Train</span>
+                <i />
+                <span>Deploy</span>
+              </div>
+            </section>
+            <section
+              className={`auth-slide detection ${activeSlide === 1 ? "active" : ""}`}
+              aria-hidden={activeSlide !== 1}
             >
-              {authMode === "signin" ? "Buat akun baru" : "Kembali ke Sign In"}
-            </button>
-          </p>
-        )}
-      </form>
+              <span className="slide-kicker">
+                OBJECT DETECTION · LIVE INFERENCE
+              </span>
+              <h2>Temukan objek, hitung, lalu ambil keputusan.</h2>
+              <p>
+                Bounding box, class, dan confidence tampil langsung pada hasil
+                inference model Anda.
+              </p>
+              <div
+                className="inference-preview detection-preview"
+                aria-hidden="true"
+              >
+                <div className="preview-sky" />
+                <div className="preview-floor" />
+                <span className="det-object det-person">
+                  <b>person</b>
+                  <em>96%</em>
+                </span>
+                <span className="det-object det-helmet">
+                  <b>helmet</b>
+                  <em>98%</em>
+                </span>
+                <span className="det-object det-vehicle">
+                  <b>forklift</b>
+                  <em>93%</em>
+                </span>
+              </div>
+            </section>
+            <section
+              className={`auth-slide segment ${activeSlide === 2 ? "active" : ""}`}
+              aria-hidden={activeSlide !== 2}
+            >
+              <span className="slide-kicker">
+                SEGMENTATION · PIXEL-LEVEL RESULT
+              </span>
+              <h2>Lihat area penting hingga tingkat piksel.</h2>
+              <p>
+                Segmentasi membantu model membedakan bentuk dan batas setiap
+                objek secara presisi.
+              </p>
+              <div
+                className="inference-preview segment-preview"
+                aria-hidden="true"
+              >
+                <div className="segment-road" />
+                <div className="segment-mask mask-a" />
+                <div className="segment-mask mask-b" />
+                <span className="segment-tag tag-a">road · 99%</span>
+                <span className="segment-tag tag-b">vehicle · 97%</span>
+              </div>
+            </section>
+          </div>
+          <div
+            className="auth-slide-controls"
+            role="tablist"
+            aria-label="Slide informasi Salnova"
+          >
+            {["Tentang Salnova", "Object detection", "Segmentation"].map(
+              (label, index) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSlide === index}
+                  aria-label={label}
+                  className={activeSlide === index ? "active" : ""}
+                  onClick={() => setActiveSlide(index)}
+                />
+              ),
+            )}
+          </div>
+        </aside>
+      </div>
     </main>
   );
 }
