@@ -4632,7 +4632,11 @@ function VideoUploadWizard({
             <button
               className="secondary"
               disabled={progress !== null}
-              onClick={() => setWizard({ ...wizard, step: "settings" })}
+              onClick={() => {
+                setPlayingSamplePreview(false);
+                seek(0);
+                setWizard({ ...wizard, step: "settings" });
+              }}
             >
               Back
             </button>
