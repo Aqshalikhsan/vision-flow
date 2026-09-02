@@ -8004,7 +8004,7 @@ main :is(article, section, aside, .panel, .card, .modal),
       #05040b36 72%,
       #05040b14
     ),
-    url("/assets/supernova-login.png") center / cover no-repeat;
+    url("/assets/supernova-login.gif") center / cover no-repeat;
   animation: login-nebula-drift 24s ease-in-out infinite alternate;
   transform-origin: center;
 }
@@ -8022,6 +8022,13 @@ main :is(article, section, aside, .panel, .card, .modal),
   );
 }
 .auth-page > .auth-supernova {
+  display: block;
+  z-index: -1;
+}
+.auth-page > .auth-supernova .auth-supernova-stars {
+  opacity: 0.9;
+}
+.auth-page > .auth-supernova :is(.auth-supernova-cloud, .auth-supernova-mark) {
   display: none;
 }
 @keyframes login-nebula-drift {
