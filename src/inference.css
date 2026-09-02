@@ -8163,6 +8163,28 @@ main :is(article, section, aside, .panel, .card, .modal),
   border: 1px solid #ffffff;
   box-shadow: none;
 }
+.content .dataset-item > div > span.annotated {
+  min-width: 62px;
+  padding: 5px 8px;
+  border: 1px solid #54e0b0;
+  border-radius: 6px;
+  color: #e3fff4 !important;
+  background: #123f35 !important;
+  box-shadow: 0 2px 8px #0009;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.content .dataset-stats > span:nth-child(2) {
+  border-color: #54e0b066;
+  background: #123f3544;
+}
+.content .dataset-stats > span:nth-child(2) small {
+  color: #bfffe8 !important;
+  font-size: 10px;
+  font-weight: 750;
+}
 @media (prefers-reduced-motion: reduce) {
   .auth-page::before {
     animation: none;
