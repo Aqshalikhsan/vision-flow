@@ -6071,6 +6071,22 @@
     0 0 0 2px #ffb36b66,
     0 10px 30px #000b;
 }
+.deploy-page .inference-viewer .inference-box span,
+.deploy-page .inference-viewer .inference-mask span {
+  color: #fff8e8 !important;
+  background: #100b1def !important;
+  border: 1px solid #ffc078 !important;
+  box-shadow:
+    0 2px 8px #000b,
+    0 0 0 1px #241633;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 2px #000;
+}
+.deploy-page .inference-viewer .inference-mask span {
+  border-color: #d2b5ff !important;
+}
 .deploy-page .play-tabs button {
   color: #d8cde8 !important;
 }
