@@ -15,7 +15,7 @@
     sans-serif;
   --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
   color: #1f2937;
-  background: #f7f7fb;
+  background: #171124;
   font-synthesis: none;
   --purple: #6d28d9;
   --ink: #1f2937;
@@ -182,7 +182,7 @@ button {
 .meter,
 .big-meter {
   height: 5px;
-  background: #e8e6ef;
+  background: #171124;
   border-radius: 20px;
   overflow: hidden;
 }
@@ -252,7 +252,7 @@ main {
   border-radius: 8px;
 }
 .ghost:hover {
-  background: #f2f0f8;
+  background: #171124;
 }
 .content {
   padding: 34px 36px 70px;
@@ -356,19 +356,19 @@ main {
   place-items: center;
 }
 .stat-icon.purple {
-  background: #eee9ff;
+  background: #171124;
   color: #6749e2;
 }
 .stat-icon.blue {
-  background: #e6f2ff;
+  background: #171124;
   color: #2781d5;
 }
 .stat-icon.green {
-  background: #e3f8f2;
+  background: #171124;
   color: #159979;
 }
 .stat-icon.orange {
-  background: #fff0de;
+  background: #171124;
   color: #d9802e;
 }
 .stat b,
@@ -460,7 +460,7 @@ main {
 }
 .project-cover span {
   font-size: 9px;
-  background: #ffffff24;
+  background: #17112424;
   padding: 5px 7px;
   border-radius: 5px;
 }
@@ -517,7 +517,7 @@ main {
 .new-card {
   min-height: 236px;
   border: 1.5px dashed #d6d1e3;
-  background: #fbfaff;
+  background: #171124;
   border-radius: 12px;
   display: flex;
   flex-direction: column;
@@ -529,7 +529,7 @@ main {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: #ece7ff;
+  background: #171124;
   color: #6a4be3;
   display: grid;
   place-items: center;
@@ -572,7 +572,7 @@ main {
 .project-title .badge {
   font-size: 9px;
   color: #6953ce;
-  background: #ebe7ff;
+  background: #171124;
   border-radius: 5px;
   padding: 5px 8px;
 }
@@ -627,7 +627,7 @@ main {
   place-items: center;
 }
 .step span.done {
-  background: #e6f7f1;
+  background: #171124;
   color: #118b6c;
   border-color: #c5eee1;
 }
@@ -662,7 +662,7 @@ main {
 .empty-drop,
 .test-drop {
   border: 1.5px dashed #d5d0e2;
-  background: #faf9fd;
+  background: #171124;
   border-radius: 10px;
   min-height: 160px;
   margin-top: 15px;
@@ -1044,7 +1044,7 @@ main {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #eee9ff;
+  background: #171124;
   color: #6648df;
   display: grid;
   place-items: center;
@@ -1098,7 +1098,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #faf9fd;
+  background: #171124;
   border: 1px solid #ece9f1;
   padding: 11px;
   border-radius: 8px;
@@ -1145,7 +1145,7 @@ main {
   width: 30px;
   height: 30px;
   border-radius: 7px;
-  background: #eee9ff;
+  background: #171124;
   color: #684ae0;
   display: grid;
   place-items: center;
@@ -1188,7 +1188,7 @@ main {
 }
 .model-option.active {
   border: 1.5px solid #7355e5;
-  background: #fbfaff;
+  background: #171124;
 }
 .model-option > span {
   width: 38px;
@@ -1201,15 +1201,15 @@ main {
   width: 19px;
 }
 .model-option > span.purple {
-  background: #ece7ff;
+  background: #171124;
   color: #6848e1;
 }
 .model-option > span.blue {
-  background: #e4f2ff;
+  background: #171124;
   color: #307fc4;
 }
 .model-option > span.green {
-  background: #e3f7ef;
+  background: #171124;
   color: #219370;
 }
 .model-option div {
@@ -1231,7 +1231,7 @@ main {
   font-size: 7px;
   font-style: normal;
   color: #6649d9;
-  background: #ebe6ff;
+  background: #171124;
   padding: 4px;
   border-radius: 3px;
 }
@@ -1285,15 +1285,15 @@ main {
   place-items: center;
 }
 .run-head > span.ready {
-  background: #e2f7ef;
+  background: #171124;
   color: #168b6c;
 }
 .run-head > span.training {
-  background: #eee9ff;
+  background: #171124;
   color: #694be0;
 }
 .run-head > span.paused {
-  background: #fff7df;
+  background: #171124;
   color: #a66a00;
 }
 .run-head svg {
@@ -1331,13 +1331,13 @@ main {
   padding: 4px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #faf9fc;
+  background: #171124;
 }
 .metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   margin-top: 13px;
-  background: #faf9fc;
+  background: #171124;
   border-radius: 7px;
 }
 .metrics span {
@@ -1372,7 +1372,7 @@ main {
   display: flex;
   align-items: center;
   gap: 7px;
-  background: #e4f7ef;
+  background: #171124;
   color: #157c62;
   padding: 7px 10px;
   border-radius: 20px;
@@ -1475,7 +1475,7 @@ main {
 .endpoint {
   display: flex;
   align-items: center;
-  background: #f8f7fa;
+  background: #171124;
   border: 1px solid #e7e4eb;
   border-radius: 7px;
   padding: 8px;
@@ -1484,7 +1484,7 @@ main {
   margin: 15px 0;
 }
 .endpoint > span {
-  background: #e1f6ee;
+  background: #171124;
   color: #177a61;
   padding: 4px;
   border-radius: 3px;
@@ -1528,7 +1528,7 @@ main {
 .deploy-note {
   display: flex;
   gap: 9px;
-  background: #fff7e7;
+  background: #171124;
   color: #76551c;
   border: 1px solid #f1dfb9;
   border-radius: 7px;
@@ -1597,7 +1597,7 @@ main {
   padding: 8px;
 }
 .workflow-body aside > button:hover {
-  background: #f3f0fa;
+  background: #171124;
 }
 .workflow-body aside > button svg {
   width: 16px;
@@ -1605,7 +1605,7 @@ main {
 }
 .board {
   position: relative;
-  background-color: #f7f6fa;
+  background-color: #171124;
   background-image: radial-gradient(#cbc7d4 1px, transparent 1px);
   background-size: 20px 20px;
   overflow: hidden;
@@ -1639,7 +1639,7 @@ main {
 .wf-node > div span {
   width: 27px;
   height: 27px;
-  background: #eeeaff;
+  background: #171124;
   color: #6a4ce1;
   border-radius: 6px;
   display: grid;
@@ -1717,7 +1717,7 @@ main {
   grid-row: 1/3;
   width: 46px;
   height: 46px;
-  background: #ece7ff;
+  background: #171124;
   color: #684be0;
   border-radius: 11px;
   display: grid;
@@ -1970,7 +1970,7 @@ main {
   height: 32px;
   border-color: #ded8eb;
   color: #6749d8;
-  background: #f4f0ff;
+  background: #171124;
 }
 .classification-panel .classes-head > button:hover {
   border-color: #806ce2;
@@ -1997,7 +1997,7 @@ main {
 .classification-choice > button:first-child {
   height: 42px;
   border: 1px solid #e7e2ed;
-  background: #faf9fc;
+  background: #171124;
   border-radius: 9px;
   display: flex;
   align-items: center;
@@ -2011,7 +2011,7 @@ main {
 }
 .classification-choice > button:first-child:hover {
   border-color: #cfc5e8;
-  background: #f7f4fb;
+  background: #171124;
 }
 .classification-choice > button:first-child i {
   width: 12px;
@@ -2044,7 +2044,7 @@ main {
 }
 .classification-choice.selected > button:first-child {
   border-color: #8a71eb;
-  background: #f2efff;
+  background: #171124;
   color: #382b70;
   font-weight: 700;
 }
@@ -2076,7 +2076,7 @@ main {
 .classification-rename:hover {
   border-color: #cfc5e8;
   color: #6044cc;
-  background: #f7f4ff;
+  background: #171124;
 }
 .classification-rename svg {
   width: 14px;
@@ -2086,7 +2086,7 @@ main {
   padding: 14px;
   border-radius: 10px;
   border: 1px solid #e8e1f5;
-  background: #f7f4fc;
+  background: #171124;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -2100,7 +2100,7 @@ main {
   place-items: center;
   border-radius: 8px;
   color: #317b5c !important;
-  background: #e4f5ed;
+  background: #171124;
 }
 .classification-shortcut-icon svg {
   width: 14px;
@@ -2149,17 +2149,17 @@ main {
 .review-select.approved {
   color: #17845c;
   border-color: #a9dfc9;
-  background: #effbf6;
+  background: #171124;
 }
 .review-select.needs-fix {
   color: #b44444;
   border-color: #efbbbb;
-  background: #fff4f4;
+  background: #171124;
 }
 .review-select.pending {
   color: #8a6e2d;
   border-color: #ead9a9;
-  background: #fffbef;
+  background: #171124;
 }
 .deployment-security {
   margin-top: 18px;
@@ -2177,7 +2177,7 @@ main {
   padding: 12px;
   margin: 14px 0;
   border: 1px solid #bbaef4;
-  background: #f4f1ff;
+  background: #171124;
   border-radius: 10px;
 }
 .revealed-key b {
@@ -2267,7 +2267,7 @@ main {
 }
 .key-list button {
   border: 0;
-  background: #fff0f0;
+  background: #171124;
   color: #bc4848;
   padding: 6px 9px;
   border-radius: 7px;
@@ -2287,7 +2287,7 @@ main {
   padding: 10px 12px;
   border: 1px solid #ece7f2;
   border-radius: 9px;
-  background: #fbfaff;
+  background: #171124;
 }
 .metric-chart > div {
   display: flex;
@@ -2331,7 +2331,7 @@ main {
   font-size: 9px;
   text-decoration: none;
   color: #644bd0;
-  background: #f1edff;
+  background: #171124;
   border: 1px solid #ddd4ff;
   padding: 6px 8px;
   border-radius: 7px;
@@ -2358,7 +2358,7 @@ main {
   display: grid;
   place-items: center;
   border-radius: 9px;
-  background: #eee9ff;
+  background: #171124;
   color: #6047c9;
   font-size: 10px;
   font-weight: 800;
@@ -2384,7 +2384,7 @@ main {
 }
 .member-list .delete {
   border: 0;
-  background: #fff1f1;
+  background: #171124;
   color: #b94c4c;
   width: 30px;
   height: 30px;
@@ -2397,7 +2397,7 @@ main {
 /* Roboflow-aligned application shell. These tokens now live in the single
    :root at the top of this file so they cannot be defined twice. */
 body {
-  background: #f7f7f9;
+  background: #171124;
   color: var(--ink);
 }
 .sidebar {
@@ -2487,15 +2487,15 @@ body {
 }
 .backend-state.online {
   color: #13795b;
-  background: #e9f9f3;
+  background: #171124;
 }
 .backend-state.offline {
   color: #b43b45;
-  background: #fff0f1;
+  background: #171124;
 }
 .backend-state.checking {
   color: #746d7d;
-  background: #f2eff5;
+  background: #171124;
 }
 .global-search {
   height: 34px;
@@ -2504,7 +2504,7 @@ body {
   align-items: center;
   gap: 7px;
   border: 1px solid #e2dee8;
-  background: #faf9fc;
+  background: #171124;
   color: #716a7c;
   border-radius: 8px;
   padding: 0 8px;
@@ -2584,13 +2584,13 @@ body {
   color: #423b4d;
 }
 .command-group > button:hover {
-  background: #f4f1fb;
+  background: #171124;
 }
 .command-group > button > span {
   width: 34px;
   height: 34px;
   border-radius: 8px;
-  background: #eee9ff;
+  background: #171124;
   color: #6749d2;
   display: grid;
   place-items: center;
@@ -2662,7 +2662,7 @@ body {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  background: #eee9ff;
+  background: #171124;
   color: #6849db;
 }
 .help-modal > header > span svg {
@@ -2714,7 +2714,7 @@ body {
   gap: 8px;
   align-items: center;
   padding: 14px;
-  background: #f7f5fa;
+  background: #171124;
   border-radius: 10px;
 }
 .shortcut-list h3 {
@@ -2801,7 +2801,7 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  background: #f7f5fa;
+  background: #171124;
   border-radius: 8px;
   padding: 10px;
   margin: 12px 0;
@@ -2828,7 +2828,7 @@ body {
   text-align: left;
 }
 .profile-popover > button:last-child:hover {
-  background: #f4f1f8;
+  background: #171124;
 }
 .profile-popover > button:last-child svg {
   width: 15px;
@@ -2843,14 +2843,14 @@ body {
   font-weight: 400;
 }
 .modal input:disabled {
-  background: #f4f2f6;
+  background: #171124;
   color: #8c8494;
 }
 .class-row button {
   width: 24px;
   height: 24px;
   border: 0;
-  background: #fff0f1;
+  background: #171124;
   color: #b74550;
   border-radius: 6px;
   display: grid;
@@ -2879,7 +2879,7 @@ body {
 .dataset-toolbar .select-all.active {
   color: #6241d0;
   border-color: #bcaef0;
-  background: #f3efff;
+  background: #171124;
 }
 .dataset-toolbar .select-all svg {
   width: 13px;
@@ -2894,7 +2894,7 @@ body {
   margin: -3px 0 14px;
   padding: 10px 12px;
   border: 1px solid #d7cdf7;
-  background: #f7f4ff;
+  background: #171124;
   border-radius: 9px;
   box-shadow: 0 5px 18px #3b267314;
 }
@@ -2932,13 +2932,13 @@ body {
 .bulk-bar i {
   height: 20px;
   width: 1px;
-  background: #ddd5e7;
+  background: #171124;
   margin: 0 3px;
 }
 .bulk-bar .bulk-delete {
   margin-left: auto;
   color: #b33f49;
-  background: #fff4f4;
+  background: #171124;
   border-color: #f0c6c9;
   display: flex;
   align-items: center;
@@ -3235,7 +3235,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #fff3cf;
+  background: #171124;
   color: #7c5914;
 }
 .health-actions {
@@ -3416,7 +3416,7 @@ main {
     0 0 22px #aa72ff8c;
 }
 .workspace {
-  background: #ffffff0b;
+  background: #1711240b;
   border-color: #ffffff16;
   backdrop-filter: blur(12px);
 }
@@ -3429,7 +3429,7 @@ main {
 }
 .sidebar nav button:hover,
 .sidebar-bottom > button:hover {
-  background: #ffffff10;
+  background: #17112410;
 }
 
 .topbar {
@@ -3443,7 +3443,7 @@ main {
   color: #b9b1d2;
 }
 .ghost:hover {
-  background: #ffffff10;
+  background: #17112410;
   color: #fff;
 }
 .welcome {
@@ -3514,7 +3514,7 @@ select,
 input,
 textarea {
   color: #eeeaff;
-  background: #ffffff0a;
+  background: #1711240a;
   border-color: #ffffff20;
 }
 input::placeholder,
@@ -3540,7 +3540,7 @@ textarea::placeholder {
 }
 .meter,
 .big-meter {
-  background: #ffffff14;
+  background: #17112414;
 }
 .meter i,
 .big-meter i {
