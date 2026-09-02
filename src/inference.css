@@ -6062,10 +6062,14 @@
 }
 .deploy-page .inference-viewer {
   background: #05040b;
-  box-shadow: inset 0 0 0 1px #ffffff12, 0 14px 36px #0008;
+  box-shadow:
+    inset 0 0 0 1px #ffffff12,
+    0 14px 36px #0008;
 }
 .deploy-page .inference-viewer .inference-canvas > img {
-  box-shadow: 0 0 0 2px #ffb36b66, 0 10px 30px #000b;
+  box-shadow:
+    0 0 0 2px #ffb36b66,
+    0 10px 30px #000b;
 }
 .deploy-page .play-tabs button {
   color: #d8cde8 !important;
@@ -6074,13 +6078,38 @@
   color: #fff4de !important;
   background: #633f9d !important;
 }
-.deploy-page :is(h1, h2, h3, h4, b, label, .panel-head p, .deployment-summary span) {
+.deploy-page
+  :is(h1, h2, h3, h4, b, label, .panel-head p, .deployment-summary span) {
   color: #f8f1ff;
 }
-.deploy-page :is(p, small, .inference-viewer-hint, .test-drop span, .threshold span, .threshold > small, .api > p, .deployment-security > .panel-head p, .deployment-summary small, .key-list small, .key-list em) {
+.deploy-page
+  :is(
+    p,
+    small,
+    .inference-viewer-hint,
+    .test-drop span,
+    .threshold span,
+    .threshold > small,
+    .api > p,
+    .deployment-security > .panel-head p,
+    .deployment-summary small,
+    .key-list small,
+    .key-list em
+  ) {
   color: #cfc1dc !important;
 }
-.deploy-page :is(.endpoint, .code pre, .secure-endpoint code, .threshold, .deploy-note, .revealed-key, .secure-endpoint, .deployment-summary, .key-list > div) {
+.deploy-page
+  :is(
+    .endpoint,
+    .code pre,
+    .secure-endpoint code,
+    .threshold,
+    .deploy-note,
+    .revealed-key,
+    .secure-endpoint,
+    .deployment-summary,
+    .key-list > div
+  ) {
   color: #f3e9ff !important;
   background: #171124 !important;
   border-color: #a889e755 !important;
