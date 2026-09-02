@@ -4433,6 +4433,7 @@ function ProjectHome({
           close={closeVideoWizard}
           setWizard={setVideoWizard}
           seek={seekVideoPreview}
+          setPercent={setVideoPreviewPercent}
           setInterval={setVideoFrameInterval}
           extract={async () => {
             if (await upload([videoWizard.file])) closeVideoWizard();
@@ -4455,6 +4456,7 @@ function VideoUploadWizard({
   close,
   setWizard,
   seek,
+  setPercent,
   setInterval,
   extract,
 }: {
@@ -4475,6 +4477,7 @@ function VideoUploadWizard({
     } | null>
   >;
   seek: (percent: number) => void;
+  setPercent: (percent: number) => void;
   setInterval: (value: number) => void;
   extract: () => Promise<void>;
 }) {
@@ -4537,7 +4540,11 @@ function VideoUploadWizard({
             }}
             onTimeUpdate={(event) => {
               if (duration)
-                seek((event.currentTarget.currentTime / duration) * 100);
+                setPercent(
+                  Math.round(
+                    (event.currentTarget.currentTime / duration) * 100,
+                  ),
+                );
             }}
           />
           <span>{percent}% posisi video</span>
