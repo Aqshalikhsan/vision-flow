@@ -5895,6 +5895,8 @@
 
 .auth-page {
   position: relative;
+  margin-left: 0;
+  width: 100%;
   overflow: hidden;
   background:
     radial-gradient(ellipse 44% 52% at 78% 52%, #f15c3a4f, transparent 72%),
