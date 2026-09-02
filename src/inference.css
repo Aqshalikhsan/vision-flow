@@ -6002,6 +6002,34 @@
     inset 0 1px #ffe4c429;
   backdrop-filter: blur(18px);
 }
+.auth-card::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg 292deg,
+    #6ee7ff 312deg,
+    #ffffff 326deg,
+    #ff7ad9 338deg,
+    transparent 354deg 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: auth-led-orbit 3.8s linear infinite;
+  pointer-events: none;
+}
+@keyframes auth-led-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .auth-card .brand-mark {
   background: linear-gradient(135deg, #8f203c, #e85b3d 56%, #ffb24c);
   box-shadow: 0 0 22px #f363488c;
@@ -8092,16 +8120,9 @@ main :is(article, section, aside, .panel, .card, .modal),
   inset: -3%;
   z-index: -2;
   background:
-    linear-gradient(
-      90deg,
-      #05040bd9 0%,
-      #05040b9e 38%,
-      #05040b36 72%,
-      #05040b14
-    ),
-    url("/assets/supernova-login.gif?v=20260903") center / cover no-repeat;
-  animation: login-nebula-drift 24s ease-in-out infinite alternate;
-  transform-origin: center;
+    radial-gradient(ellipse 55% 70% at 78% 30%, #633b9e66, transparent 72%),
+    radial-gradient(ellipse 55% 65% at 18% 78%, #171b5e88, transparent 72%),
+    #05040b;
 }
 .auth-page::after {
   content: "";
@@ -8218,7 +8239,8 @@ main :is(article, section, aside, .panel, .card, .modal),
   background: #171126;
 }
 @media (prefers-reduced-motion: reduce) {
-  .auth-page::before {
+  .auth-page::before,
+  .auth-card::before {
     animation: none;
   }
 }
