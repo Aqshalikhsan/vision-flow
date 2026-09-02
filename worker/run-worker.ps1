@@ -76,6 +76,7 @@ function Find-WorkerPython {
     $roots = @()
     if ($env:SALNOVA_WORKER_HOME) { $roots += $env:SALNOVA_WORKER_HOME }
     $roots += (Get-RepoRoot)
+    $roots += (Join-Path $env:USERPROFILE "SalnovaWorker")
     $roots += (Join-Path (Get-RepoRoot) ".runtime/VisionFlowWorker")
     $roots += (Join-Path $env:LOCALAPPDATA "VisionFlowWorker")
 
@@ -102,6 +103,7 @@ function Find-WorkerPython {
 function Find-WorkerScript {
     $roots = @()
     if ($env:SALNOVA_WORKER_HOME) { $roots += $env:SALNOVA_WORKER_HOME }
+    $roots += (Join-Path $env:USERPROFILE "SalnovaWorker")
     $roots += (Join-Path (Get-RepoRoot) ".runtime/VisionFlowWorker")
     $roots += (Get-RepoRoot)
 

@@ -1377,6 +1377,26 @@
 .training-setup-grid .worker-downloads {
   align-self: end;
 }
+.lab-worker-admin {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #e1d8f2;
+  border-radius: 9px;
+  background: #faf8ff;
+}
+.lab-worker-admin summary {
+  cursor: pointer;
+  color: #5c43b4;
+  font-size: 11px;
+  font-weight: 650;
+}
+.lab-worker-admin p {
+  margin: 0;
+  color: #746d7e;
+  font-size: 11px;
+  line-height: 1.55;
+}
 .training-setup-grid button {
   display: inline-flex;
   align-items: center;

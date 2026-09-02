@@ -10616,8 +10616,8 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
               </div>
             </header>
             <p className="muted">
-              Setiap tombol worker membuat token sekali pakai dan langsung
-              mengunduh script yang sudah berisi alamat server ini.
+              Setup device sendiri membuat token sekali pakai dan mengunduh
+              script yang sudah berisi alamat server ini.
             </p>
             <details className="worker-setup-guide" open>
               <summary>
@@ -10683,6 +10683,31 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                   </li>
                   <li>Pilih PC RTX 50/60 Lab lalu Start training.</li>
                 </ol>
+                <details className="lab-worker-admin">
+                  <summary>Admin lab: daftarkan PC RTX sekali</summary>
+                  <p>
+                    Jalankan ini hanya dari PC RTX lab. Setup menyimpan token
+                    secara lokal dan membuat worker aktif otomatis setiap PC
+                    menyala. Semua user kemudian langsung memakai worker ini;
+                    mereka tidak perlu mengunduh apa pun.
+                  </p>
+                  <span className="worker-downloads">
+                    <button
+                      onClick={() =>
+                        void prepareWorkerSetup("this-pc", "windows")
+                      }
+                    >
+                      <Download /> Daftarkan PC RTX (Windows)
+                    </button>
+                    <button
+                      onClick={() =>
+                        void prepareWorkerSetup("this-pc", "linux")
+                      }
+                    >
+                      <Download /> Daftarkan PC RTX (Linux)
+                    </button>
+                  </span>
+                </details>
               </article>
               <article>
                 <b>2. Device sendiri</b>
