@@ -105,6 +105,18 @@ type Page =
   | "settings";
 type TrainingRoute = "this-pc" | "own-device" | "nas" | "colab";
 type SetupPlatform = "windows" | "linux";
+
+function SupernovaMark({ className = "" }: { className?: string }) {
+  return (
+    <span className={`supernova-mark ${className}`} aria-hidden="true">
+      <i className="supernova-core" />
+      <i className="supernova-flare flare-a" />
+      <i className="supernova-flare flare-b" />
+      <i className="supernova-ring" />
+    </span>
+  );
+}
+
 const PROJECT_PAGES: Page[] = [
   "project",
   "dataset",
@@ -651,9 +663,15 @@ function AuthGate({
   };
   return (
     <main className="auth-page">
+      <div className="auth-supernova" aria-hidden="true">
+        <div className="auth-supernova-cloud cloud-one" />
+        <div className="auth-supernova-cloud cloud-two" />
+        <div className="auth-supernova-stars" />
+        <SupernovaMark className="auth-supernova-mark" />
+      </div>
       <form className="auth-card" onSubmit={submit}>
         <span className="brand-mark">
-          <Boxes />
+          <SupernovaMark />
         </span>
         <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
         <h1>
@@ -1036,9 +1054,15 @@ function AccountResume({
 }) {
   return (
     <main className="auth-page">
+      <div className="auth-supernova" aria-hidden="true">
+        <div className="auth-supernova-cloud cloud-one" />
+        <div className="auth-supernova-cloud cloud-two" />
+        <div className="auth-supernova-stars" />
+        <SupernovaMark className="auth-supernova-mark" />
+      </div>
       <section className="auth-card account-resume-card">
         <span className="brand-mark">
-          <Boxes />
+          <SupernovaMark />
         </span>
         <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
         <h1>Lanjutkan sesi?</h1>
@@ -2657,7 +2681,7 @@ function Sidebar({
     <aside className="sidebar">
       <div className="brand">
         <span className="brandmark">
-          <Boxes />
+          <SupernovaMark />
         </span>
         <span>
           salnova <small>LOCAL</small>

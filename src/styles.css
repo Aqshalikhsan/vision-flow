@@ -3446,21 +3446,6 @@ main {
   background: #ffffff10;
   color: #fff;
 }
-.content {
-  position: relative;
-}
-.content::before {
-  content: "SUPERNOVA";
-  position: absolute;
-  top: 7px;
-  right: 36px;
-  color: #fff;
-  opacity: 0.035;
-  font-size: clamp(42px, 7vw, 96px);
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  pointer-events: none;
-}
 .welcome {
   border: 1px solid #f6c0dd42;
   background:

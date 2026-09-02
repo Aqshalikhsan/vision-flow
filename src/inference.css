@@ -5830,6 +5830,348 @@
 .auth-switch button:hover {
   color: #4d31ae;
 }
+
+/* Supernova palette — hot stellar core, ionised orange gas, and deep space. */
+.supernova-mark {
+  position: relative;
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  isolation: isolate;
+}
+.supernova-mark i {
+  position: absolute;
+  display: block;
+}
+.supernova-core {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff9dc;
+  box-shadow:
+    0 0 7px 3px #fff7c4,
+    0 0 19px 7px #ffbd4d,
+    0 0 34px 12px #ed513e99;
+}
+.supernova-flare {
+  width: 25px;
+  height: 2px;
+  border-radius: 50%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #ff8d4c,
+    #fff8cf,
+    #ff8d4c,
+    transparent
+  );
+  filter: drop-shadow(0 0 4px #ff714d);
+}
+.flare-a {
+  transform: rotate(24deg);
+}
+.flare-b {
+  transform: rotate(-62deg) scaleX(0.74);
+}
+.supernova-ring {
+  width: 23px;
+  height: 11px;
+  border: 1px solid #ff9a6399;
+  border-radius: 50%;
+  transform: rotate(-24deg);
+  box-shadow: 0 0 8px #f15b54aa;
+}
+.brandmark .supernova-mark {
+  width: 23px;
+  height: 23px;
+  transform: scale(0.83);
+}
+.auth-card .brand-mark .supernova-mark {
+  width: 30px;
+  height: 30px;
+  transform: scale(1.12);
+}
+
+.auth-page {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 44% 52% at 78% 52%, #f15c3a4f, transparent 72%),
+    radial-gradient(ellipse 56% 70% at 12% 22%, #3d174f9c, transparent 74%),
+    radial-gradient(ellipse 60% 44% at 52% 105%, #9d263d4c, transparent 75%),
+    #080714;
+}
+.auth-supernova {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.auth-supernova-stars {
+  position: absolute;
+  inset: 0;
+  opacity: 0.84;
+  background-image:
+    radial-gradient(circle at 13% 19%, #fff 0 1px, transparent 1.5px),
+    radial-gradient(circle at 34% 71%, #fff3cb 0 1px, transparent 1.5px),
+    radial-gradient(circle at 69% 17%, #fff 0 0.8px, transparent 1.4px),
+    radial-gradient(circle at 87% 80%, #fff 0 1px, transparent 1.5px);
+  background-size:
+    167px 153px,
+    217px 201px,
+    131px 121px,
+    289px 261px;
+}
+.auth-supernova-cloud {
+  position: absolute;
+  width: 700px;
+  height: 480px;
+  border-radius: 50%;
+  filter: blur(28px);
+  opacity: 0.72;
+}
+.cloud-one {
+  right: -180px;
+  top: 8%;
+  background: radial-gradient(
+    ellipse,
+    #ef573c9c 0,
+    #a1253d87 36%,
+    transparent 69%
+  );
+  animation: nebula-drift 15s ease-in-out infinite alternate;
+}
+.cloud-two {
+  right: 10%;
+  bottom: -310px;
+  background: radial-gradient(
+    ellipse,
+    #ff9a4b87 0,
+    #8c234980 39%,
+    transparent 70%
+  );
+  animation: nebula-drift 19s ease-in-out infinite alternate-reverse;
+}
+.auth-supernova-mark {
+  position: absolute !important;
+  width: 214px;
+  height: 214px;
+  right: 13%;
+  top: calc(50% - 107px);
+  animation: stellar-pulse 4.5s ease-in-out infinite;
+}
+.auth-supernova-mark .supernova-core {
+  width: 44px;
+  height: 44px;
+  box-shadow:
+    0 0 30px 14px #fff7c4,
+    0 0 88px 38px #ffb24a,
+    0 0 150px 70px #e44b3eaa;
+}
+.auth-supernova-mark .supernova-flare {
+  width: 215px;
+  height: 5px;
+}
+.auth-supernova-mark .supernova-ring {
+  width: 206px;
+  height: 90px;
+  border-width: 3px;
+}
+@keyframes stellar-pulse {
+  50% {
+    transform: scale(1.12) rotate(8deg);
+    filter: saturate(1.22);
+  }
+}
+@keyframes nebula-drift {
+  to {
+    transform: translate(-52px, 32px) scale(1.1) rotate(9deg);
+  }
+}
+.auth-card {
+  position: relative;
+  z-index: 2;
+  color: #fff8ee;
+  background: linear-gradient(145deg, #211225ed, #130d20e8);
+  border-color: #ffb17d42;
+  box-shadow:
+    0 30px 90px #03010bb8,
+    inset 0 1px #ffe4c429;
+  backdrop-filter: blur(18px);
+}
+.auth-card .brand-mark {
+  background: linear-gradient(135deg, #8f203c, #e85b3d 56%, #ffb24c);
+  box-shadow: 0 0 22px #f363488c;
+}
+.auth-card h1,
+.auth-card label {
+  color: #fff8ed;
+}
+.auth-card p,
+.auth-card .auth-switch,
+.otp-hint,
+.otp-delivery {
+  color: #d8c6c6 !important;
+}
+.auth-card input {
+  color: #fff9ef;
+  background: #ffffff0c;
+  border-color: #ffc59b3d;
+}
+.auth-card input:focus {
+  border-color: #ff9d63;
+  box-shadow: 0 0 0 3px #ff784726;
+  outline: none;
+}
+.auth-back,
+.auth-switch button,
+.otp-delivery small {
+  color: #ffb178 !important;
+}
+.auth-error {
+  color: #ffd7d6 !important;
+  background: #7e223747;
+}
+
+/* Prevent late feature styles from reintroducing white screens or low contrast. */
+.workflow-page {
+  background: #0b0817;
+  color: #f8f2ed;
+}
+.workflow-top,
+.workflow-body aside {
+  background: #151023e8;
+  border-color: #ffffff18;
+  color: #f8f2ed;
+}
+.workflow-top h2,
+.workflow-body aside > button,
+.workflow-node-editor label {
+  color: #f8f2ed;
+}
+.workflow-body aside > p,
+.workflow-connections > p,
+.workflow-node-editor > p {
+  color: #cbb4bd;
+}
+.workflow-body aside > button:hover {
+  background: #ff7d4b20;
+}
+.workflow-body aside > button svg {
+  color: #ffad6a;
+}
+.board {
+  background-color: #0b0918;
+  background-image: radial-gradient(#ff996144 1px, transparent 1px);
+}
+.board path {
+  stroke: #ff9b6f;
+  filter: drop-shadow(0 0 3px #ef573c77);
+}
+.wf-node,
+.workflow-connections,
+.workflow-node-editor,
+.workflow-validation,
+.workflow-runs {
+  color: #fff5ed;
+  background: linear-gradient(145deg, #24142a, #140f23);
+  border-color: #ffbc8a38;
+  box-shadow: 0 12px 25px #03010d55;
+}
+.wf-node b {
+  color: #fff7f0;
+}
+.wf-node > div span {
+  color: #ffd2a3;
+  background: #ff744420;
+}
+.wf-node button,
+.wf-node small {
+  color: #c8b2bd;
+}
+.port {
+  background: #ff8b5e;
+  border-color: #201226;
+}
+.board-controls {
+  color: #ffe8d5;
+  background: #21142b;
+  border-color: #ffb17a52;
+}
+.workflow-body .search input,
+.workflow-body .workflow-select,
+.workflow-connections select,
+.workflow-node-editor input,
+.workflow-node-editor select {
+  color: #fff3eb;
+  background: #ffffff0a;
+  border-color: #ffba9340;
+}
+
+.help-modal,
+.help-grid article,
+.shortcut-list,
+.command-palette,
+.modal {
+  color: #fff5ed;
+  background: linear-gradient(145deg, #211429, #130e20);
+  border-color: #ffb7873d;
+}
+.help-modal h2,
+.help-modal h3,
+.help-modal header p,
+.help-grid p,
+.shortcut-list {
+  color: #f7ece5;
+}
+.help-grid article {
+  box-shadow: inset 0 1px #ffffff0d;
+}
+.help-grid article > svg,
+.help-modal > header > span {
+  color: #ffad6b;
+  background: #ff754520;
+}
+
+.laptop-workers,
+.training-setup-grid article,
+.worker-setup-guide,
+.lab-worker-admin {
+  color: #fff4ec;
+  background: #ffffff08;
+  border-color: #ffb98932;
+}
+.laptop-workers small,
+.training-setup-grid ol,
+.lab-worker-admin p,
+.worker-setup-guide small {
+  color: #d3bdc1;
+}
+.training-setup-grid article > b,
+.worker-setup-guide summary,
+.lab-worker-admin summary {
+  color: #ffc18d;
+}
+.training-setup-grid button,
+.worker-downloads button {
+  color: #ffd5b5;
+  background: #ff754516;
+  border-color: #ffb78755;
+}
+
+@media (max-width: 900px) {
+  .auth-supernova-mark {
+    right: -70px;
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-supernova-mark,
+  .auth-supernova-cloud {
+    animation: none;
+  }
+}
 .gemini-assistant {
   position: fixed;
   right: 24px;
@@ -7338,4 +7680,95 @@
    flush placement it has inside a project's collaboration panel. */
 .join-code-form.dashboard-join {
   margin: 18px 0;
+}
+
+/* Keep late workflow/documentation feature rules inside the supernova theme. */
+.workflow-page {
+  background: #0b0817 !important;
+  color: #f8f2ed;
+}
+.workflow-top,
+.workflow-body aside {
+  background: #151023e8 !important;
+  border-color: #ffffff18 !important;
+  color: #f8f2ed !important;
+}
+.workflow-top h2,
+.workflow-body aside > button,
+.workflow-node-editor label {
+  color: #f8f2ed !important;
+}
+.workflow-body aside > p,
+.workflow-connections > p,
+.workflow-node-editor > p {
+  color: #cbb4bd !important;
+}
+.workflow-body aside > button:hover {
+  background: #ff7d4b20 !important;
+}
+.workflow-body aside > button svg {
+  color: #ffad6a !important;
+}
+.board {
+  background-color: #0b0918 !important;
+  background-image: radial-gradient(#ff996144 1px, transparent 1px) !important;
+}
+.board path {
+  stroke: #ff9b6f !important;
+  filter: drop-shadow(0 0 3px #ef573c77);
+}
+.wf-node,
+.workflow-connections,
+.workflow-node-editor,
+.workflow-validation,
+.workflow-runs {
+  color: #fff5ed !important;
+  background: linear-gradient(145deg, #24142a, #140f23) !important;
+  border-color: #ffbc8a38 !important;
+  box-shadow: 0 12px 25px #03010d55;
+}
+.wf-node b,
+.workflow-node-editor input,
+.workflow-node-editor select,
+.workflow-connections select {
+  color: #fff5ed !important;
+}
+.wf-node > div span {
+  color: #ffd2a3 !important;
+  background: #ff744420 !important;
+}
+.wf-node button,
+.wf-node small {
+  color: #c8b2bd !important;
+}
+.port {
+  background: #ff8b5e !important;
+  border-color: #201226 !important;
+}
+.board-controls {
+  color: #ffe8d5 !important;
+  background: #21142b !important;
+  border-color: #ffb17a52 !important;
+}
+.workflow-body .search input,
+.workflow-body .workflow-select,
+.workflow-connections select,
+.workflow-node-editor input,
+.workflow-node-editor select {
+  background: #ffffff0a !important;
+  border-color: #ffba9340 !important;
+}
+.help-modal,
+.help-grid article,
+.shortcut-list {
+  color: #fff5ed !important;
+  background: linear-gradient(145deg, #211429, #130e20) !important;
+  border-color: #ffb7873d !important;
+}
+.help-modal h2,
+.help-modal h3,
+.help-modal header p,
+.help-grid p,
+.shortcut-list {
+  color: #f7ece5 !important;
 }
