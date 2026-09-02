@@ -206,7 +206,7 @@ main {
 }
 .topbar {
   height: 64px;
-  background: #fff;
+  background: #171124;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -324,12 +324,12 @@ main {
   opacity: 0.45;
 }
 .welcome .primary {
-  background: #fff;
+  background: #171124;
   color: #3b2c84;
   z-index: 2;
 }
 .secondary {
-  background: #fff;
+  background: #171124;
   color: #504b62;
   border: 1px solid #dedbe7;
 }
@@ -340,7 +340,7 @@ main {
   margin: 18px 0;
 }
 .stat {
-  background: #fff;
+  background: #171124;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 17px;
@@ -384,7 +384,7 @@ main {
   margin-top: 2px;
 }
 .panel {
-  background: #fff;
+  background: #171124;
   border: 1px solid var(--line);
   border-radius: 13px;
   padding: 22px;
@@ -430,7 +430,7 @@ main {
 .project-card {
   padding: 0;
   border: 1px solid var(--line);
-  background: #fff;
+  background: #171124;
   border-radius: 12px;
   overflow: hidden;
   text-align: left;
@@ -705,7 +705,7 @@ main {
   position: absolute;
   inset: 12px;
   border-radius: 50%;
-  background: white;
+  background: #171124;
 }
 .donut span {
   z-index: 1;
@@ -1125,7 +1125,7 @@ main {
 .setting select,
 .train-config select {
   border: 1px solid #ddd9e6;
-  background: #fff;
+  background: #171124;
   padding: 6px;
   border-radius: 6px;
   font-size: 10px;
@@ -1179,7 +1179,7 @@ main {
   gap: 12px;
   width: 100%;
   border: 1px solid #e4e0e9;
-  background: #fff;
+  background: #171124;
   padding: 12px;
   border-radius: 9px;
   margin: 9px 0;
@@ -1553,7 +1553,7 @@ main {
 }
 .workflow-top {
   height: 78px;
-  background: #fff;
+  background: #171124;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -1579,7 +1579,7 @@ main {
 }
 .workflow-body aside {
   padding: 15px;
-  background: #fff;
+  background: #171124;
   border-right: 1px solid var(--line);
 }
 .workflow-body aside .search svg {
@@ -1626,7 +1626,7 @@ main {
   position: absolute;
   width: 210px;
   height: 91px;
-  background: #fff;
+  background: #171124;
   border: 1px solid #dcd8e5;
   border-radius: 9px;
   padding: 11px;
@@ -1683,7 +1683,7 @@ main {
 }
 .board-controls {
   left: 15px;
-  background: #fff;
+  background: #171124;
   border-color: #dedbe5;
   color: #716a7d;
 }
@@ -1698,7 +1698,7 @@ main {
 }
 .modal {
   width: 480px;
-  background: #fff;
+  background: #171124;
   border-radius: 15px;
   padding: 25px;
   box-shadow: 0 30px 70px #17112866;
@@ -1940,7 +1940,7 @@ main {
   box-shadow: 0 4px 16px #0006;
 }
 .classification-panel {
-  background: #fff;
+  background: #171124;
   border-left: 1px solid #e9e5ef;
   padding: 24px;
   overflow: auto;
@@ -2031,7 +2031,7 @@ main {
   place-items: center;
   border: 1px solid #ddd7e7;
   border-radius: 6px;
-  background: #fff;
+  background: #171124;
 }
 .classification-choice.selected .classification-check {
   border-color: #6c4ee7;
@@ -2056,7 +2056,7 @@ main {
   place-items: center;
   border: 1px solid #ddd5e5;
   border-radius: 8px;
-  background: #fff;
+  background: #171124;
 }
 .classification-color {
   overflow: hidden;
@@ -2191,7 +2191,7 @@ main {
 }
 .revealed-key button {
   border: 0;
-  background: #fff;
+  background: #171124;
   border-radius: 7px;
   padding: 7px;
   display: flex;
@@ -2378,7 +2378,7 @@ main {
   height: 32px;
   border: 1px solid #ddd6e5;
   border-radius: 7px;
-  background: #fff;
+  background: #171124;
   padding: 0 8px;
   font-size: 10px;
 }
@@ -2520,7 +2520,7 @@ body {
   font-family: inherit;
   font-size: 8px;
   color: #81798c;
-  background: #fff;
+  background: #171124;
   border: 1px solid #ddd7e5;
   border-bottom-width: 2px;
   border-radius: 4px;
@@ -2534,7 +2534,7 @@ body {
   width: min(650px, calc(100vw - 40px));
   max-height: 74vh;
   overflow: auto;
-  background: #fff;
+  background: #171124;
   border-radius: 14px;
   box-shadow: 0 28px 90px #15102277;
 }
@@ -2547,7 +2547,7 @@ body {
   gap: 11px;
   padding: 17px 18px;
   border-bottom: 1px solid #ebe7ef;
-  background: #fff;
+  background: #171124;
   border-radius: 14px 14px 0 0;
 }
 .command-input svg {
@@ -2573,7 +2573,7 @@ body {
 .command-group > button {
   width: 100%;
   border: 0;
-  background: #fff;
+  background: #171124;
   border-radius: 9px;
   padding: 9px;
   display: grid;
@@ -2646,7 +2646,7 @@ body {
 }
 .help-modal {
   width: min(760px, calc(100vw - 40px));
-  background: #fff;
+  background: #171124;
   border-radius: 15px;
   padding: 24px;
   box-shadow: 0 30px 80px #17112866;
@@ -2748,7 +2748,7 @@ body {
   right: 25px;
   top: 54px;
   width: 280px;
-  background: #fff;
+  background: #171124;
   border: 1px solid #e5e0e9;
   border-radius: 12px;
   box-shadow: 0 18px 50px #271d4729;
@@ -2821,7 +2821,7 @@ body {
   align-items: center;
   gap: 8px;
   border: 0;
-  background: #fff;
+  background: #171124;
   padding: 9px;
   border-radius: 7px;
   font-size: 10px;
@@ -2871,7 +2871,7 @@ body {
   gap: 5px;
   border: 1px solid #ded8e6;
   border-radius: 6px;
-  background: #fff;
+  background: #171124;
   color: #6e6678;
   padding: 0 8px;
   font-size: 8px;
@@ -2916,7 +2916,7 @@ body {
 }
 .bulk-bar > button {
   border: 1px solid #ddd5e7;
-  background: #fff;
+  background: #171124;
   border-radius: 6px;
   padding: 6px 8px;
   font-size: 8px;
@@ -2961,7 +2961,7 @@ body {
   display: grid;
   left: 6px;
   right: auto;
-  background: #fff;
+  background: #171124;
   color: #5f45c7;
   z-index: 3;
 }
@@ -3466,7 +3466,7 @@ main {
   box-shadow: 0 7px 20px #0e062b66;
 }
 .welcome .primary:hover {
-  background: #fff;
+  background: #171124;
 }
 
 .panel,
