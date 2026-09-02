@@ -8,6 +8,7 @@ tsconfig.tsbuildinfo
 .tmp/
 .runtime/
 .salnova/
+public/supernova-login.png
 .playwright-temp/
 .cache/
 .npm-cache/
