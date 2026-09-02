@@ -76,6 +76,13 @@ NVIDIA Automatic Tuning/GCC performance profiles are disabled.
   and logon triggers, and `worker/run-worker.ps1` now also locates the existing
   `C:\Users\User\SalnovaWorker` runtime. Normal users only select the shared
   worker once its heartbeat is online.
+- The shared registry entry `e8319a2397e9` was rotated and started on this PC
+  at 2026-09-02 21:12 Asia/Bangkok. Production confirms it is `online` as
+  `PC RTX 5060 Lab`, reporting NVIDIA GeForce RTX 5060, CUDA 13.0 and
+  PyTorch 2.13.0+cu130. Windows denied a boot-trigger task to the non-elevated
+  session, so the runner now falls back to a Startup-folder shortcut, which
+  automatically starts it at the next Windows login. The supervisor is running
+  in the present session.
 
 ## Logging
 

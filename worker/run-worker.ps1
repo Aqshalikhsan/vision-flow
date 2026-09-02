@@ -181,10 +181,26 @@ function Install-AutoStart {
         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
-        -Settings $settings -Description "Menjalankan Salnova training worker otomatis saat PC lab menyala atau user login." `
-        -Force | Out-Null
-    Write-Step "Auto-start terpasang sebagai Scheduled Task '$TaskName'."
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
+            -Settings $settings -Description "Menjalankan Salnova training worker otomatis saat PC lab menyala atau user login." `
+            -Force | Out-Null
+        Write-Step "Auto-start terpasang sebagai Scheduled Task '$TaskName'."
+    } catch {
+        # Creating an at-startup task requires an elevated PowerShell. A user
+        # Startup shortcut is still reliable for ordinary lab PCs, does not
+        # request admin rights, and starts the worker as soon as Windows logs in.
+        $startup = [Environment]::GetFolderPath("Startup")
+        $shortcutPath = Join-Path $startup "Salnova Training Worker.lnk"
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "powershell.exe"
+        $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
+        $shortcut.WorkingDirectory = Split-Path -Parent $scriptPath
+        $shortcut.Description = "Menjalankan Salnova training worker otomatis saat user login."
+        $shortcut.Save()
+        Write-Warn "Task saat boot perlu Administrator; fallback Startup folder terpasang untuk login Windows."
+    }
 }
 
 function Uninstall-AutoStart {
