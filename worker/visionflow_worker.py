@@ -28,6 +28,30 @@ class TrainingCancelled(Exception):
     pass
 
 
+class TeeStream:
+    """Mirror console output to the dedicated device log."""
+
+    def __init__(self, console: Any, log_file: Any, lock: threading.Lock):
+        self.console = console
+        self.log_file = log_file
+        self.lock = lock
+
+    def write(self, value: str) -> int:
+        with self.lock:
+            self.console.write(value)
+            self.log_file.write(value)
+            self.log_file.flush()
+        return len(value)
+
+    def flush(self) -> None:
+        with self.lock:
+            self.console.flush()
+            self.log_file.flush()
+
+    def isatty(self) -> bool:
+        return bool(getattr(self.console, "isatty", lambda: False)())
+
+
 def is_evaluation_artifact(path: Path) -> bool:
     if path.name in {
         "results.png", "confusion_matrix.png", "confusion_matrix_normalized.png",
@@ -55,7 +79,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--poll-seconds", type=max_poll, default=10)
     parser.add_argument("--once", action="store_true", help="Exit after one job or one empty claim")
-    parser.add_argument("--keep-jobs", action="store_true", help="Keep successful run directories")
+    parser.add_argument("--keep-jobs", dest="keep_jobs", action="store_true", help="Keep successful run directories (default)")
+    parser.add_argument("--cleanup-jobs", dest="keep_jobs", action="store_false", help="Delete a successful local run after upload")
+    parser.set_defaults(keep_jobs=True)
     args = parser.parse_args()
     if not args.token:
         parser.error("provide --token or VISIONFLOW_WORKER_TOKEN")
@@ -512,10 +538,16 @@ class VisionFlowWorker:
 
 def main() -> int:
     args = parse_args()
+    work_dir = Path(args.work_dir).resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    log_handle = (work_dir / "worker.log").open("a", encoding="utf-8", buffering=1)
+    output_lock = threading.Lock()
+    sys.stdout = TeeStream(sys.stdout, log_handle, output_lock)
+    sys.stderr = TeeStream(sys.stderr, log_handle, output_lock)
     worker = VisionFlowWorker(
         args.server,
         args.token,
-        Path(args.work_dir),
+        work_dir,
         args.keep_jobs,
         args.provider,
     )

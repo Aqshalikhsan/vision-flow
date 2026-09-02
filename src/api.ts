@@ -246,6 +246,7 @@ export type TrainingWorker = {
   id: string;
   name: string;
   prefix: string;
+  profile: "this-pc" | "own-device" | "colab";
   capabilities: {
     cuda?: boolean;
     gpuName?: string;
@@ -509,9 +510,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
-  upload: (id: string, files: FileList) => {
+  upload: (id: string, files: FileList | File[], frameIntervalSeconds = 1) => {
     const body = new FormData();
     Array.from(files).forEach((file) => body.append("files", file));
+    body.append("frame_interval_seconds", String(frameIntervalSeconds));
     return request<Project>(`/api/projects/${id}/assets`, {
       method: "POST",
       body,
@@ -519,12 +521,14 @@ export const api = {
   },
   uploadWithProgress: (
     id: string,
-    files: FileList,
+    files: FileList | File[],
     onProgress: (percent: number) => void,
     onProcessing?: () => void,
+    frameIntervalSeconds = 1,
   ) => {
     const body = new FormData();
     Array.from(files).forEach((file) => body.append("files", file));
+    body.append("frame_interval_seconds", String(frameIntervalSeconds));
     return uploadRequest<Project>(
       `/api/projects/${id}/assets`,
       body,
@@ -844,6 +848,7 @@ export const api = {
         | "colab-gpu"
         | "colab-cpu";
       worker_id?: string;
+      worker_profile?: "this-pc" | "own-device" | "colab";
       base_model_id?: string;
       freeze_layers?: number;
       weight_decay?: number;
@@ -879,6 +884,7 @@ export const api = {
           | "colab-gpu"
           | "colab-cpu";
         worker_id?: string;
+        worker_profile?: "this-pc" | "own-device" | "colab";
         base_model_id?: string;
         freeze_layers?: number;
         weight_decay?: number;
@@ -925,11 +931,14 @@ export const api = {
       method: "DELETE",
     }),
   trainingWorkers: () => request<TrainingWorker[]>("/api/training-workers"),
-  createTrainingWorker: (name: string) =>
+  createTrainingWorker: (
+    name: string,
+    profile: "this-pc" | "own-device" | "colab",
+  ) =>
     request<TrainingWorker & { token: string }>("/api/training-workers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, profile }),
     }),
   revokeTrainingWorker: (workerId: string) =>
     request<void>(`/api/training-workers/${workerId}`, { method: "DELETE" }),

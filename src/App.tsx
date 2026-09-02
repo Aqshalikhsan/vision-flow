@@ -3703,9 +3703,11 @@ function ProjectHome({
   remove: () => Promise<void>;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const uploadInFlight = useRef(false);
   const [draggingUpload, setDraggingUpload] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStage, setUploadStage] = useState<TransferStage>("uploading");
+  const [videoFrameInterval, setVideoFrameInterval] = useState(1);
   const [deletingProject, setDeletingProject] = useState(false);
   const [deletingAsset, setDeletingAsset] = useState<string | null>(null);
   const [collaboration, setCollaboration] = useState<ProjectCollaboration>({
@@ -3757,8 +3759,32 @@ function ProjectHome({
       );
     }
   };
-  const upload = async (files: FileList | null) => {
-    if (!files) return;
+  const openFilePicker = () => {
+    if (uploadInFlight.current) {
+      notify("Tunggu upload yang sedang berjalan selesai");
+      return;
+    }
+    if (input.current) {
+      input.current.value = "";
+      input.current.click();
+    }
+  };
+  const upload = async (selectedFiles: FileList | File[] | null) => {
+    if (!selectedFiles?.length) return;
+    if (uploadInFlight.current) {
+      notify("Tunggu upload yang sedang berjalan selesai");
+      return;
+    }
+    if (
+      !Number.isFinite(videoFrameInterval) ||
+      videoFrameInterval < 0.0001 ||
+      videoFrameInterval > 86400
+    ) {
+      notify("Interval video harus 0.0001 sampai 86400 detik per frame");
+      return;
+    }
+    const files = Array.from(selectedFiles);
+    uploadInFlight.current = true;
     try {
       setUploadProgress(0);
       setUploadStage("uploading");
@@ -3767,12 +3793,15 @@ function ProjectHome({
         files,
         setUploadProgress,
         () => setUploadStage("processing"),
+        videoFrameInterval,
       );
       update(() => saved);
       notify(`${files.length} file disimpan ke dataset lokal`);
     } catch (e) {
       notify(e instanceof Error ? e.message : "Upload gagal");
     } finally {
+      uploadInFlight.current = false;
+      if (input.current) input.current.value = "";
       setUploadProgress(null);
       setDraggingUpload(false);
     }
@@ -3830,9 +3859,13 @@ function ProjectHome({
             )}
             {deletingProject ? "Deleting…" : "Delete"}
           </button>
-          <button className="primary" onClick={() => input.current?.click()}>
+          <button
+            className="primary"
+            disabled={uploadProgress !== null}
+            onClick={openFilePicker}
+          >
             <Upload size={17} />
-            Upload data
+            {uploadProgress !== null ? "Uploading…" : "Upload data"}
           </button>
         </div>
         <input
@@ -3841,7 +3874,7 @@ function ProjectHome({
           multiple
           type="file"
           accept="image/*,video/mp4,video/quicktime,video/webm"
-          onChange={(e) => upload(e.target.files)}
+          onChange={(event) => void upload(event.currentTarget.files)}
         />
       </div>
       <div className="project-layout">
@@ -3882,7 +3915,7 @@ function ProjectHome({
               <Step
                 done={project.assets.length > 0}
                 title="Upload images"
-                onClick={() => input.current?.click()}
+                onClick={openFilePicker}
               />
               <Step
                 done={project.assets.some((a) => a.status === "annotated")}
@@ -3915,7 +3948,8 @@ function ProjectHome({
             }}
             onDrop={(event) => {
               event.preventDefault();
-              upload(event.dataTransfer.files);
+              setDraggingUpload(false);
+              void upload(event.dataTransfer.files);
             }}
           >
             <div className="panel-head">
@@ -3926,6 +3960,51 @@ function ProjectHome({
               <button className="secondary" onClick={() => go("dataset")}>
                 View dataset <ChevronRight size={15} />
               </button>
+            </div>
+            <div className="video-frame-interval">
+              <div>
+                <b>Video frame interval</b>
+                <small>
+                  Atur jarak ekstraksi untuk file video. Gambar tidak
+                  terpengaruh.
+                </small>
+              </div>
+              <label>
+                <span>{videoFrameInterval.toLocaleString()} detik/frame</span>
+                <input
+                  aria-label="Video frame interval range"
+                  type="range"
+                  min="-4"
+                  max="2"
+                  step="0.01"
+                  value={Math.log10(
+                    Math.max(0.0001, videoFrameInterval || 0.0001),
+                  )}
+                  onChange={(event) =>
+                    setVideoFrameInterval(
+                      Number((10 ** Number(event.target.value)).toPrecision(5)),
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Detik per frame
+                <input
+                  aria-label="Video seconds per frame"
+                  type="number"
+                  min="0.0001"
+                  max="86400"
+                  step="0.0001"
+                  value={videoFrameInterval}
+                  onChange={(event) =>
+                    setVideoFrameInterval(Number(event.target.value))
+                  }
+                />
+              </label>
+              <small>
+                1 = satu frame tiap detik · 0.0001 = setiap source frame jika
+                FPS video tidak mencapai interval tersebut.
+              </small>
             </div>
             {uploadProgress !== null && (
               <TransferProgress
@@ -3959,10 +4038,7 @@ function ProjectHome({
                   ))}
               </div>
             ) : (
-              <div
-                className="empty-drop"
-                onClick={() => input.current?.click()}
-              >
+              <div className="empty-drop" onClick={openFilePicker}>
                 <CloudUpload size={30} />
                 <b>Drop images or video here</b>
                 <small>JPG, PNG, WEBP, MP4, MOV, WEBM</small>
@@ -8877,6 +8953,7 @@ function DatasetTrain({
   const selectableWorkers = workers.filter(
     (worker) =>
       !worker.revoked &&
+      worker.profile === trainingRoute &&
       (!colabTarget || worker.capabilities.provider === "google-colab") &&
       (!gpuTarget || worker.capabilities.cuda),
   );
@@ -8975,7 +9052,7 @@ function DatasetTrain({
     const name = prompt("Nama training worker", defaults[profile])?.trim();
     if (!name) return;
     try {
-      const worker = await api.createTrainingWorker(name);
+      const worker = await api.createTrainingWorker(name, profile);
       setWorkers((current) => [worker, ...current]);
       setWorkerId(worker.id);
       setWorkerToken(worker.token);
@@ -9013,7 +9090,7 @@ function DatasetTrain({
       return;
     }
     try {
-      const worker = await api.createTrainingWorker("Google Colab");
+      const worker = await api.createTrainingWorker("Google Colab", "colab");
       const colabWorker: TrainingWorker = {
         ...worker,
         capabilities: { ...worker.capabilities, provider: "google-colab" },
@@ -9028,6 +9105,7 @@ function DatasetTrain({
         "import subprocess, sys, urllib.request",
         `SERVER = ${JSON.stringify(server)}`,
         `TOKEN = ${JSON.stringify(worker.token)}`,
+        `WORK_DIR = ${JSON.stringify(`salnova-worker-${worker.id}`)}`,
         `REQUESTED_TARGET = ${JSON.stringify(requestedTarget)}`,
         'print("Installing Salnova worker dependencies...")',
         'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/visionflow_worker.py", "visionflow_worker.py")',
@@ -9039,7 +9117,7 @@ function DatasetTrain({
         'if CUDA_READY: print("GPU:", torch.cuda.get_device_name(0))',
         'if REQUESTED_TARGET == "colab-gpu" and not CUDA_READY: raise RuntimeError("GPU Colab belum aktif. Pilih Runtime > Change runtime type > T4 GPU, lalu restart dan Run all.")',
         'print("Connecting Colab runtime to", SERVER)',
-        'subprocess.check_call([sys.executable, "visionflow_worker.py", "--server", SERVER, "--token", TOKEN, "--provider", "google-colab"])',
+        'subprocess.check_call([sys.executable, "visionflow_worker.py", "--server", SERVER, "--token", TOKEN, "--provider", "google-colab", "--work-dir", WORK_DIR, "--keep-jobs"])',
       ].map((line) => line + "\n");
       const notebook = {
         nbformat: 4,
@@ -9089,8 +9167,9 @@ function DatasetTrain({
   const downloadWorkerSetup = (
     profile: Exclude<TrainingRoute, "nas"> = "own-device",
     tokenValue = workerToken,
+    workerIdValue = workerId,
   ) => {
-    if (!tokenValue) return;
+    if (!tokenValue || !workerIdValue) return;
     const quote = (value: string) => value.replace(/'/g, "''");
     const provider = profile === "colab" ? "google-colab" : "local";
     const script = `# Salnova Windows training worker bootstrap
@@ -9105,6 +9184,7 @@ $ProgressPreference = "SilentlyContinue"
 $server = '${quote(workerServer)}'
 $token = '${quote(tokenValue)}'
 $provider = '${provider}'
+$workerId = '${quote(workerIdValue)}'
 $workerRoot = if ($env:SALNOVA_WORKER_HOME) {
   $env:SALNOVA_WORKER_HOME
 } elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "VisionFlowWorker")) {
@@ -9114,6 +9194,7 @@ $workerRoot = if ($env:SALNOVA_WORKER_HOME) {
 } else {
   Join-Path $env:USERPROFILE "SalnovaWorker"
 }
+$deviceRoot = Join-Path $workerRoot "devices/$workerId"
 
 $serverUri = [Uri]$server
 if ($serverUri.Host -in @('localhost', '127.0.0.1', '0.0.0.0')) {
@@ -9169,6 +9250,7 @@ if (!(Test-Path -LiteralPath $venvPython)) {
 
 New-Item -ItemType Directory -Force -Path (Join-Path $workerRoot "worker") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $workerRoot ".tmp") | Out-Null
+New-Item -ItemType Directory -Force -Path $deviceRoot | Out-Null
 $env:TEMP = Join-Path $workerRoot ".tmp"
 $env:TMP = $env:TEMP
 $env:PIP_NO_CACHE_DIR = "1"
@@ -9240,7 +9322,8 @@ Write-Step "Memverifikasi Python, Ultralytics, PyTorch, CPU, dan GPU"
 if ($LASTEXITCODE -ne 0) { throw "Verifikasi package gagal." }
 
 Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor Green
-& $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token --provider $provider
+Write-Host "Log dan checkpoint device disimpan di $deviceRoot" -ForegroundColor Green
+& $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token --provider $provider --work-dir $deviceRoot --keep-jobs
 `;
     const url = URL.createObjectURL(
       new Blob([script], { type: "text/plain;charset=utf-8" }),
@@ -9257,8 +9340,9 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
   const downloadUnixWorkerSetup = (
     profile: Exclude<TrainingRoute, "nas"> = "own-device",
     tokenValue = workerToken,
+    workerIdValue = workerId,
   ) => {
-    if (!tokenValue) return;
+    if (!tokenValue || !workerIdValue) return;
     const quote = (value: string) => value.replace(/'/g, "'\"'\"'");
     const provider = profile === "colab" ? "google-colab" : "local";
     const script = [
@@ -9268,7 +9352,9 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
       "server='" + quote(workerServer) + "'",
       "token='" + quote(tokenValue) + "'",
       "provider='" + provider + "'",
+      "worker_id='" + quote(workerIdValue) + "'",
       'worker_root="${SALNOVA_WORKER_HOME:-$HOME/SalnovaWorker}"',
+      'device_root="$worker_root/devices/$worker_id"',
       'case "$server" in http://localhost*|http://127.0.0.1*|http://0.0.0.0*) read -r -p "Server masih localhost. Masukkan URL Salnova LAN/HTTPS, atau Enter jika worker ada di device ini: " entered_server; [ -n "$entered_server" ] && server="${entered_server%/}" ;; esac',
       'raw_base="$server/api/training-workers/setup"',
       'step() { printf "\\n[Salnova setup] %s\\n" "$1"; }',
@@ -9288,6 +9374,7 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
       'if [ "$available_kb" -gt 0 ] && [ "$available_kb" -lt 6291456 ]; then echo "Minimal 6 GB ruang kosong diperlukan. Set SALNOVA_WORKER_HOME ke drive lain."; exit 1; fi',
       'mkdir -p "$worker_root/worker"',
       'mkdir -p "$worker_root/.tmp"',
+      'mkdir -p "$device_root"',
       'export TMPDIR="$worker_root/.tmp" PIP_NO_CACHE_DIR=1',
       'step "Mengunduh worker terbaru dari $server"',
       'curl -fsSL "$raw_base/visionflow_worker.py" -o "$worker_root/worker/visionflow_worker.py"',
@@ -9312,7 +9399,8 @@ Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor
       'step "Memverifikasi Python, Ultralytics, PyTorch, CPU, dan GPU"',
       '"$venv_python" -c "import requests,torch,ultralytics; print(\"Python packages: OK\"); print(\"PyTorch:\",torch.__version__); print(\"CUDA:\",torch.version.cuda); print(\"GPU available:\",torch.cuda.is_available()); print(\"Device:\",torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\")"',
       'echo "Setup lengkap. Worker menghubungkan ke $server ..."',
-      'exec "$worker_root/.venv/bin/python" "$worker_root/worker/visionflow_worker.py" --server "$server" --token "$token" --provider "$provider"',
+      'echo "Log dan checkpoint device disimpan di $device_root"',
+      'exec "$worker_root/.venv/bin/python" "$worker_root/worker/visionflow_worker.py" --server "$server" --token "$token" --provider "$provider" --work-dir "$device_root" --keep-jobs',
       "",
     ].join("\n");
     const url = URL.createObjectURL(
@@ -9369,9 +9457,9 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
     const worker = await createWorker(profile);
     if (!worker) return;
     if (platform === "windows") {
-      downloadWorkerSetup(profile, worker.token);
+      downloadWorkerSetup(profile, worker.token, worker.id);
     } else {
-      downloadUnixWorkerSetup(profile, worker.token);
+      downloadUnixWorkerSetup(profile, worker.token, worker.id);
     }
   };
   const start = async () => {
@@ -9380,9 +9468,16 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
       return;
     }
     if (executionTarget !== "server") {
+      if (!workerId) {
+        notify(
+          "Pilih satu dedicated worker. Job tidak boleh pindah ke device lain.",
+        );
+        return;
+      }
       const compatibleOnlineWorkers = workers.filter(
         (worker) =>
           !worker.revoked &&
+          worker.profile === trainingRoute &&
           worker.status !== "offline" &&
           (!colabTarget || worker.capabilities.provider === "google-colab") &&
           (!gpuTarget || worker.capabilities.cuda),
@@ -9413,6 +9508,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
         device,
         execution_target: executionTarget,
         worker_id: workerId || undefined,
+        worker_profile: trainingRoute === "nas" ? undefined : trainingRoute,
         base_model_id: baseModelId || undefined,
         freeze_layers: freezeLayers,
         weight_decay: weightDecay,
@@ -9430,11 +9526,8 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
   };
   const startSweep = async () => {
     if (!versionId) return notify("Pilih dataset version terlebih dahulu");
-    if (
-      executionTarget !== "server" &&
-      !workers.some((worker) => !worker.revoked)
-    )
-      return notify("Buat token laptop worker terlebih dahulu");
+    if (executionTarget !== "server" && !workerId)
+      return notify("Pilih satu dedicated worker untuk seluruh sweep");
     const rates = (
       prompt("Learning rates (pisahkan koma, maksimum 4)", "0.01, 0.001") || ""
     )
@@ -9472,6 +9565,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
           device,
           execution_target: executionTarget,
           worker_id: workerId || undefined,
+          worker_profile: trainingRoute === "nas" ? undefined : trainingRoute,
           base_model_id: baseModelId || undefined,
           freeze_layers: freezeLayers,
           weight_decay: weightDecay,
@@ -9834,7 +9928,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                   value={workerId}
                   onChange={(event) => setWorkerId(event.target.value)}
                 >
-                  <option value="">Any compatible worker</option>
+                  <option value="">Select one dedicated worker</option>
                   {selectableWorkers.map((worker) => (
                     <option value={worker.id} key={worker.id}>
                       {worker.name} · {worker.status}
@@ -9893,20 +9987,19 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                 </p>
               </article>
               <article>
-                <b>Any compatible worker</b>
+                <b>Dedicated worker wajib dipilih</b>
                 <p>
-                  Pilihan default pada <b>External worker</b>. Job diambil oleh
-                  worker mana pun yang cocok dan sedang online, mana yang lebih
-                  dulu siap. Pilih mesin tertentu kalau Anda ingin memastikan
-                  training berjalan di komputer yang spesifik.
+                  Setiap run dikunci ke satu token device. Worker lain tidak
+                  dapat mengambil job, log, atau checkpoint run tersebut. Folder
+                  save lokal juga dipisahkan berdasarkan ID worker.
                 </p>
               </article>
               <article>
                 <b>Kalau tidak ada worker yang menyala</b>
                 <p>
-                  Job tidak hilang. Statusnya menunggu di antrean sampai ada
-                  worker yang cocok terhubung, lalu langsung diambil. Anda boleh
-                  menutup halaman ini selama menunggu.
+                  Job tetap menunggu dedicated worker yang dipilih. Device lain
+                  tidak mengambil alih secara otomatis, sehingga hasil dan log
+                  tidak tercampur.
                 </p>
               </article>
             </div>
@@ -10312,6 +10405,12 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                     <b>{worker.name}</b>
                     <small>
                       {worker.status} ·{" "}
+                      {worker.profile === "this-pc"
+                        ? "PC RTX 5060"
+                        : worker.profile === "colab"
+                          ? "Google Colab"
+                          : "Device sendiri"}
+                      {" · "}
                       {worker.capabilities.gpuName ||
                         worker.capabilities.cpu ||
                         "Not connected yet"}

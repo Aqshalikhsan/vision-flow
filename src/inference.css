@@ -2564,6 +2564,58 @@
   background: #f6f2ff;
   box-shadow: inset 0 0 0 2px rgba(112, 82, 228, 0.13);
 }
+.video-frame-interval {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(180px, 1.2fr) 130px;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid #e6e0ee;
+  border-radius: 9px;
+  background: #faf8fd;
+}
+.video-frame-interval > div,
+.video-frame-interval label {
+  display: grid;
+  gap: 4px;
+}
+.video-frame-interval b,
+.video-frame-interval label,
+.video-frame-interval label span {
+  color: #554d60;
+  font-size: 9px;
+  font-weight: 700;
+}
+.video-frame-interval small {
+  color: #81798a;
+  font-size: 8px;
+  line-height: 1.4;
+}
+.video-frame-interval > small {
+  grid-column: 1 / -1;
+}
+.video-frame-interval input[type="number"] {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #dcd5e6;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 9px;
+}
+.video-frame-interval input[type="range"] {
+  width: 100%;
+  accent-color: #7052e4;
+}
+@media (max-width: 700px) {
+  .video-frame-interval {
+    grid-template-columns: 1fr;
+  }
+  .video-frame-interval > small {
+    grid-column: auto;
+  }
+}
 .upload-progress {
   margin-top: 12px;
   padding: 11px 12px;

@@ -11,6 +11,7 @@ import importlib.util
 import ipaddress
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -277,6 +278,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS training_workers (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
               prefix TEXT NOT NULL, capabilities TEXT NOT NULL DEFAULT '{}',
+              profile TEXT NOT NULL DEFAULT 'own-device',
               status TEXT NOT NULL DEFAULT 'offline', current_model_id TEXT,
               last_seen TEXT, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
             );
@@ -425,6 +427,8 @@ def init_db() -> None:
             con.execute("ALTER TABLE training_workers ADD COLUMN prefix TEXT")
         if "revoked" not in worker_columns:
             con.execute("ALTER TABLE training_workers ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0")
+        if "profile" not in worker_columns:
+            con.execute("ALTER TABLE training_workers ADD COLUMN profile TEXT NOT NULL DEFAULT 'own-device'")
         member_columns = {row["name"] for row in con.execute("PRAGMA table_info(workspace_members)")}
         if "password_hash" not in member_columns:
             con.execute("ALTER TABLE workspace_members ADD COLUMN password_hash TEXT")
@@ -620,6 +624,7 @@ class TrainPayload(BaseModel):
     device: str = Field(default="auto", pattern=r"^(auto|cpu|0)$")
     execution_target: str = Field(default="server", pattern=r"^(server|remote-auto|remote-gpu|remote-cpu|colab-auto|colab-gpu|colab-cpu)$")
     worker_id: str | None = None
+    worker_profile: str | None = Field(default=None, pattern=r"^(this-pc|own-device|colab)$")
     base_model_id: str | None = None
     freeze_layers: int = Field(default=0, ge=0, le=100)
     weight_decay: float = Field(default=0.0005, ge=0, le=0.1)
@@ -636,6 +641,7 @@ class TrainingSweepPayload(BaseModel):
 
 class TrainingWorkerPayload(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    profile: str = Field(default="own-device", pattern=r"^(this-pc|own-device|colab)$")
 
 
 class WorkerHeartbeatPayload(BaseModel):
@@ -2296,73 +2302,171 @@ def delete_project(project_id: str):
                 LOGGER.warning("Project %s deleted but cleanup of %s failed: %s", project_id, archive, error)
 
 
+def extract_uploaded_video(
+    temporary: Path,
+    project_dir: Path,
+    filename: str,
+    frame_interval_seconds: float,
+    created_paths: list[Path],
+) -> list[tuple[Any, ...]]:
+    """Extract a video without blocking the API event loop or holding SQLite open."""
+    import cv2
+
+    capture = cv2.VideoCapture(str(temporary))
+    try:
+        if not capture.isOpened():
+            raise HTTPException(400, f"{filename}: video tidak dapat dibuka")
+        raw_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        fps = raw_fps if math.isfinite(raw_fps) and raw_fps > 0 else 1.0
+        frame_stride = max(1, round(fps * frame_interval_seconds))
+        raw_total_frames = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        total_frames = (
+            max(0, int(raw_total_frames))
+            if math.isfinite(raw_total_frames)
+            else 0
+        )
+        estimated_frames = math.ceil(total_frames / frame_stride) if total_frames else 0
+        if estimated_frames > 20_000:
+            minimum_interval = total_frames / fps / 20_000
+            raise HTTPException(
+                422,
+                f"{filename}: interval menghasilkan sekitar {estimated_frames:,} frame; "
+                f"gunakan minimal {minimum_interval:.4f} detik/frame (batas 20.000 frame per video)",
+            )
+
+        video_id = uid()
+        pending: list[tuple[Any, ...]] = []
+        frame_index = 0
+        while capture.isOpened():
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame_index % frame_stride == 0:
+                asset_id = uid()
+                target = project_dir / f"{asset_id}.jpg"
+                if not cv2.imwrite(
+                    str(target), frame, [cv2.IMWRITE_JPEG_QUALITY, 92]
+                ):
+                    raise HTTPException(500, f"{filename}: gagal menyimpan frame video")
+                created_paths.append(target)
+                display_name = (
+                    f"{Path(filename).stem}-frame-{frame_index:06d}.jpg"
+                )
+                metadata = {
+                    "videoGroup": video_id,
+                    "sourceVideo": filename,
+                    "frameIndex": frame_index,
+                    "sourceFps": fps,
+                    "frameIntervalSeconds": frame_interval_seconds,
+                    "frameStride": frame_stride,
+                }
+                pending.append(
+                    (
+                        asset_id,
+                        display_name,
+                        str(target),
+                        "train",
+                        "unannotated",
+                        "[]",
+                        json.dumps(metadata),
+                    )
+                )
+            frame_index += 1
+        if not pending:
+            raise HTTPException(400, f"{filename}: video tidak memiliki frame yang dapat dibaca")
+        return pending
+    finally:
+        capture.release()
+        temporary.unlink(missing_ok=True)
+
+
 @app.post("/api/projects/{project_id}/assets", status_code=201)
-async def upload_assets(project_id: str, files: list[UploadFile] = File(...)):
+async def upload_assets(
+    project_id: str,
+    files: list[UploadFile] = File(...),
+    frame_interval_seconds: float = Form(1.0, gt=0, le=86400),
+):
     project_dir = UPLOADS / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
-    created = []
     with db() as con:
         if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
             raise HTTPException(404, "Project not found")
+
+    pending: list[tuple[Any, ...]] = []
+    created_paths: list[Path] = []
+    try:
         for incoming in files:
             media_type = incoming.content_type or ""
             if not (media_type.startswith("image/") or media_type.startswith("video/")):
                 continue
-            content = await incoming.read()
-            limit = 500 * 1024 * 1024 if media_type.startswith("video/") else 20 * 1024 * 1024
-            if len(content) > limit:
-                raise HTTPException(413, f"{incoming.filename}: file exceeds the local size limit")
+            filename = incoming.filename or ("video.mp4" if media_type.startswith("video/") else "image.jpg")
             if media_type.startswith("video/"):
-                import cv2
                 video_id = uid()
-                suffix = Path(incoming.filename or "video.mp4").suffix.lower() or ".mp4"
+                suffix = Path(filename).suffix.lower() or ".mp4"
                 temporary = project_dir / f"video-{video_id}{suffix}"
-                temporary.write_bytes(content)
-                capture = cv2.VideoCapture(str(temporary))
-                fps = max(1, round(capture.get(cv2.CAP_PROP_FPS) or 1))
-                frame_index = 0
-                extracted = 0
-                while capture.isOpened() and extracted < 100:
-                    ok, frame = capture.read()
-                    if not ok:
-                        break
-                    if frame_index % fps == 0:
-                        asset_id = uid()
-                        target = project_dir / f"{asset_id}.jpg"
-                        cv2.imwrite(str(target), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
-                        display_name = f"{Path(incoming.filename or 'video').stem}-frame-{frame_index:06d}.jpg"
-                        metadata = {
-                            "videoGroup": video_id,
-                            "sourceVideo": incoming.filename or "video",
-                            "frameIndex": frame_index,
-                            "sampleRate": fps,
-                        }
-                        con.execute(
-                            "INSERT INTO assets (id,project_id,name,path,split,status,boxes,metadata) VALUES (?,?,?,?,?,?,?,?)",
-                            (asset_id, project_id, display_name, str(target), "train", "unannotated", "[]", json.dumps(metadata)),
+                try:
+                    uploaded_bytes = 0
+                    with temporary.open("wb") as destination:
+                        while chunk := await incoming.read(1024 * 1024):
+                            uploaded_bytes += len(chunk)
+                            if uploaded_bytes > 500 * 1024 * 1024:
+                                raise HTTPException(
+                                    413,
+                                    f"{filename}: file exceeds the local size limit",
+                                )
+                            destination.write(chunk)
+                    pending.extend(
+                        await asyncio.to_thread(
+                            extract_uploaded_video,
+                            temporary,
+                            project_dir,
+                            filename,
+                            frame_interval_seconds,
+                            created_paths,
                         )
-                        created.append(asset_id)
-                        extracted += 1
-                    frame_index += 1
-                capture.release()
-                temporary.unlink(missing_ok=True)
-                if not extracted:
-                    raise HTTPException(400, f"{incoming.filename}: video contains no readable frames")
+                    )
+                finally:
+                    temporary.unlink(missing_ok=True)
                 continue
+            content = await incoming.read()
+            if len(content) > 20 * 1024 * 1024:
+                raise HTTPException(413, f"{filename}: file exceeds the local size limit")
             try:
                 with Image.open(io.BytesIO(content)) as image:
                     image.verify()
             except Exception as exc:
-                raise HTTPException(400, f"{incoming.filename}: invalid image") from exc
+                raise HTTPException(400, f"{filename}: invalid image") from exc
             asset_id = uid()
-            suffix = Path(incoming.filename or "image.jpg").suffix.lower() or ".jpg"
+            suffix = Path(filename).suffix.lower() or ".jpg"
             target = project_dir / f"{asset_id}{suffix}"
             target.write_bytes(content)
-            con.execute("INSERT INTO assets (id,project_id,name,path,split,status,boxes) VALUES (?,?,?,?,?,?,?)", (asset_id, project_id, incoming.filename or target.name, str(target), "train", "unannotated", "[]"))
-            created.append(asset_id)
-        log_activity(con, "assets.uploaded", f"{len(created)} image(s) added", project_id)
-        row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
-        return project_dict(con, row)
+            created_paths.append(target)
+            pending.append(
+                (asset_id, filename, str(target), "train", "unannotated", "[]", "{}")
+            )
+
+        if not pending:
+            raise HTTPException(400, "Tidak ada file gambar atau video yang dapat diunggah")
+        with db() as con:
+            row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Project not found")
+            con.executemany(
+                "INSERT INTO assets (id,project_id,name,path,split,status,boxes,metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (asset_id, project_id, name, path, split, status, boxes, metadata)
+                    for asset_id, name, path, split, status, boxes, metadata in pending
+                ],
+            )
+            log_activity(con, "assets.uploaded", f"{len(pending)} image(s) added", project_id)
+            return project_dict(con, row)
+    except Exception:
+        project_root = project_dir.resolve()
+        for target in created_paths:
+            resolved = target.resolve()
+            if resolved.parent == project_root:
+                resolved.unlink(missing_ok=True)
+        raise
 
 
 @app.post("/api/projects/{project_id}/import/yolo", status_code=201)
@@ -3645,6 +3749,7 @@ def worker_json(row: sqlite3.Row) -> dict[str, Any]:
         "id": row["id"],
         "name": row["name"],
         "prefix": row["prefix"] or "legacy",
+        "profile": row["profile"] or "own-device",
         "capabilities": json.loads(row["capabilities"] or "{}"),
         "status": "revoked" if row["revoked"] else (row["status"] if online else "offline"),
         "currentModelId": row["current_model_id"],
@@ -3717,13 +3822,14 @@ def create_training_worker(payload: TrainingWorkerPayload):
     prefix = raw_token[:12]
     with db() as con:
         con.execute(
-            "INSERT INTO training_workers (id,name,token_hash,prefix,capabilities,status,last_seen,created_at) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO training_workers (id,name,token_hash,prefix,capabilities,profile,status,last_seen,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 worker_id,
                 worker_name,
                 hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
                 prefix,
                 "{}",
+                payload.profile,
                 "offline",
                 "1970-01-01T00:00:00+00:00",
                 now(),
@@ -3747,8 +3853,14 @@ def revoke_training_worker(worker_id: str):
         for queued in con.execute("SELECT id,config FROM models WHERE status='queued'").fetchall():
             config = json.loads(queued["config"] or "{}")
             if config.get("worker_id") == worker_id:
-                config["worker_id"] = None
-                con.execute("UPDATE models SET config=? WHERE id=?", (json.dumps(config), queued["id"]))
+                con.execute(
+                    "UPDATE models SET status='paused',error=?,training_detail=? WHERE id=?",
+                    (
+                        "Dedicated worker was revoked; select a new device and start a new run",
+                        json.dumps({"stage": "Dedicated worker revoked"}),
+                        queued["id"],
+                    ),
+                )
         con.execute("UPDATE training_workers SET revoked=1,status='offline',current_model_id=NULL WHERE id=?", (worker_id,))
 
 
@@ -3803,12 +3915,6 @@ def claim_training_job(request: Request):
         capabilities = json.loads(worker["capabilities"] or "{}")
         selected = None
         candidates = con.execute("SELECT * FROM models WHERE status='queued' ORDER BY rowid").fetchall()
-        candidates = sorted(
-            candidates,
-            key=lambda candidate: 0
-            if json.loads(candidate["config"] or "{}").get("worker_id") == worker["id"]
-            else 1,
-        )
         for candidate in candidates:
             config = json.loads(candidate["config"] or "{}")
             target = config.get("execution_target", "server")
@@ -3835,7 +3941,10 @@ def claim_training_job(request: Request):
                     ),
                 )
                 continue
-            if config.get("worker_id") and config["worker_id"] != worker["id"]:
+            # Remote runs are device-isolated. An unassigned job is never
+            # offered to an arbitrary worker, and a selected job can only be
+            # claimed by the exact token-bound device.
+            if config.get("worker_id") != worker["id"]:
                 continue
             if str(target).startswith("colab-") and capabilities.get("provider") != "google-colab":
                 continue
@@ -4343,14 +4452,21 @@ def start_training(project_id: str, payload: TrainPayload):
                 raise HTTPException(409, "Selected fine-tune model has no usable best.pt checkpoint")
         if payload.execution_target == "server" and payload.worker_id:
             raise HTTPException(400, "A laptop worker can only be selected for remote training")
+        if payload.execution_target != "server" and not payload.worker_id:
+            raise HTTPException(400, "Select one dedicated worker; remote jobs cannot use a random device")
         if payload.worker_id:
             worker = con.execute("SELECT * FROM training_workers WHERE id=? AND revoked=0", (payload.worker_id,)).fetchone()
             if not worker:
                 raise HTTPException(404, "Selected laptop worker was not found")
             capabilities = json.loads(worker["capabilities"] or "{}")
+            worker_profile = worker["profile"] or "own-device"
             selected_worker_online = worker_json(worker)["status"] in {"online", "busy"}
-            if payload.execution_target.startswith("colab-") and capabilities.get("provider") != "google-colab":
+            if payload.worker_profile and worker_profile != payload.worker_profile:
+                raise HTTPException(400, "Selected worker belongs to a different device profile")
+            if payload.execution_target.startswith("colab-") and worker_profile != "colab":
                 raise HTTPException(400, "Selected worker is not running in Google Colab")
+            if payload.execution_target.startswith("remote-") and worker_profile == "colab":
+                raise HTTPException(400, "Google Colab workers cannot claim PC or device jobs")
             if payload.execution_target in {"remote-gpu", "colab-gpu"} and selected_worker_online and not capabilities.get("cuda"):
                 raise HTTPException(400, "Selected worker does not report a CUDA GPU")
         annotated = con.execute("SELECT boxes FROM assets WHERE project_id=?", (project_id,)).fetchall()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import random
 import sys
 import time
@@ -15,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from main import apply_augmentation, assign_asset_splits
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.getenv("VISIONFLOW_TEST_BASE", "http://127.0.0.1:8000").rstrip("/")
 
 
 def main() -> None:
@@ -222,6 +223,98 @@ def main() -> None:
                 f"{BASE}/api/projects/{project_id}/export?format={current_format}", timeout=30,
             )
             assert current_export.status_code == 200 and current_export.content[:2] == b"PK", current_format
+        dedicated = requests.post(
+            f"{BASE}/api/training-workers",
+            json={"name": "Smoke Dedicated PC", "profile": "this-pc"},
+            timeout=10,
+        ).json()
+        unrelated = requests.post(
+            f"{BASE}/api/training-workers",
+            json={"name": "Smoke Other Device", "profile": "own-device"},
+            timeout=10,
+        ).json()
+        dedicated_headers = {"Authorization": f"Bearer {dedicated['token']}"}
+        unrelated_headers = {"Authorization": f"Bearer {unrelated['token']}"}
+        capabilities = {
+            "capabilities": {
+                "cuda": False,
+                "cpu": "Smoke CPU",
+                "platform": "Smoke OS",
+                "provider": "local",
+            }
+        }
+        requests.post(
+            f"{BASE}/api/training-workers/agent/heartbeat",
+            headers=dedicated_headers,
+            json=capabilities,
+            timeout=10,
+        ).raise_for_status()
+        requests.post(
+            f"{BASE}/api/training-workers/agent/heartbeat",
+            headers=unrelated_headers,
+            json=capabilities,
+            timeout=10,
+        ).raise_for_status()
+        unassigned = requests.post(
+            f"{BASE}/api/projects/{project_id}/train",
+            json={
+                "architecture": "yolo11n.pt",
+                "epochs": 1,
+                "image_size": 416,
+                "version_id": version_id,
+                "execution_target": "remote-cpu",
+                "worker_profile": "this-pc",
+            },
+            timeout=10,
+        )
+        assert unassigned.status_code == 400, "remote training must select one worker"
+        wrong_profile = requests.post(
+            f"{BASE}/api/projects/{project_id}/train",
+            json={
+                "architecture": "yolo11n.pt",
+                "epochs": 1,
+                "image_size": 416,
+                "version_id": version_id,
+                "execution_target": "remote-cpu",
+                "worker_id": unrelated["id"],
+                "worker_profile": "this-pc",
+            },
+            timeout=10,
+        )
+        assert wrong_profile.status_code == 400, "worker profiles must remain isolated"
+        project = requests.post(
+            f"{BASE}/api/projects/{project_id}/train",
+            json={
+                "architecture": "yolo11n.pt",
+                "epochs": 1,
+                "image_size": 416,
+                "version_id": version_id,
+                "execution_target": "remote-cpu",
+                "worker_id": dedicated["id"],
+                "worker_profile": "this-pc",
+            },
+            timeout=10,
+        ).json()
+        isolated_model_id = project["models"][-1]["id"]
+        unrelated_claim = requests.post(
+            f"{BASE}/api/training-workers/agent/claim",
+            headers=unrelated_headers,
+            timeout=10,
+        )
+        assert unrelated_claim.status_code == 204, "another device must not claim a dedicated job"
+        dedicated_claim = requests.post(
+            f"{BASE}/api/training-workers/agent/claim",
+            headers=dedicated_headers,
+            timeout=10,
+        )
+        assert dedicated_claim.status_code == 200
+        assert dedicated_claim.json()["id"] == isolated_model_id
+        requests.post(
+            f"{BASE}/api/projects/{project_id}/models/{isolated_model_id}/cancel",
+            timeout=10,
+        ).raise_for_status()
+        requests.delete(f"{BASE}/api/training-workers/{dedicated['id']}", timeout=10).raise_for_status()
+        requests.delete(f"{BASE}/api/training-workers/{unrelated['id']}", timeout=10).raise_for_status()
         graph = requests.post(
             f"{BASE}/api/workflows",
             json={
@@ -305,9 +398,26 @@ def main() -> None:
             writer.write(np.full((48, 64, 3), frame_number * 20, dtype=np.uint8))
         writer.release()
         try:
-            with video_path.open("rb") as video_file:
-                project = requests.post(f"{BASE}/api/projects/{project_id}/assets", files={"files": ("sample.mp4", video_file, "video/mp4")}, timeout=30).json()
-            assert len(project["assets"]) == 2, "one frame per second should be extracted"
+            with (
+                video_path.open("rb") as first_video,
+                video_path.open("rb") as second_video,
+            ):
+                project = requests.post(
+                    f"{BASE}/api/projects/{project_id}/assets",
+                    data={"frame_interval_seconds": "0.2"},
+                    files=[
+                        ("files", ("sample-a.mp4", first_video, "video/mp4")),
+                        ("files", ("sample-b.mp4", second_video, "video/mp4")),
+                    ],
+                    timeout=30,
+                ).json()
+            assert len(project["assets"]) == 20, "both videos should extract every frame"
+            assert all(
+                abs(frame["metadata"]["frameIntervalSeconds"] - 0.2) < 0.000001
+                and frame["metadata"]["frameStride"] == 1
+                for frame in project["assets"]
+            )
+            assert len({frame["metadata"]["videoGroup"] for frame in project["assets"]}) == 2
             for frame in project["assets"]:
                 requests.delete(f"{BASE}/api/projects/{project_id}/assets/{frame['id']}", timeout=10)
         finally:

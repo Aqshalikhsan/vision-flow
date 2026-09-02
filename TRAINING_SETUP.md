@@ -36,6 +36,11 @@ Script worker membutuhkan minimal Python 3.10 dan sekitar 6 GB ruang kosong.
 Script mencoba runtime CUDA yang cocok bila ada NVIDIA, menguji operasi
 TorchVision, lalu jatuh ke CPU jika CUDA tidak lolos tes.
 
+Setiap worker mempunyai folder sendiri di `SalnovaWorker/devices/<worker-id>`.
+Log `worker.log`, dataset kerja, `last.pt`, `best.pt`, dan artifact run tidak
+dipakai bersama worker lain. Job juga dikunci ke worker yang dipilih; Salnova
+tidak mengalihkan run ke device lain secara acak.
+
 ## 1. Training menggunakan PC RTX 5060
 
 1. Di **Training setup center > PC RTX 5060**, unduh script Windows atau Linux.
@@ -55,7 +60,7 @@ Untuk PC pengembangan saat ini, mode GPU seharusnya menampilkan RTX 5060 dan
 3. Pindahkan file ke device tersebut secara privat, lalu jalankan.
 4. Bila script mendeteksi URL localhost, masukkan URL LAN/HTTPS Salnova.
 5. Tunggu worker online, pilih **Device sendiri**, lalu pilih nama worker.
-6. Mulai training. Job boleh menunggu di antrean sampai device kembali online.
+6. Mulai training. Job hanya menunggu device yang dipilih sampai kembali online.
 
 Untuk transfer checkpoint besar di rumah, URL LAN lebih cepat dan menghindari
 batas unggahan Cloudflare. Domain HTTPS cocok untuk device di luar jaringan.

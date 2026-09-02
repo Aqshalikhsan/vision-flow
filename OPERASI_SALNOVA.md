@@ -212,10 +212,10 @@ Empat pilihan di halaman Train: **PC RTX 5060**, **Device sendiri**, **NAS**, da
 serta Linux `.sh` di **Training setup center**; Colab juga mempunyai notebook.
 Panduan pengguna lengkap ada di [TRAINING_SETUP.md](TRAINING_SETUP.md).
 
-PC/device/Colab mengambil job dari antrean bersama tanpa filter pemilik, jadi
-worker mana pun dapat melayani user mana pun. Pemilihan mesin tertentu lewat
-dropdown **External worker**. NAS menjalankan training langsung di container
-dan tidak memakai token worker; script NAS hanya mengecek `/api/ready`.
+PC/device/Colab wajib memakai **dedicated worker** yang dipilih lewat dropdown.
+Backend mencocokkan `worker_id` dengan token saat claim; worker lain tidak dapat
+mengambil job tersebut. NAS menjalankan training langsung di container dan
+tidak memakai token worker; script NAS hanya mengecek `/api/ready`.
 
 [worker/run-worker.ps1](worker/run-worker.ps1) menjaga worker tetap hidup:
 restart dengan backoff, Scheduled Task saat login, dan pemilihan alamat otomatis
@@ -232,8 +232,9 @@ GPU di PC pengembangan: **RTX 5060, 8 GB VRAM**, arsitektur Blackwell (`sm_120`)
 Build PyTorch lama tidak punya kernel untuknya; setelah `setup.ps1` pastikan
 outputnya menyebut `GPU available: True`.
 
-Worker mengunduh dataset ke mesinnya selama training, lalu menghapusnya sendiri
-(`shutil.rmtree(job_dir)`) kecuali dijalankan dengan `--keep-jobs`.
+Setup hasil UI menjalankan worker dengan `--keep-jobs` dan folder khusus
+`SalnovaWorker/devices/<worker-id>`. Setiap device menyimpan `worker.log`,
+checkpoint, dataset kerja, dan artifact masing-masing tanpa berbagi folder.
 
 ## 8. Backup
 

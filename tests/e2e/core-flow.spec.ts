@@ -91,6 +91,12 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   await projectCard.getByRole("button", { name: /Actions for/ }).click();
   await projectCard.locator(".project-card-main").click();
 
+  const videoInterval = page.getByLabel("Video seconds per frame");
+  await expect(videoInterval).toHaveValue("1");
+  await videoInterval.fill("0.0001");
+  await expect(videoInterval).toHaveValue("0.0001");
+  await expect(page.getByLabel("Video frame interval range")).toHaveValue("-4");
+
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await page.getByLabel("Description").fill("Updated by browser coverage");
   await page.getByRole("button", { name: "Save changes" }).click();
@@ -238,6 +244,8 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   const pcWindowsScript = await readFile(pcWindowsPath!, "utf8");
   expect(pcWindowsScript).toContain("$provider = 'local'");
   expect(pcWindowsScript).toContain("--provider $provider");
+  expect(pcWindowsScript).toContain("--work-dir $deviceRoot --keep-jobs");
+  expect(pcWindowsScript).toContain('"devices/$workerId"');
 
   const deviceCard = setupCenter
     .locator(".training-setup-grid article")
@@ -255,6 +263,10 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   const deviceLinuxScript = await readFile(deviceLinuxPath!, "utf8");
   expect(deviceLinuxScript).toContain("provider='local'");
   expect(deviceLinuxScript).toContain('--provider "$provider"');
+  expect(deviceLinuxScript).toContain('--work-dir "$device_root" --keep-jobs');
+  expect(deviceLinuxScript).toContain(
+    'device_root="$worker_root/devices/$worker_id"',
+  );
 
   const nasCard = setupCenter.locator(".training-setup-grid article").filter({
     hasText: "3. NAS",
