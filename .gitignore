@@ -7,6 +7,7 @@ tsconfig.tsbuildinfo
 .venv313/
 .tmp/
 .runtime/
+.salnova/
 .playwright-temp/
 .cache/
 .npm-cache/
