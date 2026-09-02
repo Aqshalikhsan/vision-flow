@@ -8185,6 +8185,38 @@ main :is(article, section, aside, .panel, .card, .modal),
   font-size: 10px;
   font-weight: 750;
 }
+.content .dataset-item footer .review-select,
+.content .dataset-toolbar select {
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid #a98bdb66 !important;
+  border-radius: 8px;
+  color: #fff3df !important;
+  background: #171126 !important;
+  font-size: 10px;
+  font-weight: 750;
+  color-scheme: dark;
+}
+.content .dataset-item footer .review-select.approved {
+  border-color: #54e0b0 !important;
+  color: #dffff1 !important;
+  background: #123f35 !important;
+}
+.content .dataset-item footer .review-select.pending {
+  border-color: #e9bd68 !important;
+  color: #ffe9b7 !important;
+  background: #49351a !important;
+}
+.content .dataset-item footer .review-select.needs-fix {
+  border-color: #ff8d8d !important;
+  color: #ffd8d8 !important;
+  background: #4b202a !important;
+}
+.content .dataset-item footer .review-select option,
+.content .dataset-toolbar select option {
+  color: #fff3df;
+  background: #171126;
+}
 @media (prefers-reduced-motion: reduce) {
   .auth-page::before {
     animation: none;
