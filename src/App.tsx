@@ -2925,6 +2925,156 @@ function JobCenter({
           </div>
         )}
       </div>
+      {/*
+        <div
+          className="modal-bg video-upload-wizard-bg"
+          onMouseDown={() => uploadProgress === null && closeVideoWizard()}
+        >
+          <section
+            className="video-upload-wizard"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">VIDEO TO FRAMES</span>
+                <h2>
+                  {videoWizard.step === "settings"
+                    ? "Atur ekstraksi frame"
+                    : "Preview video"}
+                </h2>
+                <p>{videoWizard.file.name}</p>
+              </div>
+              <button
+                className="icon ghost"
+                aria-label="Close video upload"
+                disabled={uploadProgress !== null}
+                onClick={closeVideoWizard}
+              >
+                <X />
+              </button>
+            </header>
+            <div className="video-upload-steps" aria-label="Video upload steps">
+              <span className={videoWizard.step === "settings" ? "active" : ""}>
+                1. Frame interval
+              </span>
+              <span className={videoWizard.step === "preview" ? "active" : ""}>
+                2. Preview & extract
+              </span>
+            </div>
+            <div
+              className="video-upload-preview"
+              onWheel={(event) => {
+                event.preventDefault();
+                seekVideoPreview(videoPreviewPercent + (event.deltaY < 0 ? 1 : -1));
+              }}
+            >
+              <video
+                ref={videoPreview}
+                src={videoWizard.url}
+                controls={videoWizard.step === "preview"}
+                muted
+                playsInline
+                onLoadedMetadata={(event) => {
+                  const duration = event.currentTarget.duration;
+                  if (Number.isFinite(duration)) {
+                    setVideoDuration(duration);
+                    event.currentTarget.currentTime =
+                      (duration * videoPreviewPercent) / 100;
+                  }
+                }}
+                onTimeUpdate={(event) => {
+                  if (!videoDuration) return;
+                  setVideoPreviewPercent(
+                    Math.round((event.currentTarget.currentTime / videoDuration) * 100),
+                  );
+                }}
+              />
+              <span>{videoPreviewPercent}% posisi video</span>
+            </div>
+            {videoWizard.step === "settings" ? (
+              <div className="video-upload-controls">
+                <label>
+                  <span>Interval ekstraksi</span>
+                  <b>{videoFrameInterval.toLocaleString()} detik/frame</b>
+                  <input
+                    type="range"
+                    min="-4"
+                    max="2"
+                    step="0.01"
+                    value={Math.log10(Math.max(0.0001, videoFrameInterval))}
+                    onChange={(event) =>
+                      setVideoFrameInterval(
+                        Number((10 ** Number(event.target.value)).toPrecision(5)),
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Preview pada posisi video</span>
+                  <b>{videoPreviewPercent}%</b>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={videoPreviewPercent}
+                    onChange={(event) => seekVideoPreview(Number(event.target.value))}
+                  />
+                </label>
+                <small>
+                  Geser bar atau scroll mouse untuk mencari bagian video yang ingin diperiksa.
+                  Interval ini akan dipakai untuk mengekstrak seluruh video menjadi gambar.
+                </small>
+              </div>
+            ) : (
+              <div className="video-upload-confirm">
+                <b>Siap mengekstrak seluruh video</b>
+                <small>
+                  Satu gambar akan dibuat setiap {videoFrameInterval.toLocaleString()} detik.
+                  Gunakan Back bila interval atau posisi preview belum sesuai.
+                </small>
+              </div>
+            )}
+            {uploadProgress !== null && (
+              <TransferProgress
+                percent={uploadProgress}
+                stage={uploadStage}
+                label="Mengunggah video"
+                processingLabel="Mengekstrak frame video"
+              />
+            )}
+            <footer>
+              {videoWizard.step === "preview" && (
+                <button
+                  className="secondary"
+                  disabled={uploadProgress !== null}
+                  onClick={() => setVideoWizard({ ...videoWizard, step: "settings" })}
+                >
+                  Back
+                </button>
+              )}
+              {videoWizard.step === "settings" ? (
+                <button
+                  className="primary"
+                  onClick={() => setVideoWizard({ ...videoWizard, step: "preview" })}
+                >
+                  Next <ChevronRight size={15} />
+                </button>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={uploadProgress !== null}
+                  onClick={async () => {
+                    if (await upload([videoWizard.file])) closeVideoWizard();
+                  }}
+                >
+                  <Upload size={15} /> Extract frames
+                </button>
+              )}
+            </footer>
+          </section>
+        </div>
+      */}
     </div>
   );
 }
@@ -3708,6 +3858,14 @@ function ProjectHome({
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStage, setUploadStage] = useState<TransferStage>("uploading");
   const [videoFrameInterval, setVideoFrameInterval] = useState(1);
+  const [videoWizard, setVideoWizard] = useState<{
+    file: File;
+    url: string;
+    step: "settings" | "preview";
+  } | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoPreviewPercent, setVideoPreviewPercent] = useState(0);
+  const videoPreview = useRef<HTMLVideoElement>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [deletingAsset, setDeletingAsset] = useState<string | null>(null);
   const [collaboration, setCollaboration] = useState<ProjectCollaboration>({
@@ -3770,10 +3928,10 @@ function ProjectHome({
     }
   };
   const upload = async (selectedFiles: FileList | File[] | null) => {
-    if (!selectedFiles?.length) return;
+    if (!selectedFiles?.length) return false;
     if (uploadInFlight.current) {
       notify("Tunggu upload yang sedang berjalan selesai");
-      return;
+      return false;
     }
     if (
       !Number.isFinite(videoFrameInterval) ||
@@ -3781,7 +3939,7 @@ function ProjectHome({
       videoFrameInterval > 86400
     ) {
       notify("Interval video harus 0.0001 sampai 86400 detik per frame");
-      return;
+      return false;
     }
     const files = Array.from(selectedFiles);
     uploadInFlight.current = true;
@@ -3797,13 +3955,54 @@ function ProjectHome({
       );
       update(() => saved);
       notify(`${files.length} file disimpan ke dataset lokal`);
+      return true;
     } catch (e) {
       notify(e instanceof Error ? e.message : "Upload gagal");
+      return false;
     } finally {
       uploadInFlight.current = false;
       if (input.current) input.current.value = "";
       setUploadProgress(null);
       setDraggingUpload(false);
+    }
+  };
+  const closeVideoWizard = () => {
+    if (videoWizard) URL.revokeObjectURL(videoWizard.url);
+    setVideoWizard(null);
+    setVideoDuration(0);
+    setVideoPreviewPercent(0);
+  };
+  const chooseUpload = (selectedFiles: FileList | File[] | null) => {
+    if (!selectedFiles?.length) return;
+    const files = Array.from(selectedFiles);
+    const videos = files.filter(
+      (file) =>
+        file.type.startsWith("video/") ||
+        /\.(mp4|mov|webm|avi)$/i.test(file.name),
+    );
+    if (!videos.length) {
+      void upload(files);
+      return;
+    }
+    if (files.length !== 1) {
+      notify(
+        "Upload video satu per satu agar frame dapat dipreview terlebih dahulu",
+      );
+      return;
+    }
+    setVideoDuration(0);
+    setVideoPreviewPercent(0);
+    setVideoWizard({
+      file: videos[0],
+      url: URL.createObjectURL(videos[0]),
+      step: "settings",
+    });
+  };
+  const seekVideoPreview = (percent: number) => {
+    const next = Math.max(0, Math.min(100, Math.round(percent)));
+    setVideoPreviewPercent(next);
+    if (videoPreview.current && videoDuration) {
+      videoPreview.current.currentTime = (videoDuration * next) / 100;
     }
   };
   const deleteImage = async (id: string) => {
@@ -3874,7 +4073,7 @@ function ProjectHome({
           multiple
           type="file"
           accept="image/*,video/mp4,video/quicktime,video/webm"
-          onChange={(event) => void upload(event.currentTarget.files)}
+          onChange={(event) => chooseUpload(event.currentTarget.files)}
         />
       </div>
       <div className="project-layout">
@@ -3949,7 +4148,7 @@ function ProjectHome({
             onDrop={(event) => {
               event.preventDefault();
               setDraggingUpload(false);
-              void upload(event.dataTransfer.files);
+              chooseUpload(event.dataTransfer.files);
             }}
           >
             <div className="panel-head">
@@ -4221,6 +4420,208 @@ function ProjectHome({
           </section>
         </div>
       </div>
+      {videoWizard && (
+        <VideoUploadWizard
+          wizard={videoWizard}
+          duration={videoDuration}
+          setDuration={setVideoDuration}
+          percent={videoPreviewPercent}
+          interval={videoFrameInterval}
+          progress={uploadProgress}
+          stage={uploadStage}
+          videoRef={videoPreview}
+          close={closeVideoWizard}
+          setWizard={setVideoWizard}
+          seek={seekVideoPreview}
+          setInterval={setVideoFrameInterval}
+          extract={async () => {
+            if (await upload([videoWizard.file])) closeVideoWizard();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function VideoUploadWizard({
+  wizard,
+  duration,
+  setDuration,
+  percent,
+  interval,
+  progress,
+  stage,
+  videoRef,
+  close,
+  setWizard,
+  seek,
+  setInterval,
+  extract,
+}: {
+  wizard: { file: File; url: string; step: "settings" | "preview" };
+  duration: number;
+  setDuration: (value: number) => void;
+  percent: number;
+  interval: number;
+  progress: number | null;
+  stage: TransferStage;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  close: () => void;
+  setWizard: React.Dispatch<
+    React.SetStateAction<{
+      file: File;
+      url: string;
+      step: "settings" | "preview";
+    } | null>
+  >;
+  seek: (percent: number) => void;
+  setInterval: (value: number) => void;
+  extract: () => Promise<void>;
+}) {
+  return (
+    <div
+      className="modal-bg video-upload-wizard-bg"
+      onMouseDown={() => progress === null && close()}
+    >
+      <section
+        className="video-upload-wizard"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <span className="eyebrow">VIDEO TO FRAMES</span>
+            <h2>
+              {wizard.step === "settings"
+                ? "Atur ekstraksi frame"
+                : "Preview video"}
+            </h2>
+            <p>{wizard.file.name}</p>
+          </div>
+          <button
+            className="icon ghost"
+            aria-label="Close video upload"
+            disabled={progress !== null}
+            onClick={close}
+          >
+            <X />
+          </button>
+        </header>
+        <div className="video-upload-steps">
+          <span className={wizard.step === "settings" ? "active" : ""}>
+            1. Frame interval
+          </span>
+          <span className={wizard.step === "preview" ? "active" : ""}>
+            2. Preview & extract
+          </span>
+        </div>
+        <div
+          className="video-upload-preview"
+          onWheel={(event) => {
+            event.preventDefault();
+            seek(percent + (event.deltaY < 0 ? 1 : -1));
+          }}
+        >
+          <video
+            ref={videoRef}
+            src={wizard.url}
+            controls={wizard.step === "preview"}
+            muted
+            playsInline
+            onLoadedMetadata={(event) => {
+              const nextDuration = event.currentTarget.duration;
+              if (Number.isFinite(nextDuration)) {
+                setDuration(nextDuration);
+                event.currentTarget.currentTime =
+                  (nextDuration * percent) / 100;
+              }
+            }}
+            onTimeUpdate={(event) => {
+              if (duration)
+                seek((event.currentTarget.currentTime / duration) * 100);
+            }}
+          />
+          <span>{percent}% posisi video</span>
+        </div>
+        {wizard.step === "settings" ? (
+          <div className="video-upload-controls">
+            <label>
+              <span>Interval ekstraksi</span>
+              <b>{interval.toLocaleString()} detik/frame</b>
+              <input
+                type="range"
+                min="-4"
+                max="2"
+                step="0.01"
+                value={Math.log10(Math.max(0.0001, interval))}
+                onChange={(event) =>
+                  setInterval(
+                    Number((10 ** Number(event.target.value)).toPrecision(5)),
+                  )
+                }
+              />
+            </label>
+            <label>
+              <span>Preview pada posisi video</span>
+              <b>{percent}%</b>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={percent}
+                onChange={(event) => seek(Number(event.target.value))}
+              />
+            </label>
+            <small>
+              Geser bar atau scroll mouse untuk mencari bagian video. Interval
+              dipakai saat mengekstrak seluruh video menjadi gambar.
+            </small>
+          </div>
+        ) : (
+          <div className="video-upload-confirm">
+            <b>Siap mengekstrak seluruh video</b>
+            <small>
+              Satu gambar dibuat setiap {interval.toLocaleString()} detik.
+              Gunakan Back bila belum sesuai.
+            </small>
+          </div>
+        )}
+        {progress !== null && (
+          <TransferProgress
+            percent={progress}
+            stage={stage}
+            label="Mengunggah video"
+            processingLabel="Mengekstrak frame video"
+          />
+        )}
+        <footer>
+          {wizard.step === "preview" && (
+            <button
+              className="secondary"
+              disabled={progress !== null}
+              onClick={() => setWizard({ ...wizard, step: "settings" })}
+            >
+              Back
+            </button>
+          )}
+          {wizard.step === "settings" ? (
+            <button
+              className="primary"
+              onClick={() => setWizard({ ...wizard, step: "preview" })}
+            >
+              Next <ChevronRight size={15} />
+            </button>
+          ) : (
+            <button
+              className="primary"
+              disabled={progress !== null}
+              onClick={() => void extract()}
+            >
+              <Upload size={15} /> Extract frames
+            </button>
+          )}
+        </footer>
+      </section>
     </div>
   );
 }

@@ -2695,6 +2695,130 @@
   width: 100%;
   accent-color: #7052e4;
 }
+.video-upload-wizard-bg {
+  z-index: 90;
+  padding: 20px;
+}
+.video-upload-wizard {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 24px;
+  border: 1px solid #e2dde8;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 28px 80px rgba(25, 19, 38, 0.28);
+}
+.video-upload-wizard > header,
+.video-upload-wizard footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.video-upload-wizard h2 {
+  margin: 4px 0;
+  color: #332d3c;
+  font-size: 20px;
+}
+.video-upload-wizard header p,
+.video-upload-controls small,
+.video-upload-confirm small {
+  margin: 0;
+  color: #7a7381;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.video-upload-steps {
+  display: flex;
+  gap: 8px;
+  margin: 18px 0 14px;
+}
+.video-upload-steps span {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: #8b8492;
+  background: #f5f3f7;
+  font-size: 10px;
+  font-weight: 750;
+  text-align: center;
+}
+.video-upload-steps span.active {
+  color: #5a40b3;
+  background: #efeaff;
+}
+.video-upload-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 230px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #17141e;
+}
+.video-upload-preview video {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+}
+.video-upload-preview > span {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(20, 17, 28, 0.76);
+  font-size: 10px;
+  font-weight: 700;
+}
+.video-upload-controls {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+.video-upload-controls label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px 10px;
+  color: #554d60;
+  font-size: 11px;
+  font-weight: 700;
+}
+.video-upload-controls label input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: #7052e4;
+}
+.video-upload-controls label b {
+  color: #5c43b4;
+  font-size: 11px;
+}
+.video-upload-confirm {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 10px;
+  color: #55447b;
+  background: #f6f2ff;
+}
+.video-upload-confirm b {
+  font-size: 12px;
+}
+.video-upload-wizard footer {
+  margin-top: 18px;
+  justify-content: flex-end;
+}
+@media (max-width: 560px) {
+  .video-upload-wizard {
+    padding: 17px;
+  }
+  .video-upload-preview {
+    min-height: 180px;
+  }
+}
 @media (max-width: 700px) {
   .video-frame-interval {
     grid-template-columns: 1fr;
