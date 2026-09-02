@@ -1356,12 +1356,19 @@ function App() {
   useEffect(() => {
     api
       .authStatus()
-      .then(setAuth)
+      .then((status) => {
+        setAuth(status);
+        // A valid httpOnly session cookie is already proof of authentication.
+        // Do not ask the same user to confirm their saved account after every
+        // browser refresh; reserve the account chooser for an explicit switch.
+        setSessionConfirmed(Boolean(status.member));
+      })
       // Never fall through to the workspace when the auth backend is
       // unreachable. A failed status check must remain a locked state.
-      .catch(() =>
-        setAuth({ required: true, setupRequired: false, member: null }),
-      );
+      .catch(() => {
+        setSessionConfirmed(false);
+        setAuth({ required: true, setupRequired: false, member: null });
+      });
   }, []);
   useEffect(() => {
     if (!auth || (auth.required && (!auth.member || !sessionConfirmed))) return;
