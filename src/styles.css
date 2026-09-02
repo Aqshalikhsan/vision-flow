@@ -3093,6 +3093,112 @@ body {
   padding: 42px;
   color: var(--muted);
 }
+
+/* Workspace activity: compact, readable dark-surface cards. */
+.job-center {
+  border: 1px solid #a989e84d;
+  border-radius: 16px;
+  background: #110d20f5;
+  box-shadow:
+    0 24px 70px #02010ccc,
+    0 0 0 1px #ffffff08;
+  backdrop-filter: blur(18px);
+}
+.job-center > header,
+.job-center > nav {
+  padding: 15px 17px;
+  border-color: #ffffff18;
+}
+.job-center > header b {
+  color: #fff4e7;
+  font-size: 14px;
+  font-weight: 850;
+  letter-spacing: -0.01em;
+}
+.job-center > header small {
+  display: block;
+  margin-top: 3px;
+  color: #c7b9d8;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.job-center > nav button {
+  min-height: 32px;
+  padding: 7px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #c9bdd9;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 750;
+}
+.job-center > nav button.active {
+  color: #fff1d5;
+  background: #7045a855;
+  border-color: #be99ff55;
+}
+.job-center > nav .read-all {
+  color: #ffc98b;
+}
+.job-center-list {
+  padding: 10px;
+  background: #0b0814aa;
+}
+.job-center-list > button {
+  margin-bottom: 5px;
+  padding: 11px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  color: #f7efff;
+  background: #181126b8;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+.job-center-list > button:hover,
+.job-center-list > button.unread {
+  border-color: #b58dff55;
+  background: #26183d;
+  transform: translateY(-1px);
+}
+.job-center-list button > span:nth-child(2) b {
+  color: #fff7ec;
+  font-size: 11px;
+  font-weight: 800;
+}
+.job-center-list small {
+  color: #cbbdd8;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.job-kind {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #c29bff55;
+  border-radius: 9px;
+  color: #ffd29e;
+  background: #7045a833;
+}
+.job-center-list em,
+.job-center-list time {
+  color: #c6b6d8;
+  font-size: 9px;
+  font-weight: 700;
+}
+.job-center-list em.status {
+  padding: 4px 7px;
+  border: 1px solid #ffffff24;
+  border-radius: 999px;
+  color: #ffe0ad;
+  background: #3a2554;
+  text-transform: capitalize;
+}
+.job-center-list progress {
+  height: 5px;
+  margin-top: 7px;
+  accent-color: #c08cff;
+}
 .evaluation-workbench {
   margin-top: 12px;
   padding: 12px;
