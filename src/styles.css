@@ -3674,3 +3674,20 @@ textarea::placeholder {
     animation: none;
   }
 }
+
+/* Authenticated workspace: keep the application shell uniformly dark and
+   distraction-free. Login has its own visual treatment in inference.css. */
+.app {
+  background: #0b0a12;
+}
+.app main {
+  background: #0b0a12;
+}
+body:has(.app) {
+  background: #0b0a12;
+}
+body:has(.app)::before,
+body:has(.app)::after,
+.app .sidebar::before {
+  display: none;
+}
