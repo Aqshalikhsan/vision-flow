@@ -71,6 +71,11 @@ NVIDIA Automatic Tuning/GCC performance profiles are disabled.
 - The deployed backend supports a shared `this-pc` worker for every account,
   but it must first be created from the production Train page and its downloaded
   setup script must be run on this RTX PC.
+- The production Train page now exposes this only as **Admin lab: daftarkan PC
+  RTX sekali**. Its Windows setup installs `Salnova Training Worker` with boot
+  and logon triggers, and `worker/run-worker.ps1` now also locates the existing
+  `C:\Users\User\SalnovaWorker` runtime. Normal users only select the shared
+  worker once its heartbeat is online.
 
 ## Logging
 
