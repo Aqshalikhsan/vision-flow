@@ -673,7 +673,7 @@ function AuthGate({
         <span className="brand-mark">
           <SupernovaMark />
         </span>
-        <span className="eyebrow">SUPERNOVA SECURE WORKSPACE</span>
+        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
         <h1>
           {authMode === "signup" ? "Buat akun baru" : "Selamat datang kembali"}
         </h1>
@@ -988,7 +988,7 @@ function WorkspaceBoot({
         <span className="brand-mark">
           <Boxes />
         </span>
-        <span className="eyebrow">SUPERNOVA SECURE WORKSPACE</span>
+        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
         {failed ? (
           <>
             <h1>Workspace belum siap</h1>
@@ -2681,9 +2681,7 @@ function Sidebar({
         <span className="brandmark">
           <SupernovaMark />
         </span>
-        <span>
-          supernova <small>LOCAL</small>
-        </span>
+        <span>salnova</span>
       </div>
       <button
         className="workspace"
@@ -3563,7 +3561,7 @@ function Dashboard({
     <div className="content dashboard">
       <section className="welcome">
         <div>
-          <span className="eyebrow">ROBOFLOW LOCAL</span>
+          <span className="eyebrow">SALNOVA WORKSPACE</span>
           <h1>Build computer vision models faster.</h1>
           <p>
             Upload data, annotate, generate a version, train, and deploy, all on
