@@ -7984,3 +7984,85 @@ main :is(article, section, aside, .panel, .card, .modal),
 .auth-page .workspace-switch-account {
   color: #ffc08a !important;
 }
+
+/* Real supernova photography is the login backdrop; the dark veil preserves
+   readable form contrast while a very subtle drift keeps it alive. */
+.auth-page {
+  isolation: isolate;
+  background: #05040b !important;
+}
+.auth-page::before {
+  content: "";
+  position: absolute;
+  inset: -3%;
+  z-index: -2;
+  background:
+    linear-gradient(
+      90deg,
+      #05040bd9 0%,
+      #05040b9e 38%,
+      #05040b36 72%,
+      #05040b14
+    ),
+    url("/supernova-login.png") center / cover no-repeat;
+  animation: login-nebula-drift 24s ease-in-out infinite alternate;
+  transform-origin: center;
+}
+.auth-page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at 50% 50%,
+    transparent 15%,
+    #05040b42 78%,
+    #05040bd9 100%
+  );
+}
+.auth-page > .auth-supernova {
+  display: none;
+}
+@keyframes login-nebula-drift {
+  from {
+    transform: scale(1.02) translate3d(0, 0, 0);
+  }
+  to {
+    transform: scale(1.08) translate3d(-1.5%, 1%, 0);
+  }
+}
+.auth-card .brand-mark,
+.brandmark {
+  background: #ff6a3d !important;
+  border: 2px solid #fff3df;
+  box-shadow:
+    0 0 0 1px #ff6a3d,
+    0 5px 16px #ff6a3d66;
+}
+.auth-card .brand-mark .supernova-core,
+.brandmark .supernova-core {
+  width: 9px;
+  height: 9px;
+  background: #fff8df;
+  box-shadow: none;
+}
+.auth-card .brand-mark .supernova-flare,
+.brandmark .supernova-flare {
+  width: 22px;
+  height: 2px;
+  background: #fff8df;
+  filter: none;
+}
+.auth-card .brand-mark .supernova-ring,
+.brandmark .supernova-ring {
+  width: 19px;
+  height: 9px;
+  border: 1px solid #fff8df;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-page::before {
+    animation: none;
+  }
+}

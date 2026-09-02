@@ -673,7 +673,7 @@ function AuthGate({
         <span className="brand-mark">
           <SupernovaMark />
         </span>
-        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
+        <span className="eyebrow">SUPERNOVA SECURE WORKSPACE</span>
         <h1>
           {authMode === "signup" ? "Buat akun baru" : "Selamat datang kembali"}
         </h1>
@@ -988,7 +988,7 @@ function WorkspaceBoot({
         <span className="brand-mark">
           <Boxes />
         </span>
-        <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
+        <span className="eyebrow">SUPERNOVA SECURE WORKSPACE</span>
         {failed ? (
           <>
             <h1>Workspace belum siap</h1>
@@ -2682,7 +2682,7 @@ function Sidebar({
           <SupernovaMark />
         </span>
         <span>
-          salnova <small>LOCAL</small>
+          supernova <small>LOCAL</small>
         </span>
       </div>
       <button
