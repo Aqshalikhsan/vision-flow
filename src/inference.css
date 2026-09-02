@@ -6002,32 +6002,79 @@
     inset 0 1px #ffe4c429;
   backdrop-filter: blur(18px);
 }
-.auth-card::before {
-  content: "";
+.auth-led-edge {
   position: absolute;
-  inset: -2px;
-  z-index: -1;
-  border-radius: inherit;
-  padding: 2px;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg 292deg,
-    #6ee7ff 312deg,
-    #ffffff 326deg,
-    #ff7ad9 338deg,
-    transparent 354deg 360deg
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: auth-led-orbit 3.8s linear infinite;
+  z-index: 3;
+  display: block;
+  border-radius: 999px;
   pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #6ee7ff,
+    #fff,
+    #ff7ad9,
+    transparent
+  );
+  box-shadow:
+    0 0 8px #6ee7ff,
+    0 0 14px #ff7ad9;
 }
-@keyframes auth-led-orbit {
+.auth-led-edge.edge-top,
+.auth-led-edge.edge-bottom {
+  left: 18px;
+  width: 86px;
+  height: 2px;
+}
+.auth-led-edge.edge-top {
+  top: -2px;
+  animation: led-top 2.8s linear infinite;
+}
+.auth-led-edge.edge-bottom {
+  right: 18px;
+  bottom: -2px;
+  animation: led-bottom 2.8s linear infinite;
+}
+.auth-led-edge.edge-right,
+.auth-led-edge.edge-left {
+  top: 18px;
+  width: 2px;
+  height: 86px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    #6ee7ff,
+    #fff,
+    #ff7ad9,
+    transparent
+  );
+}
+.auth-led-edge.edge-right {
+  right: -2px;
+  animation: led-right 2.8s linear infinite;
+}
+.auth-led-edge.edge-left {
+  left: -2px;
+  animation: led-left 2.8s linear infinite;
+}
+@keyframes led-top {
   to {
-    transform: rotate(360deg);
+    transform: translateX(calc(100% + 300px));
+  }
+}
+@keyframes led-right {
+  to {
+    transform: translateY(calc(100% + 300px));
+  }
+}
+@keyframes led-bottom {
+  to {
+    transform: translateX(calc(-100% - 300px));
+  }
+}
+@keyframes led-left {
+  to {
+    transform: translateY(calc(-100% - 300px));
   }
 }
 .auth-card .brand-mark {
@@ -8240,7 +8287,7 @@ main :is(article, section, aside, .panel, .card, .modal),
 }
 @media (prefers-reduced-motion: reduce) {
   .auth-page::before,
-  .auth-card::before {
+  .auth-led-edge {
     animation: none;
   }
 }

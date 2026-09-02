@@ -670,6 +670,10 @@ function AuthGate({
         <SupernovaMark className="auth-supernova-mark" />
       </div>
       <form className="auth-card" onSubmit={submit}>
+        <i className="auth-led-edge edge-top" aria-hidden="true" />
+        <i className="auth-led-edge edge-right" aria-hidden="true" />
+        <i className="auth-led-edge edge-bottom" aria-hidden="true" />
+        <i className="auth-led-edge edge-left" aria-hidden="true" />
         <span className="brand-mark">
           <SupernovaMark />
         </span>
@@ -1061,6 +1065,10 @@ function AccountResume({
         <SupernovaMark className="auth-supernova-mark" />
       </div>
       <section className="auth-card account-resume-card">
+        <i className="auth-led-edge edge-top" aria-hidden="true" />
+        <i className="auth-led-edge edge-right" aria-hidden="true" />
+        <i className="auth-led-edge edge-bottom" aria-hidden="true" />
+        <i className="auth-led-edge edge-left" aria-hidden="true" />
         <span className="brand-mark">
           <SupernovaMark />
         </span>
