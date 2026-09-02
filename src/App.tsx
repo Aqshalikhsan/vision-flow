@@ -9590,7 +9590,8 @@ function DatasetTrain({
         'print("Installing Salnova worker dependencies...")',
         'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/visionflow_worker.py", "visionflow_worker.py")',
         'urllib.request.urlretrieve(SERVER + "/api/training-workers/setup/requirements.txt", "requirements.txt")',
-        'subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])',
+        "# Keep Colab's CUDA-enabled PyTorch; installing requirements.txt would replace it with a large generic wheel.",
+        'subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "requests>=2.32,<3", "ultralytics>=8.3,<9"])',
         "import torch",
         "CUDA_READY = torch.cuda.is_available()",
         'print("PyTorch:", torch.__version__, "| CUDA runtime:", torch.version.cuda, "| GPU ready:", CUDA_READY)',
@@ -10805,10 +10806,21 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
               <article>
                 <b>4. Google Colab</b>
                 <ol>
-                  <li>Aktifkan runtime GPU di Colab.</li>
-                  <li>Unduh notebook (cara utama) atau script.</li>
-                  <li>Run all dan biarkan runtime tersambung.</li>
-                  <li>Pilih worker Colab lalu Start training.</li>
+                  <li>
+                    Buka <b>colab.research.google.com</b> dan pilih Runtime GPU.
+                  </li>
+                  <li>
+                    Klik Notebook, masukkan URL HTTPS Salnova, lalu unduh file
+                    .ipynb.
+                  </li>
+                  <li>
+                    Di Colab pilih File → Upload notebook, buka file tersebut,
+                    lalu Run all.
+                  </li>
+                  <li>
+                    Tunggu worker berstatus online, pilih worker Colab, lalu
+                    Start training.
+                  </li>
                 </ol>
                 <span className="worker-downloads">
                   <button onClick={() => void downloadColabNotebook()}>
