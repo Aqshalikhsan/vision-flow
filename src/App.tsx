@@ -10169,6 +10169,60 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
               Setiap tombol worker membuat token sekali pakai dan langsung
               mengunduh script yang sudah berisi alamat server ini.
             </p>
+            <details className="worker-setup-guide" open>
+              <summary>
+                <CircleHelp />
+                <span>
+                  <b>Setelah script terunduh</b>
+                  <small>
+                    Jalankan setup di device target hingga status worker online.
+                  </small>
+                </span>
+              </summary>
+              <div className="worker-setup-platforms">
+                <article>
+                  <b>Windows (PowerShell)</b>
+                  <ol>
+                    <li>
+                      Masuk ke folder Downloads:
+                      <code>cd "$env:USERPROFILE\Downloads"</code>
+                    </li>
+                    <li>
+                      Buka blokir file hasil download:
+                      <code>Unblock-File '.\salnova-own-device-setup.ps1'</code>
+                    </li>
+                    <li>
+                      Jalankan setup:
+                      <code>
+                        powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                        '.\salnova-own-device-setup.ps1'
+                      </code>
+                    </li>
+                  </ol>
+                  <small>
+                    Jika nama file memiliki akhiran, misalnya <code>(2)</code>,
+                    gunakan nama tersebut pada kedua perintah file.
+                  </small>
+                </article>
+                <article>
+                  <b>Linux / macOS (Terminal)</b>
+                  <ol>
+                    <li>
+                      Masuk ke folder Downloads:
+                      <code>cd ~/Downloads</code>
+                    </li>
+                    <li>
+                      Berikan izin eksekusi:
+                      <code>chmod +x salnova-own-device-setup.sh</code>
+                    </li>
+                    <li>
+                      Jalankan setup:
+                      <code>./salnova-own-device-setup.sh</code>
+                    </li>
+                  </ol>
+                </article>
+              </div>
+            </details>
             <div className="training-setup-grid">
               <article>
                 <b>1. PC RTX 5060</b>
