@@ -3819,6 +3819,7 @@ def training_worker_setup_file(filename: str):
     allowed = {
         "visionflow_worker.py": ROOT / "worker" / "visionflow_worker.py",
         "requirements.txt": ROOT / "worker" / "requirements.txt",
+        "run-worker.ps1": ROOT / "worker" / "run-worker.ps1",
     }
     path = allowed.get(filename)
     if not path:

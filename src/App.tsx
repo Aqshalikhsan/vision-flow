@@ -9038,7 +9038,7 @@ function DatasetTrain({
   }, []);
   const createWorker = async (profile: Exclude<TrainingRoute, "nas">) => {
     const defaults: Record<Exclude<TrainingRoute, "nas">, string> = {
-      "this-pc": "PC RTX 5060",
+      "this-pc": "PC RTX 50/60 Lab",
       "own-device": "Device training",
       colab: "Google Colab",
     };
@@ -9172,6 +9172,7 @@ $server = '${quote(workerServer)}'
 $token = '${quote(tokenValue)}'
 $provider = '${provider}'
 $workerId = '${quote(workerIdValue)}'
+$installAsLabWorker = ${profile === "this-pc" ? "$true" : "$false"}
 $workerRoot = if ($env:SALNOVA_WORKER_HOME) {
   $env:SALNOVA_WORKER_HOME
 } elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE "VisionFlowWorker")) {
@@ -9245,6 +9246,9 @@ $env:PIP_NO_CACHE_DIR = "1"
 Write-Step "Mengunduh worker terbaru dari $server"
 Invoke-WebRequest -UseBasicParsing "$rawBase/visionflow_worker.py" -OutFile (Join-Path $workerRoot "worker/visionflow_worker.py")
 Invoke-WebRequest -UseBasicParsing "$rawBase/requirements.txt" -OutFile (Join-Path $workerRoot "worker/requirements.txt")
+if ($installAsLabWorker) {
+  Invoke-WebRequest -UseBasicParsing "$rawBase/run-worker.ps1" -OutFile (Join-Path $workerRoot "worker/run-worker.ps1")
+}
 
 if (!(Test-Path $venvPython)) {
   Write-Step "Membuat virtual environment terisolasi"
@@ -9310,7 +9314,12 @@ if ($LASTEXITCODE -ne 0) { throw "Verifikasi package gagal." }
 
 Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor Green
 Write-Host "Log dan checkpoint device disimpan di $deviceRoot" -ForegroundColor Green
-& $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token --provider $provider --work-dir $deviceRoot --keep-jobs
+if ($installAsLabWorker) {
+  Write-Host "PC RTX lab akan aktif otomatis saat PC menyala." -ForegroundColor Green
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $workerRoot "worker/run-worker.ps1") -Token $token -Server $server -Install
+} else {
+  & $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token --provider $provider --work-dir $deviceRoot --keep-jobs
+}
 `;
     const url = URL.createObjectURL(
       new Blob([script], { type: "text/plain;charset=utf-8" }),
@@ -9867,8 +9876,8 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                   [
                     [
                       "this-pc",
-                      "PC RTX 5060",
-                      "PC RTX bersama untuk seluruh pengguna",
+                      "PC RTX 50/60 Lab",
+                      "GPU lab bersama, langsung pilih saat online",
                     ],
                     [
                       "own-device",
@@ -9949,11 +9958,10 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                 </p>
               </article>
               <article>
-                <b>PC RTX 5060</b>
+                <b>PC RTX 50/60 Lab</b>
                 <p>
-                  PC bersama: semua pengguna dapat memilihnya selama worker
-                  online. Pemilik PC perlu menyalakan worker dan membiarkannya
-                  aktif selama training.
+                  PC lab bersama. Admin mengelola worker agar aktif otomatis
+                  saat PC menyala; user cukup memilihnya saat status online.
                 </p>
               </article>
               <article>
@@ -10225,27 +10233,14 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
             </details>
             <div className="training-setup-grid">
               <article>
-                <b>1. PC RTX 5060</b>
+                <b>1. PC RTX 50/60 Lab</b>
                 <ol>
-                  <li>Unduh setup sesuai OS.</li>
-                  <li>Jalankan script dari folder Downloads.</li>
-                  <li>Tunggu worker berstatus online.</li>
-                  <li>Pilih PC RTX 5060 lalu Start training.</li>
+                  <li>Resource GPU bersama yang dikelola admin lab.</li>
+                  <li>
+                    Pastikan status worker <b>online</b>.
+                  </li>
+                  <li>Pilih PC RTX 50/60 Lab lalu Start training.</li>
                 </ol>
-                <span className="worker-downloads">
-                  <button
-                    onClick={() =>
-                      void prepareWorkerSetup("this-pc", "windows")
-                    }
-                  >
-                    <Download /> Windows .ps1
-                  </button>
-                  <button
-                    onClick={() => void prepareWorkerSetup("this-pc", "linux")}
-                  >
-                    <Download /> Linux .sh
-                  </button>
-                </span>
               </article>
               <article>
                 <b>2. Device sendiri</b>
@@ -10324,7 +10319,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                     <small>
                       {worker.status} ·{" "}
                       {worker.profile === "this-pc"
-                        ? "PC RTX 5060"
+                        ? "PC RTX 50/60 Lab"
                         : worker.profile === "colab"
                           ? "Google Colab"
                           : "Device sendiri"}

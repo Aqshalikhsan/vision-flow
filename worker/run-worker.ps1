@@ -57,7 +57,9 @@ $DefaultServers = @(
     "https://salnova-ai.my.id"
 )
 
-$ConfigDir = Join-Path $env:LOCALAPPDATA "Salnova"
+# Keep the lab worker token next to its runtime instead of in LOCALAPPDATA.
+# A task started at boot may run before an interactive user profile is loaded.
+$ConfigDir = Join-Path (Split-Path -Parent $PSScriptRoot) ".salnova"
 $ConfigFile = Join-Path $ConfigDir "worker.json"
 $TaskName = "Salnova Training Worker"
 
@@ -73,6 +75,7 @@ function Find-WorkerPython {
     # setup.ps1 membuat venv di SALNOVA_WORKER_HOME atau .runtime/VisionFlowWorker.
     $roots = @()
     if ($env:SALNOVA_WORKER_HOME) { $roots += $env:SALNOVA_WORKER_HOME }
+    $roots += (Get-RepoRoot)
     $roots += (Join-Path (Get-RepoRoot) ".runtime/VisionFlowWorker")
     $roots += (Join-Path $env:LOCALAPPDATA "VisionFlowWorker")
 
@@ -165,14 +168,19 @@ function Install-AutoStart {
     $scriptPath = $PSCommandPath
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    # Start at boot for a dedicated lab PC, and repeat at logon as a fallback
+    # for Windows editions that defer user tasks until an interactive session.
+    $triggers = @(
+        (New-ScheduledTaskTrigger -AtStartup),
+        (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
+    )
     # Worker berumur panjang: jangan dihentikan otomatis, dan tetap jalan saat baterai.
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-        -Settings $settings -Description "Menjalankan Salnova training worker otomatis saat login." `
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
+        -Settings $settings -Description "Menjalankan Salnova training worker otomatis saat PC lab menyala atau user login." `
         -Force | Out-Null
     Write-Step "Auto-start terpasang sebagai Scheduled Task '$TaskName'."
 }

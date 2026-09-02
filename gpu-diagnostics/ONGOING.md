@@ -60,6 +60,18 @@ training job. If instability returns after a reboot, first rerun
 `gpu-diagnostics/apply-safe-gpu-reset.ps1` as Administrator and verify that
 NVIDIA Automatic Tuning/GCC performance profiles are disabled.
 
+## Worker registration check (2026-09-02)
+
+- The RTX 5060 runtime and CUDA environment remain installed and were
+  previously validated, but no `Salnova Training Worker` scheduled task,
+  worker process, or local worker configuration was active during this check.
+- The production registry contains no `this-pc` (shared PC RTX) worker. Its
+  non-revoked entries are `own-device` workers; their stored heartbeat is stale,
+  so none is currently usable as an online shared RTX worker.
+- The deployed backend supports a shared `this-pc` worker for every account,
+  but it must first be created from the production Train page and its downloaded
+  setup script must be run on this RTX PC.
+
 ## Logging
 
 - Monitor script: `gpu-diagnostics/monitor-gpu.ps1`
