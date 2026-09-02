@@ -4634,7 +4634,11 @@ function VideoUploadWizard({
               disabled={progress !== null}
               onClick={() => {
                 setPlayingSamplePreview(false);
-                seek(0);
+                if (videoRef.current) {
+                  videoRef.current.pause();
+                  videoRef.current.currentTime = 0;
+                }
+                setPercent(0);
                 setWizard({ ...wizard, step: "settings" });
               }}
             >
