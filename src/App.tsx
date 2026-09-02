@@ -1117,7 +1117,7 @@ const ONBOARDING_TOUR: TourStep[] = [
     eyebrow: "1 · DASHBOARD",
     title: "Selamat datang di Salnova",
     description:
-      "Tutorial dimulai dari Dashboard dan akan membawa Anda melihat tujuh jenis project computer vision, dari dataset sampai hasil deployment.",
+      "Panduan bergerak dari Dashboard ke project, dataset, anotasi, training, registry, hingga deployment secara berurutan.",
   },
   {
     page: "project",
@@ -1225,12 +1225,41 @@ function OnboardingTour({
   finish: () => Promise<void>;
 }) {
   const item = steps[step];
+  const [spotlight, setSpotlight] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const model =
     project?.models.find((candidate) => candidate.stage === "production") ||
     project?.models.at(-1);
+  useEffect(() => {
+    const update = () => {
+      const target = document.querySelector<HTMLElement>(".content");
+      if (!target) return setSpotlight(null);
+      const rect = target.getBoundingClientRect();
+      const pad = 8;
+      setSpotlight({
+        top: Math.max(12, rect.top - pad),
+        left: Math.max(12, rect.left - pad),
+        width: Math.min(window.innerWidth - 24, rect.width + pad * 2),
+        height: Math.min(window.innerHeight - 24, rect.height + pad * 2),
+      });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    const target = document.querySelector(".content");
+    if (target) observer.observe(target);
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [step, item.page]);
   return (
     <div className="onboarding-layer" role="dialog" aria-modal="true">
-      <div className="onboarding-spotlight" />
+      <div className="onboarding-spotlight" style={spotlight || undefined} />
       <aside className="onboarding-card">
         <header>
           <span>{item.eyebrow}</span>
@@ -1609,7 +1638,9 @@ function App() {
       setAuth((current) => (current ? { ...current, member } : current));
     }
     setManualTour(false);
-    notify("Tutorial selesai. Anda dapat membukanya kembali dari Dashboard.");
+    notify(
+      "Panduan alur selesai. Anda dapat membukanya kembali dari Dashboard.",
+    );
   };
   const startTour = () => {
     const projectCount =
@@ -3574,7 +3605,7 @@ function Dashboard({
             onClick={startTour}
           >
             <BookOpen size={16} />
-            Tutorial 7 project
+            Panduan alur kerja
           </button>
           <button className="primary" onClick={create}>
             <Plus size={17} />

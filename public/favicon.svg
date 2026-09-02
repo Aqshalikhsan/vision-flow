@@ -1,14 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#9b7cff"/>
-      <stop offset="1" stop-color="#5b21b6"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="15" fill="url(#g)"/>
-  <g fill="none" stroke="#fff" stroke-width="3.5" stroke-linejoin="round">
-    <path d="m32 13 11 6.3v12.6L32 38.2 21 31.9V19.3z"/>
-    <path d="m19 29 11 6.3v12.6L19 54.2 8 47.9V35.3zM45 29l11 6.3v12.6l-11 6.3-11-6.3V35.3z"/>
-    <path d="m21 19.3 11 6.4 11-6.4M8 35.3l11 6.4 11-6.4m4 0 11 6.4 11-6.4M32 25.7v12.5M19 41.7v12.5m26-12.5v12.5"/>
+  <rect width="64" height="64" rx="14" fill="#0b0b10"/>
+  <g fill="none" stroke="#fff" stroke-linecap="round">
+    <circle cx="32" cy="32" r="8" fill="#fff" stroke="none"/>
+    <ellipse cx="32" cy="32" rx="25" ry="10" stroke-width="3" transform="rotate(-24 32 32)"/>
+    <ellipse cx="32" cy="32" rx="25" ry="10" stroke-width="2" transform="rotate(38 32 32)"/>
+    <path d="M8 32h48M32 8v48" stroke-width="2" opacity=".8"/>
   </g>
 </svg>
