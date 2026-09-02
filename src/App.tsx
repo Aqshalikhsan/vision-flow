@@ -4481,6 +4481,22 @@ function VideoUploadWizard({
   setInterval: (value: number) => void;
   extract: () => Promise<void>;
 }) {
+  const [playingSamplePreview, setPlayingSamplePreview] = useState(false);
+  useEffect(() => {
+    if (!playingSamplePreview) return;
+    const timer = window.setInterval(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      const next = video.currentTime + interval;
+      if (duration && next >= duration) {
+        video.currentTime = duration;
+        setPlayingSamplePreview(false);
+      } else {
+        video.currentTime = next;
+      }
+    }, 550);
+    return () => window.clearInterval(timer);
+  }, [duration, interval, playingSamplePreview, videoRef]);
   return (
     <div
       className="modal-bg video-upload-wizard-bg"
@@ -4527,7 +4543,7 @@ function VideoUploadWizard({
           <video
             ref={videoRef}
             src={wizard.url}
-            controls={wizard.step === "preview"}
+            controls={false}
             muted
             playsInline
             onLoadedMetadata={(event) => {
@@ -4548,6 +4564,16 @@ function VideoUploadWizard({
             }}
           />
           <span>{percent}% posisi video</span>
+          {wizard.step === "preview" && (
+            <button
+              type="button"
+              className="video-sample-play"
+              onClick={() => setPlayingSamplePreview((current) => !current)}
+            >
+              {playingSamplePreview ? <Square size={14} /> : <Play size={14} />}
+              {playingSamplePreview ? "Pause preview" : "Play sampled preview"}
+            </button>
+          )}
         </div>
         {wizard.step === "settings" ? (
           <div className="video-upload-controls">
@@ -4588,8 +4614,8 @@ function VideoUploadWizard({
           <div className="video-upload-confirm">
             <b>Siap mengekstrak seluruh video</b>
             <small>
-              Satu gambar dibuat setiap {interval.toLocaleString()} detik.
-              Gunakan Back bila belum sesuai.
+              Preview melompat setiap {interval.toLocaleString()} detik, sama
+              seperti frame yang akan diekstrak. Gunakan Back bila belum sesuai.
             </small>
           </div>
         )}
