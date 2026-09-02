@@ -57,10 +57,21 @@ $DefaultServers = @(
     "https://salnova-ai.my.id"
 )
 
-# Keep the lab worker token next to its runtime instead of in LOCALAPPDATA.
-# A task started at boot may run before an interactive user profile is loaded.
-$ConfigDir = Join-Path (Split-Path -Parent $PSScriptRoot) ".salnova"
+# Keep the lab worker token next to its runtime instead of in the repository or
+# LOCALAPPDATA. A task started at boot may run before an interactive profile is
+# fully loaded, but the runtime directory is already available on this PC.
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+$KnownRuntimeRoot = Join-Path $env:USERPROFILE "SalnovaWorker"
+$ConfigRoot = if ($env:SALNOVA_WORKER_HOME) {
+    $env:SALNOVA_WORKER_HOME
+} elseif (Test-Path -LiteralPath $KnownRuntimeRoot) {
+    $KnownRuntimeRoot
+} else {
+    $RepoRoot
+}
+$ConfigDir = Join-Path $ConfigRoot ".salnova"
 $ConfigFile = Join-Path $ConfigDir "worker.json"
+$LegacyConfigFile = Join-Path $RepoRoot ".salnova/worker.json"
 $TaskName = "Salnova Training Worker"
 
 function Write-Step { param([string] $Message) Write-Host "==> $Message" -ForegroundColor Cyan }
@@ -115,8 +126,14 @@ function Find-WorkerScript {
 }
 
 function Read-Config {
-    if (-not (Test-Path -LiteralPath $ConfigFile)) { return $null }
-    try { return (Get-Content -LiteralPath $ConfigFile -Raw | ConvertFrom-Json) }
+    $candidate = if (Test-Path -LiteralPath $ConfigFile) {
+        $ConfigFile
+    } elseif (Test-Path -LiteralPath $LegacyConfigFile) {
+        $LegacyConfigFile
+    } else {
+        return $null
+    }
+    try { return (Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json) }
     catch { Write-Warn "Konfigurasi rusak, akan ditulis ulang: $ConfigFile"; return $null }
 }
 
@@ -132,8 +149,9 @@ function Write-Config {
     try {
         $acl = Get-Acl -LiteralPath $ConfigFile
         $acl.SetAccessRuleProtection($true, $false)
+        $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $env:USERNAME, "FullControl", "Allow")
+            $currentIdentity, "FullControl", "Allow")
         $acl.SetAccessRule($rule)
         Set-Acl -LiteralPath $ConfigFile -AclObject $acl
     } catch {
