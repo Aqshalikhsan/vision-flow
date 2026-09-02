@@ -1653,15 +1653,6 @@ function App() {
         switchAccount={switchAccount}
       />
     );
-  if (backend === "checking")
-    return (
-      <WorkspaceBoot
-        member={auth.member}
-        progress={bootProgress}
-        retry={() => setWorkspaceReload((current) => current + 1)}
-        switchAccount={switchAccount}
-      />
-    );
   if (backend === "offline")
     return (
       <WorkspaceBoot
