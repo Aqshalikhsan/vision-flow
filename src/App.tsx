@@ -812,7 +812,7 @@ function AuthGate({
               aria-pressed={language === "id"}
               onClick={() => changeLanguage("id")}
             >
-              Indonesia
+              ID
             </button>
             <button
               type="button"
@@ -820,7 +820,7 @@ function AuthGate({
               aria-pressed={language === "en"}
               onClick={() => changeLanguage("en")}
             >
-              English
+              EN
             </button>
           </div>
           <span className="brand-mark">
