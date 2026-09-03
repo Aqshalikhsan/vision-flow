@@ -6367,6 +6367,11 @@
   color: #fff;
   background: linear-gradient(135deg, #7357e7, #4f32bd);
   box-shadow: 0 14px 34px rgba(70, 43, 161, 0.34);
+  cursor: grab;
+  touch-action: none;
+}
+.gemini-launcher:active {
+  cursor: grabbing;
 }
 .gemini-launcher svg {
   width: 24px;
@@ -6390,6 +6395,12 @@
   padding: 14px 15px;
   color: #fff;
   background: linear-gradient(125deg, #5032b8, #7658e4);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.gemini-panel > header:active {
+  cursor: grabbing;
 }
 .gemini-panel > header > div {
   display: grid;
@@ -8722,4 +8733,38 @@ main :is(article, section, aside, .panel, .card, .modal),
   .auth-slide {
     transition: none;
   }
+}
+
+/* High-contrast account and assistant text on the dark workspace surfaces. */
+.profile-popover .profile-identity b,
+.profile-popover .profile-photo-upload b,
+.profile-popover .profile-backend b,
+.profile-popover .profile-action b,
+.profile-popover .profile-logout {
+  color: #fff !important;
+}
+.profile-popover .profile-identity small,
+.profile-popover .profile-photo-upload small,
+.profile-popover .profile-backend small,
+.profile-popover .profile-action small {
+  color: #f3edf7 !important;
+}
+.profile-popover .profile-close,
+.profile-popover .profile-action > svg,
+.profile-popover .profile-photo-upload > svg,
+.profile-popover .profile-backend.online > svg {
+  color: #fff !important;
+}
+.gemini-message.assistant,
+.gemini-note,
+.gemini-panel textarea,
+.gemini-panel textarea::placeholder {
+  color: #fff !important;
+}
+.gemini-message.assistant {
+  border-color: #ffffff24;
+  background: #211a32;
+}
+.gemini-note {
+  color: #f0e9f5 !important;
 }

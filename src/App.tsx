@@ -970,6 +970,17 @@ function GeminiAssistant({
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [assistantOffset, setAssistantOffset] = useState({ x: 0, y: 0 });
+  const assistantRef = useRef<HTMLDivElement>(null);
+  const dragState = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    offsetX: number;
+    offsetY: number;
+    rect: DOMRect;
+  } | null>(null);
+  const suppressLauncherClick = useRef(false);
   const [messages, setMessages] = useState<AssistantUiMessage[]>([
     {
       role: "assistant",
@@ -981,6 +992,78 @@ function GeminiAssistant({
   useEffect(() => {
     if (open) endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [open, messages, busy]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const rect = assistantRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const correctionX =
+        rect.left < 8
+          ? 8 - rect.left
+          : rect.right > window.innerWidth - 8
+            ? window.innerWidth - 8 - rect.right
+            : 0;
+      const correctionY =
+        rect.top < 8
+          ? 8 - rect.top
+          : rect.bottom > window.innerHeight - 8
+            ? window.innerHeight - 8 - rect.bottom
+            : 0;
+      if (correctionX || correctionY) {
+        setAssistantOffset((current) => ({
+          x: current.x + correctionX,
+          y: current.y + correctionY,
+        }));
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+  const startAssistantDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    const draggingLauncher =
+      event.currentTarget.classList.contains("gemini-launcher");
+    if (!draggingLauncher && target.closest("button, textarea")) return;
+    const rect = assistantRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragState.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: assistantOffset.x,
+      offsetY: assistantOffset.y,
+      rect,
+    };
+    suppressLauncherClick.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveAssistant = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragState.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 5) {
+      suppressLauncherClick.current = true;
+    }
+    const nextLeft = Math.min(
+      window.innerWidth - drag.rect.width - 8,
+      Math.max(8, drag.rect.left + deltaX),
+    );
+    const nextTop = Math.min(
+      window.innerHeight - drag.rect.height - 8,
+      Math.max(8, drag.rect.top + deltaY),
+    );
+    setAssistantOffset({
+      x: drag.offsetX + nextLeft - drag.rect.left,
+      y: drag.offsetY + nextTop - drag.rect.top,
+    });
+  };
+  const endAssistantDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (dragState.current?.pointerId !== event.pointerId) return;
+    dragState.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     const content = input.trim();
@@ -1020,10 +1103,22 @@ function GeminiAssistant({
     }
   };
   return (
-    <div className={`gemini-assistant ${open ? "open" : ""}`}>
+    <div
+      ref={assistantRef}
+      className={`gemini-assistant ${open ? "open" : ""}`}
+      style={{
+        transform: `translate3d(${assistantOffset.x}px, ${assistantOffset.y}px, 0)`,
+      }}
+    >
       {open && (
         <section className="gemini-panel" aria-label="Salnova AI Assistant">
-          <header>
+          <header
+            title="Seret untuk memindahkan chatbot"
+            onPointerDown={startAssistantDrag}
+            onPointerMove={moveAssistant}
+            onPointerUp={endAssistantDrag}
+            onPointerCancel={endAssistantDrag}
+          >
             <span className="gemini-avatar">
               <Sparkles />
             </span>
@@ -1085,7 +1180,18 @@ function GeminiAssistant({
         type="button"
         className="gemini-launcher"
         aria-label={open ? "Tutup chatbot" : "Buka chatbot"}
-        onClick={() => setOpen((current) => !current)}
+        title="Klik untuk membuka, atau seret untuk memindahkan"
+        onPointerDown={startAssistantDrag}
+        onPointerMove={moveAssistant}
+        onPointerUp={endAssistantDrag}
+        onPointerCancel={endAssistantDrag}
+        onClick={() => {
+          if (suppressLauncherClick.current) {
+            suppressLauncherClick.current = false;
+            return;
+          }
+          setOpen((current) => !current);
+        }}
       >
         {open ? <X /> : <MessageCircle />}
       </button>
