@@ -3691,3 +3691,54 @@ body:has(.app)::after,
 .app .sidebar::before {
   display: none;
 }
+
+/* Global dark-workspace contrast pass. Keep semantic accent colours intact,
+   but make supporting copy, labels, metadata, and inactive controls readable
+   on the dark surfaces throughout every authenticated page. */
+.app {
+  --ink: #f8f6ff;
+  --muted: #e7e1f0;
+}
+.app p,
+.app small,
+.app label,
+.app dt,
+.app dd,
+.app .muted,
+.app .meta,
+.app .crumb span,
+.app .panel-head p,
+.app .project-info p,
+.app .stat small,
+.app .tabs button:not(.active),
+.app .ghost,
+.app .sidebar nav button:not(.active),
+.app .sidebar-bottom > button,
+.app .workspace small,
+.app .workspace b,
+.app .training-fields label,
+.app .config-guide-grid p,
+.app .worker-setup-guide small,
+.app .laptop-workers .muted {
+  color: #f1edf8 !important;
+}
+.app .panel h2,
+.app .panel h3,
+.app .panel-head h2,
+.app .project-info h3,
+.app .stat b,
+.app .project-title h1,
+.app .project-title h2,
+.app .project-title h3,
+.app .registry-card h3,
+.app .registry-head em,
+.app .registry-config b,
+.app .training-setup-grid b,
+.app .config-guide-grid b {
+  color: #ffffff !important;
+}
+.app input::placeholder,
+.app textarea::placeholder {
+  color: #d7cfe2 !important;
+  opacity: 1;
+}
