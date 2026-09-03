@@ -9596,6 +9596,14 @@ main :is(article, section, aside, .panel, .card, .modal),
   margin-top: 4px;
   color: #c3a5ff !important;
 }
+
+.train-page .fine-tune-selection-hint {
+  display: block;
+  margin-top: 6px;
+  color: #cfc2da;
+  font-size: 10px;
+  line-height: 1.45;
+}
 .insights-page .health-issues,
 .insights-page .annotation-jobs,
 .insights-page .active-learning-panel {

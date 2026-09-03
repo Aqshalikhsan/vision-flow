@@ -10054,6 +10054,12 @@ function DatasetTrain({
   const [baseModelId, setBaseModelId] = useState(
     () => sessionStorage.getItem(`visionflow-finetune-${project.id}`) || "",
   );
+  // A completed model is a valid fine-tune source. Older API responses may
+  // not include the deployable flag even though the model is ready, so do not
+  // hide it from the selector solely because that optional flag is missing.
+  const fineTuneModels = project.models.filter(
+    (model) => model.status === "ready" || model.deployable === true,
+  );
   const [freezeLayers, setFreezeLayers] = useState(0);
   const [weightDecay, setWeightDecay] = useState(0.0005);
   const [cosLr, setCosLr] = useState(false);
@@ -10153,6 +10159,15 @@ function DatasetTrain({
       setVersionId(latestVersionId);
     }
   }, [project.versions, versionId]);
+  useEffect(() => {
+    if (
+      baseModelId &&
+      !fineTuneModels.some((model) => model.id === baseModelId)
+    ) {
+      setBaseModelId("");
+      sessionStorage.removeItem(`visionflow-finetune-${project.id}`);
+    }
+  }, [baseModelId, fineTuneModels, project.id]);
   useEffect(() => {
     const refresh = () =>
       api
@@ -10868,13 +10883,20 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                 }}
               >
                 <option value="">Official pretrained checkpoint</option>
-                {project.models.filter(modelCanDeploy).map((model) => (
+                {fineTuneModels.map((model) => (
                   <option value={model.id} key={model.id}>
                     {model.alias || model.name} · v{model.version} ·{" "}
                     {model.status}
                   </option>
                 ))}
               </select>
+              <small className="fine-tune-selection-hint">
+                {baseModelId
+                  ? `Fine-tuning dari ${fineTuneModels.find((model) => model.id === baseModelId)?.alias || fineTuneModels.find((model) => model.id === baseModelId)?.name || "model terpilih"}`
+                  : fineTuneModels.length
+                    ? "Pilih model hasil training sebelumnya, atau gunakan checkpoint resmi."
+                    : "Belum ada model siap. Jalankan training pertama dengan checkpoint resmi."}
+              </small>
             </label>
             <label>
               Epochs
