@@ -8768,3 +8768,302 @@ main :is(article, section, aside, .panel, .card, .modal),
 .gemini-note {
   color: #f0e9f5 !important;
 }
+.profile-popover .profile-backend.online,
+.profile-popover .profile-backend.online * {
+  color: #fff !important;
+}
+
+/* Expandable support scroll: chatbot and persisted bug reporting share one
+   movable launcher without covering the workspace permanently. */
+.gemini-launcher {
+  position: relative;
+  width: 58px;
+  height: 52px;
+  border-radius: 17px 17px 17px 7px;
+  background: linear-gradient(145deg, #8b68f2, #5130b8 72%, #321b72);
+  box-shadow:
+    inset 0 1px #ffffff4d,
+    inset 0 -5px 10px #240f6255,
+    0 14px 34px #29126b80;
+}
+.gemini-launcher::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  width: 19px;
+  height: 3px;
+  border-radius: 99px;
+  background: #ffffff47;
+}
+.support-actions {
+  display: grid;
+  justify-items: end;
+  gap: 9px;
+  pointer-events: auto;
+}
+.support-actions > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 132px;
+  padding: 7px 11px 7px 7px;
+  border: 1px solid #b99aff55;
+  border-radius: 999px 999px 10px 999px;
+  color: #fff;
+  background: #181027ed;
+  box-shadow: 0 10px 26px #06020e8c;
+  backdrop-filter: blur(14px);
+  opacity: 0;
+  transform: translateY(18px) scale(0.82) rotate(3deg);
+  transform-origin: bottom right;
+  animation: support-action-rise 0.42s cubic-bezier(0.2, 0.9, 0.24, 1.2)
+    forwards;
+}
+.support-actions > button:nth-child(2) {
+  animation-delay: 0.09s;
+}
+.support-actions > button:hover {
+  border-color: #dfcaff;
+  background: #2a1944;
+  transform: translateY(-1px);
+}
+.support-actions > button > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(145deg, #9b78ff, #6240ca);
+  box-shadow: inset 0 1px #ffffff45;
+}
+.support-actions > button:nth-child(2) > span {
+  background: linear-gradient(145deg, #ff9278, #b84672);
+}
+.support-actions svg {
+  width: 17px;
+}
+.support-actions b {
+  color: #fff !important;
+  font-size: 11px;
+}
+@keyframes support-action-rise {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
+}
+
+.bug-report-panel {
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(650px, calc(100vh - 100px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #c6a6ff55;
+  border-radius: 18px;
+  color: #fff;
+  background: #120d20f5;
+  box-shadow: 0 26px 75px #05020dcc;
+  backdrop-filter: blur(18px);
+}
+.bug-report-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 15px;
+  background: linear-gradient(125deg, #713d87, #9a4667);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.bug-report-panel > header:active {
+  cursor: grabbing;
+}
+.bug-report-panel > header > div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+.bug-report-panel > header b,
+.bug-report-panel > header small {
+  color: #fff !important;
+}
+.bug-report-panel > header small {
+  opacity: 0.8;
+}
+.bug-report-panel > header > button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #ffffff18;
+}
+.bug-report-avatar {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #ffffff1f;
+}
+.bug-report-avatar svg,
+.bug-report-panel > header button svg {
+  width: 18px;
+}
+.bug-report-panel > form {
+  display: grid;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 16px;
+}
+.bug-report-panel label {
+  display: grid;
+  gap: 6px;
+  color: #fff !important;
+  font-size: 11px;
+  font-weight: 750;
+}
+.bug-report-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.bug-report-panel :is(input, select, textarea) {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #ffffff26;
+  border-radius: 10px;
+  color: #fff;
+  background: #21182f;
+  outline: none;
+}
+.bug-report-panel :is(input, select, textarea):focus {
+  border-color: #c59cff;
+  box-shadow: 0 0 0 3px #9f6fe81f;
+}
+.bug-report-panel textarea {
+  resize: vertical;
+}
+.bug-report-context {
+  color: #d8cce2 !important;
+  font-size: 9px;
+}
+.bug-report-success,
+.bug-report-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 9px;
+  font-size: 10px;
+}
+.bug-report-success {
+  color: #d9fff0 !important;
+  background: #174b3a;
+}
+.bug-report-error {
+  color: #ffe1e5 !important;
+  background: #642337;
+}
+.bug-report-success svg {
+  width: 15px;
+}
+.bug-report-panel .primary {
+  min-height: 40px;
+}
+
+.settings-page .bug-evaluation-panel {
+  margin-top: 16px;
+}
+.bug-report-count {
+  padding: 6px 9px;
+  border: 1px solid #ff99795c;
+  border-radius: 999px;
+  color: #ffd8c9 !important;
+  background: #7c3c3838;
+  font-size: 10px;
+  font-weight: 800;
+}
+.bug-evaluation-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.bug-evaluation-list > article {
+  display: grid;
+  gap: 9px;
+  padding: 13px;
+  border: 1px solid #ffffff18;
+  border-left: 3px solid #9b7cff;
+  border-radius: 11px;
+  background: #120d20;
+}
+.bug-evaluation-list > article.severity-high,
+.bug-evaluation-list > article.severity-critical {
+  border-left-color: #ff718d;
+}
+.bug-evaluation-list article > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bug-evaluation-list article > header > span {
+  display: grid;
+  gap: 3px;
+}
+.bug-evaluation-list article :is(p, small) {
+  margin: 0;
+  color: #eee5f2 !important;
+}
+.bug-evaluation-list article header em {
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #fff;
+  background: #6b446c;
+  font-size: 9px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+.bug-evaluation-controls {
+  display: grid;
+  grid-template-columns: 145px minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.bug-evaluation-controls textarea {
+  min-height: 58px;
+  resize: vertical;
+}
+.bug-evaluation-controls .primary {
+  min-height: 38px;
+}
+.bug-evaluation-empty {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  padding: 28px;
+  color: #eee5f2;
+}
+.bug-evaluation-empty svg {
+  width: 24px;
+}
+@media (max-width: 700px) {
+  .bug-report-fields,
+  .bug-evaluation-controls {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .support-actions > button {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}

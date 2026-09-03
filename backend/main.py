@@ -339,6 +339,15 @@ def init_db() -> None:
               kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
               target TEXT, read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS bug_reports (
+              id TEXT PRIMARY KEY,
+              member_id TEXT REFERENCES workspace_members(id) ON DELETE SET NULL,
+              reporter_name TEXT NOT NULL, reporter_email TEXT NOT NULL,
+              page TEXT NOT NULL DEFAULT '', category TEXT NOT NULL,
+              severity TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'open', evaluation TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS annotation_locks (
               project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
               asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
@@ -357,6 +366,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_advance_drafts_asset_id ON advance_drafts(asset_id);
             CREATE INDEX IF NOT EXISTS idx_model_evaluations_model_id ON model_evaluations(model_id);
             CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+            CREATE INDEX IF NOT EXISTS idx_bug_reports_created_at ON bug_reports(created_at);
             CREATE INDEX IF NOT EXISTS idx_inference_logs_project_created ON inference_logs(project_id,created_at);
             """
         )
@@ -753,6 +763,19 @@ class AssistantMessage(BaseModel):
 class AssistantChatPayload(BaseModel):
     messages: list[AssistantMessage] = Field(min_length=1, max_length=20)
     context: str | None = Field(default=None, max_length=1000)
+
+
+class BugReportPayload(BaseModel):
+    page: str = Field(default="", max_length=500)
+    category: str = Field(pattern=r"^(interface|workflow|data|training|inference|other)$")
+    severity: str = Field(pattern=r"^(low|medium|high|critical)$")
+    title: str = Field(min_length=3, max_length=160)
+    description: str = Field(min_length=10, max_length=4000)
+
+
+class BugReportEvaluationPayload(BaseModel):
+    status: str = Field(pattern=r"^(open|evaluating|resolved|rejected)$")
+    evaluation: str = Field(default="", max_length=4000)
 
 
 class ProjectJoinPayload(BaseModel):
@@ -1211,6 +1234,95 @@ def assistant_chat(payload: AssistantChatPayload):
     if not reply:
         raise HTTPException(502, "Gemini tidak mengembalikan jawaban")
     return {"reply": reply, "model": selected_model}
+
+
+def bug_report_json(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "memberId": row["member_id"],
+        "reporterName": row["reporter_name"],
+        "reporterEmail": row["reporter_email"],
+        "page": row["page"],
+        "category": row["category"],
+        "severity": row["severity"],
+        "title": row["title"],
+        "description": row["description"],
+        "status": row["status"],
+        "evaluation": row["evaluation"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+@app.post("/api/bug-reports", status_code=201)
+def create_bug_report(payload: BugReportPayload, request: Request):
+    report_id = uid()
+    member_id = getattr(request.state, "member_id", None)
+    with db() as con:
+        member = (
+            con.execute("SELECT name,email FROM workspace_members WHERE id=?", (member_id,)).fetchone()
+            if member_id
+            else None
+        )
+        reporter_name = member["name"] if member else getattr(request.state, "actor", "Local Owner")
+        reporter_email = member["email"] if member else "local@salnova"
+        timestamp = now()
+        con.execute(
+            "INSERT INTO bug_reports (id,member_id,reporter_name,reporter_email,page,category,severity,title,description,status,evaluation,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'open','',?,?)",
+            (
+                report_id,
+                member_id,
+                reporter_name,
+                reporter_email,
+                payload.page.strip(),
+                payload.category,
+                payload.severity,
+                payload.title.strip(),
+                payload.description.strip(),
+                timestamp,
+                timestamp,
+            ),
+        )
+        log_activity(con, "bug.reported", f"{payload.severity} · {payload.title}", actor=reporter_name)
+        create_notification(
+            con,
+            "bug-report",
+            "Aduan bug baru",
+            f"{reporter_name} · {payload.title}",
+            target="#/settings",
+        )
+        row = con.execute("SELECT * FROM bug_reports WHERE id=?", (report_id,)).fetchone()
+    return bug_report_json(row)
+
+
+@app.get("/api/bug-reports")
+def list_bug_reports():
+    with db() as con:
+        rows = con.execute(
+            "SELECT * FROM bug_reports ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'evaluating' THEN 1 ELSE 2 END, created_at DESC LIMIT 200"
+        ).fetchall()
+    return [bug_report_json(row) for row in rows]
+
+
+@app.patch("/api/bug-reports/{report_id}")
+def evaluate_bug_report(report_id: str, payload: BugReportEvaluationPayload, request: Request):
+    with db() as con:
+        current = con.execute("SELECT * FROM bug_reports WHERE id=?", (report_id,)).fetchone()
+        if not current:
+            raise HTTPException(404, "Aduan tidak ditemukan")
+        timestamp = now()
+        con.execute(
+            "UPDATE bug_reports SET status=?,evaluation=?,updated_at=? WHERE id=?",
+            (payload.status, payload.evaluation.strip(), timestamp, report_id),
+        )
+        log_activity(
+            con,
+            "bug.evaluated",
+            f"{payload.status} · {current['title']}",
+            actor=getattr(request.state, "actor", "Local Owner"),
+        )
+        row = con.execute("SELECT * FROM bug_reports WHERE id=?", (report_id,)).fetchone()
+    return bug_report_json(row)
 
 
 def member_json(row: sqlite3.Row) -> dict[str, Any]:

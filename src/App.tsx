@@ -14,6 +14,7 @@ import {
   BookOpen,
   Boxes,
   BrainCircuit,
+  Bug,
   Check,
   CheckSquare,
   ChevronDown,
@@ -47,6 +48,7 @@ import {
   Redo2,
   Rocket,
   Search,
+  ScrollText,
   Send,
   Settings,
   SlidersHorizontal,
@@ -75,6 +77,7 @@ import type {
   AdvanceJob,
   AnnotationJob,
   AuthStatus,
+  BugReport,
   DatasetHealth,
   DatasetHealthProgress,
   EvaluationArtifact,
@@ -968,8 +971,19 @@ function GeminiAssistant({
   member?: AuthStatus["member"];
 }) {
   const [open, setOpen] = useState(false);
+  const [supportMenuOpen, setSupportMenuOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportSent, setReportSent] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportCategory, setReportCategory] =
+    useState<BugReport["category"]>("interface");
+  const [reportSeverity, setReportSeverity] =
+    useState<BugReport["severity"]>("medium");
+  const [reportTitle, setReportTitle] = useState("");
+  const [reportDescription, setReportDescription] = useState("");
   const [assistantOffset, setAssistantOffset] = useState({ x: 0, y: 0 });
   const assistantRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{
@@ -1016,7 +1030,7 @@ function GeminiAssistant({
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [open]);
+  }, [open, reportOpen, supportMenuOpen]);
   const startAssistantDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
@@ -1102,6 +1116,31 @@ function GeminiAssistant({
       setBusy(false);
     }
   };
+  const submitBugReport = async (event: FormEvent) => {
+    event.preventDefault();
+    if (reportBusy) return;
+    setReportBusy(true);
+    setReportError("");
+    setReportSent(false);
+    try {
+      await api.createBugReport({
+        page: window.location.hash || `#/${page}`,
+        category: reportCategory,
+        severity: reportSeverity,
+        title: reportTitle.trim(),
+        description: reportDescription.trim(),
+      });
+      setReportTitle("");
+      setReportDescription("");
+      setReportSent(true);
+    } catch (error) {
+      setReportError(
+        error instanceof Error ? error.message : "Aduan gagal dikirim",
+      );
+    } finally {
+      setReportBusy(false);
+    }
+  };
   return (
     <div
       ref={assistantRef}
@@ -1176,11 +1215,152 @@ function GeminiAssistant({
           </small>
         </section>
       )}
+      {reportOpen && (
+        <section className="bug-report-panel" aria-label="Form aduan bug">
+          <header
+            title="Seret untuk memindahkan form aduan"
+            onPointerDown={startAssistantDrag}
+            onPointerMove={moveAssistant}
+            onPointerUp={endAssistantDrag}
+            onPointerCancel={endAssistantDrag}
+          >
+            <span className="bug-report-avatar">
+              <Bug />
+            </span>
+            <div>
+              <b>Laporkan kendala</b>
+              <small>Aduan tersimpan untuk evaluasi tim</small>
+            </div>
+            <button
+              type="button"
+              aria-label="Tutup form aduan"
+              onClick={() => setReportOpen(false)}
+            >
+              <X />
+            </button>
+          </header>
+          <form onSubmit={submitBugReport}>
+            <div className="bug-report-fields">
+              <label>
+                Area kendala
+                <select
+                  value={reportCategory}
+                  onChange={(event) =>
+                    setReportCategory(
+                      event.target.value as BugReport["category"],
+                    )
+                  }
+                >
+                  <option value="interface">Tampilan / interface</option>
+                  <option value="workflow">Workflow</option>
+                  <option value="data">Dataset / anotasi</option>
+                  <option value="training">Training</option>
+                  <option value="inference">Inference</option>
+                  <option value="other">Lainnya</option>
+                </select>
+              </label>
+              <label>
+                Dampak
+                <select
+                  value={reportSeverity}
+                  onChange={(event) =>
+                    setReportSeverity(
+                      event.target.value as BugReport["severity"],
+                    )
+                  }
+                >
+                  <option value="low">Rendah</option>
+                  <option value="medium">Sedang</option>
+                  <option value="high">Tinggi</option>
+                  <option value="critical">Kritis</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Ringkasan
+              <input
+                value={reportTitle}
+                minLength={3}
+                maxLength={160}
+                placeholder="Contoh: tombol simpan tidak merespons"
+                onChange={(event) => setReportTitle(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Detail kejadian
+              <textarea
+                value={reportDescription}
+                minLength={10}
+                maxLength={4000}
+                rows={5}
+                placeholder="Jelaskan langkah, hasil yang muncul, dan hasil yang diharapkan..."
+                onChange={(event) => setReportDescription(event.target.value)}
+                required
+              />
+            </label>
+            <small className="bug-report-context">
+              Halaman otomatis: {window.location.hash || `#/${page}`}
+            </small>
+            {reportSent && (
+              <p className="bug-report-success">
+                <Check /> Aduan tersimpan. Terima kasih.
+              </p>
+            )}
+            {reportError && <p className="bug-report-error">{reportError}</p>}
+            <button
+              className="primary"
+              type="submit"
+              disabled={
+                reportBusy ||
+                reportTitle.trim().length < 3 ||
+                reportDescription.trim().length < 10
+              }
+            >
+              {reportBusy ? "Mengirim…" : "Kirim aduan"}
+            </button>
+          </form>
+        </section>
+      )}
+      {supportMenuOpen && !open && !reportOpen && (
+        <div className="support-actions" aria-label="Pilih bantuan">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(true);
+              setReportOpen(false);
+              setSupportMenuOpen(false);
+            }}
+          >
+            <span>
+              <MessageCircle />
+            </span>
+            <b>Chatbot</b>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setReportOpen(true);
+              setOpen(false);
+              setSupportMenuOpen(false);
+              setReportSent(false);
+              setReportError("");
+            }}
+          >
+            <span>
+              <Bug />
+            </span>
+            <b>Aduan bug</b>
+          </button>
+        </div>
+      )}
       <button
         type="button"
         className="gemini-launcher"
-        aria-label={open ? "Tutup chatbot" : "Buka chatbot"}
-        title="Klik untuk membuka, atau seret untuk memindahkan"
+        aria-label={
+          open || reportOpen ? "Tutup panel bantuan" : "Buka menu bantuan"
+        }
+        title="Klik untuk membuka bantuan, atau seret untuk memindahkan"
         onPointerDown={startAssistantDrag}
         onPointerMove={moveAssistant}
         onPointerUp={endAssistantDrag}
@@ -1190,10 +1370,16 @@ function GeminiAssistant({
             suppressLauncherClick.current = false;
             return;
           }
-          setOpen((current) => !current);
+          if (open || reportOpen) {
+            setOpen(false);
+            setReportOpen(false);
+            setSupportMenuOpen(false);
+          } else {
+            setSupportMenuOpen((current) => !current);
+          }
         }}
       >
-        {open ? <X /> : <MessageCircle />}
+        {open || reportOpen || supportMenuOpen ? <X /> : <ScrollText />}
       </button>
     </div>
   );
@@ -13711,6 +13897,8 @@ function LocalSettings({
   > | null>(null);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const [bugReports, setBugReports] = useState<BugReport[]>([]);
+  const [savingReportId, setSavingReportId] = useState("");
   const [activeMemberId, setActiveMemberId] = useState(
     () => localStorage.getItem("vf-active-member") || "",
   );
@@ -13733,6 +13921,10 @@ function LocalSettings({
     api
       .activity()
       .then(setActivityLog)
+      .catch(() => {});
+    api
+      .bugReports()
+      .then(setBugReports)
       .catch(() => {});
   }, []);
   const restore = async (file?: File) => {
@@ -13885,6 +14077,112 @@ function LocalSettings({
           />
         </section>
       </div>
+      <section className="panel bug-evaluation-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Evaluasi aduan bug</h2>
+            <p>
+              Tinjau laporan pengguna, catat hasil evaluasi, dan perbarui status
+              penyelesaiannya.
+            </p>
+          </div>
+          <span className="bug-report-count">
+            {bugReports.filter((item) => item.status === "open").length} baru
+          </span>
+        </div>
+        <div className="bug-evaluation-list">
+          {bugReports.map((report) => (
+            <article key={report.id} className={`severity-${report.severity}`}>
+              <header>
+                <span>
+                  <b>{report.title}</b>
+                  <small>
+                    {report.reporterName} · {report.reporterEmail}
+                  </small>
+                </span>
+                <em>{report.severity}</em>
+              </header>
+              <p>{report.description}</p>
+              <small>
+                {report.category} · {report.page || "halaman tidak tercatat"} ·{" "}
+                {new Date(report.createdAt).toLocaleString("id-ID")}
+              </small>
+              <div className="bug-evaluation-controls">
+                <select
+                  value={report.status}
+                  onChange={(event) =>
+                    setBugReports((current) =>
+                      current.map((item) =>
+                        item.id === report.id
+                          ? {
+                              ...item,
+                              status: event.target.value as BugReport["status"],
+                            }
+                          : item,
+                      ),
+                    )
+                  }
+                >
+                  <option value="open">Baru</option>
+                  <option value="evaluating">Sedang dievaluasi</option>
+                  <option value="resolved">Selesai</option>
+                  <option value="rejected">Tidak direproduksi</option>
+                </select>
+                <textarea
+                  rows={2}
+                  value={report.evaluation}
+                  placeholder="Catatan hasil evaluasi..."
+                  onChange={(event) =>
+                    setBugReports((current) =>
+                      current.map((item) =>
+                        item.id === report.id
+                          ? { ...item, evaluation: event.target.value }
+                          : item,
+                      ),
+                    )
+                  }
+                />
+                <button
+                  className="primary"
+                  disabled={savingReportId === report.id}
+                  onClick={async () => {
+                    setSavingReportId(report.id);
+                    try {
+                      const updated = await api.evaluateBugReport(report.id, {
+                        status: report.status,
+                        evaluation: report.evaluation,
+                      });
+                      setBugReports((current) =>
+                        current.map((item) =>
+                          item.id === report.id ? updated : item,
+                        ),
+                      );
+                      notify("Evaluasi aduan disimpan");
+                    } catch (error) {
+                      notify(
+                        error instanceof Error
+                          ? error.message
+                          : "Evaluasi gagal disimpan",
+                      );
+                    } finally {
+                      setSavingReportId("");
+                    }
+                  }}
+                >
+                  {savingReportId === report.id ? "Menyimpan…" : "Simpan"}
+                </button>
+              </div>
+            </article>
+          ))}
+          {!bugReports.length && (
+            <div className="bug-evaluation-empty">
+              <Bug />
+              <b>Belum ada aduan</b>
+              <small>Aduan yang dikirim pengguna akan tampil di sini.</small>
+            </div>
+          )}
+        </div>
+      </section>
       <section className="panel members-panel">
         <div className="panel-head">
           <div>

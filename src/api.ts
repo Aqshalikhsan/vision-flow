@@ -168,6 +168,22 @@ export type WorkspaceNotification = {
   read: boolean;
   createdAt: string;
 };
+export type BugReport = {
+  id: string;
+  memberId?: string | null;
+  reporterName: string;
+  reporterEmail: string;
+  page: string;
+  category:
+    "interface" | "workflow" | "data" | "training" | "inference" | "other";
+  severity: "low" | "medium" | "high" | "critical";
+  title: string;
+  description: string;
+  status: "open" | "evaluating" | "resolved" | "rejected";
+  evaluation: string;
+  createdAt: string;
+  updatedAt: string;
+};
 export type DeploymentConfig = {
   primaryModelId?: string | null;
   previousModelId?: string | null;
@@ -381,6 +397,28 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages, context }),
+    }),
+  createBugReport: (data: {
+    page: string;
+    category: BugReport["category"];
+    severity: BugReport["severity"];
+    title: string;
+    description: string;
+  }) =>
+    request<BugReport>("/api/bug-reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  bugReports: () => request<BugReport[]>("/api/bug-reports"),
+  evaluateBugReport: (
+    id: string,
+    data: { status: BugReport["status"]; evaluation: string },
+  ) =>
+    request<BugReport>(`/api/bug-reports/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
     }),
   health: () => request<{ status: string; mlReady: boolean }>("/api/health"),
   projects: () => request<Project[]>("/api/projects"),
