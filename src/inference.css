@@ -9355,3 +9355,50 @@ main :is(article, section, aside, .panel, .card, .modal),
   color: #ffffff !important;
   background: #5d3c7d !important;
 }
+
+/* High-contrast version history details and actions. */
+.versions-page .version-side h3,
+.versions-page .version-history-head b {
+  color: #ffffff !important;
+}
+.versions-page .version-history-head > span {
+  border: 1px solid #b98cff4a;
+  color: #ffffff !important;
+  background: #312044 !important;
+}
+.versions-page .version-history-head small,
+.versions-page .recipe-summary,
+.versions-page .recipe-summary span,
+.versions-page .version-notes {
+  color: #f1e9f5 !important;
+}
+.versions-page .recipe-summary {
+  border-top-color: #ffffff1c;
+  font-size: 8px;
+  font-weight: 650;
+}
+.versions-page .version-actions button,
+.versions-page .version-actions a {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-color: #ffffff25 !important;
+  border-radius: 7px;
+  color: #ffffff !important;
+  background: #251a32 !important;
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 800;
+}
+.versions-page .version-actions button:hover,
+.versions-page .version-actions a:hover {
+  border-color: #c59cff80 !important;
+  color: #ffffff !important;
+  background: #39264a !important;
+}
+.versions-page .version-actions button.active {
+  border-color: #b98cff !important;
+  color: #ffffff !important;
+  background: #553778 !important;
+}
