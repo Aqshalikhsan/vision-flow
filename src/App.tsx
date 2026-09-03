@@ -1732,11 +1732,23 @@ function OnboardingTour({
           </div>
         )}
         <footer>
-          <button className="ghost" onClick={() => void finish()}>
+          <button
+            type="button"
+            className="ghost tour-skip-button"
+            onClick={() => void finish()}
+          >
             Lewati tutorial
           </button>
           <span>
-            {step > 0 && <button onClick={previous}>Kembali</button>}
+            {step > 0 && (
+              <button
+                type="button"
+                className="tour-back-button"
+                onClick={previous}
+              >
+                <ArrowLeft /> Kembali
+              </button>
+            )}
             {step < steps.length - 1 ? (
               <button className="primary" onClick={next}>
                 Lanjut <ChevronRight />

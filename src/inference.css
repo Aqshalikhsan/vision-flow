@@ -9402,3 +9402,73 @@ main :is(article, section, aside, .panel, .card, .modal),
   color: #ffffff !important;
   background: #553778 !important;
 }
+
+/* Tour footer controls use one deliberate size and alignment system. */
+.onboarding-card footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-top-color: #ffffff1c;
+}
+.onboarding-card footer > span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.onboarding-card footer button {
+  min-height: 40px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+.onboarding-card footer .tour-skip-button {
+  justify-self: start;
+  border: 1px solid transparent;
+  color: #eee5f2 !important;
+  background: transparent !important;
+}
+.onboarding-card footer .tour-skip-button:hover {
+  border-color: #ffffff1c;
+  color: #ffffff !important;
+  background: #ffffff0c !important;
+}
+.onboarding-card footer .tour-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #ffffff24;
+  color: #ffffff !important;
+  background: #251b31 !important;
+}
+.onboarding-card footer .tour-back-button:hover {
+  border-color: #c29aff70;
+  background: #352445 !important;
+}
+.onboarding-card footer .primary {
+  justify-content: center;
+  min-width: 94px;
+}
+.onboarding-card footer svg {
+  width: 15px;
+  height: 15px;
+}
+@media (max-width: 430px) {
+  .onboarding-card footer {
+    grid-template-columns: 1fr;
+  }
+  .onboarding-card footer .tour-skip-button {
+    width: 100%;
+    justify-self: stretch;
+  }
+  .onboarding-card footer > span,
+  .onboarding-card footer > span > button {
+    width: 100%;
+  }
+}
