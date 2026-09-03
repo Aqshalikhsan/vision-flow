@@ -9473,6 +9473,146 @@ main :is(article, section, aside, .panel, .card, .modal),
   }
 }
 
+/* Insights issue queue: readable actions and long filenames on dark cards. */
+.insights-page .health-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 2px;
+  padding: 10px;
+  border: 1px solid #ffffff18;
+  border-radius: 10px;
+  background: #171124;
+}
+.insights-page .health-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  margin-right: auto;
+  color: #ffffff !important;
+  font-size: 10px;
+  font-weight: 800;
+}
+.insights-page .health-actions button {
+  min-height: 34px;
+  padding: 8px 11px;
+  border: 1px solid #ffffff24;
+  border-radius: 8px;
+  color: #ffffff !important;
+  background: #2b1e39 !important;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+.insights-page .health-actions button:hover:not(:disabled) {
+  border-color: #c69cff80;
+  background: #3d2a51 !important;
+}
+.insights-page .health-actions button.delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: #ff80904d;
+  color: #ffe8eb !important;
+  background: #552338 !important;
+}
+.insights-page .health-actions button.delete:hover:not(:disabled) {
+  background: #713047 !important;
+}
+.insights-page .health-actions button:disabled {
+  color: #887d93 !important;
+  background: #211a2c !important;
+  border-color: #ffffff12;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.insights-page .health-actions button svg {
+  width: 14px;
+  height: 14px;
+}
+.insights-page .health-issue-row {
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 6px;
+  border-bottom: 1px solid #ffffff14;
+  border-radius: 8px;
+}
+.insights-page .health-issue-row:hover {
+  background: #ffffff08;
+}
+.insights-page .health-issue-row > input {
+  width: 15px;
+  height: 15px;
+  margin-top: 11px;
+  accent-color: #ae83ff;
+}
+.insights-page .health-issue-row > button {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 5px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #ffffff !important;
+  background: transparent !important;
+  text-align: left;
+}
+.insights-page .health-issue-row > button:hover {
+  border-color: #ffffff1c;
+  background: #241934 !important;
+}
+.insights-page .health-issue-row > button > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.insights-page .health-issue-row > button b {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #ffffff !important;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+  white-space: normal;
+}
+.insights-page .health-issue-row > button small {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #d9cde3 !important;
+  font-size: 9px;
+  line-height: 1.35;
+  white-space: normal;
+}
+.insights-page .health-issue-row > button > svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 4px;
+  color: #c3a5ff !important;
+}
+.insights-page .health-issues,
+.insights-page .annotation-jobs,
+.insights-page .active-learning-panel {
+  color: #fff8f1;
+  background: linear-gradient(145deg, #211429f2, #120d20f2) !important;
+  border-color: #ffbc8a35 !important;
+}
+@media (max-width: 650px) {
+  .insights-page .health-actions label {
+    width: 100%;
+    margin-right: 0;
+  }
+  .insights-page .health-actions button {
+    flex: 1 1 calc(50% - 8px);
+  }
+}
+
 /* Compact persistent language control for the login experience. */
 .auth-language-switch {
   position: relative;
