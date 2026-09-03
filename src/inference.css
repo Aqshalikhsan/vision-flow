@@ -9067,3 +9067,158 @@ main :is(article, section, aside, .panel, .card, .modal),
     transform: none;
   }
 }
+
+/* Live storage sources: NAS persistent volume plus this browser/device. */
+.settings-page .system-grid .panel:first-child {
+  min-height: 226px;
+}
+.storage-meter {
+  display: grid;
+  gap: 5px;
+  padding-top: 3px;
+}
+.storage-meter + .storage-meter {
+  margin-top: 7px;
+  padding-top: 11px;
+  border-top: 1px solid #ffffff17;
+}
+.storage-meter > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.settings-page .storage-meter > span b {
+  color: #fff8f1 !important;
+  font-size: 12px;
+  font-weight: 800;
+}
+.settings-page .storage-meter small {
+  margin: 0;
+  color: #d8cce2 !important;
+}
+.settings-page .storage-meter > span small {
+  text-align: right;
+}
+.settings-page .storage-bar {
+  height: 7px;
+  margin: 1px 0 0;
+  border: 1px solid #ffffff13;
+  background: #090614 !important;
+}
+.settings-page .storage-bar i {
+  min-width: 2px;
+  border-radius: inherit;
+  box-shadow: 0 0 12px #a780ff70;
+}
+.settings-page .device-storage-meter .storage-bar i {
+  background: linear-gradient(90deg, #ef7158, #ffb068);
+  box-shadow: 0 0 12px #ff855870;
+}
+
+/* Native option popups need their own colors; styling only the select leaves
+   Windows' option list white. */
+.workflow-page
+  :is(
+    .workflow-select,
+    .workflow-connections select,
+    .workflow-node-editor select
+  ) {
+  color-scheme: dark;
+  color: #fff8f1 !important;
+  background: #171124 !important;
+  border-color: #ffba9340 !important;
+}
+.workflow-page
+  :is(
+    .workflow-select option,
+    .workflow-connections select option,
+    .workflow-node-editor select option
+  ) {
+  color: #fff8f1 !important;
+  background: #171124 !important;
+}
+.workflow-page
+  :is(
+    .workflow-select option:checked,
+    .workflow-connections select option:checked,
+    .workflow-node-editor select option:checked
+  ) {
+  color: #ffffff !important;
+  background: #5d3c7d !important;
+}
+
+/* Deployment routing and rollback controls. */
+.deploy-page .traffic-routing {
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #ffffff1c;
+  border-radius: 14px;
+  color: #fff8f1;
+  background: linear-gradient(145deg, #1c142b, #110d20);
+}
+.deploy-page .traffic-routing > div:first-child {
+  gap: 4px;
+}
+.deploy-page .traffic-routing > div:first-child b {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 850;
+}
+.deploy-page .traffic-routing > div:first-child small,
+.deploy-page .traffic-routing label {
+  color: #ded2e6 !important;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.deploy-page .traffic-routing :is(select, input[type="range"]) {
+  color-scheme: dark;
+}
+.deploy-page .traffic-routing select,
+.deploy-page .traffic-routing select option {
+  color: #fff8f1;
+  background: #171124;
+}
+.deploy-page .traffic-actions {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 3px;
+}
+.deploy-page .traffic-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 132px;
+  min-height: 41px;
+  padding: 10px 15px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+.deploy-page .traffic-actions > button svg {
+  width: 16px;
+  height: 16px;
+}
+.deploy-page .deployment-rollback-button {
+  border: 1px solid #d7b6f05c;
+  color: #f7edff;
+  background: linear-gradient(145deg, #352442, #24192f);
+  box-shadow: inset 0 1px #ffffff12;
+}
+.deploy-page .deployment-rollback-button:not(:disabled):hover {
+  border-color: #e2baff99;
+  background: linear-gradient(145deg, #453052, #2b1d38);
+  transform: translateY(-1px);
+}
+.deploy-page .deployment-rollback-button:disabled {
+  border-color: #ffffff12;
+  color: #8f8498;
+  background: #17121f;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.72;
+}

@@ -7547,6 +7547,7 @@ function Deploy({ project, go }: { project: Project; go: (p: Page) => void }) {
                   <Check /> Save routing
                 </button>
                 <button
+                  className="deployment-rollback-button"
                   disabled={!deploymentConfig.previousModelId}
                   onClick={async () => {
                     if (!confirm("Roll back to the previous production model?"))
@@ -13898,6 +13899,10 @@ function LocalSettings({
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
   const [bugReports, setBugReports] = useState<BugReport[]>([]);
+  const [deviceStorage, setDeviceStorage] = useState<{
+    usage: number;
+    quota: number;
+  } | null>(null);
   const [savingReportId, setSavingReportId] = useState("");
   const [activeMemberId, setActiveMemberId] = useState(
     () => localStorage.getItem("vf-active-member") || "",
@@ -13926,6 +13931,14 @@ function LocalSettings({
       .bugReports()
       .then(setBugReports)
       .catch(() => {});
+    if (navigator.storage?.estimate) {
+      navigator.storage
+        .estimate()
+        .then(({ usage = 0, quota = 0 }) => {
+          if (quota > 0) setDeviceStorage({ usage, quota });
+        })
+        .catch(() => {});
+    }
   }, []);
   const restore = async (file?: File) => {
     if (
@@ -13953,7 +13966,14 @@ function LocalSettings({
       if (input.current) input.current.value = "";
     }
   };
-  const gb = (bytes: number) => (bytes / 1024 / 1024 / 1024).toFixed(1) + " GB";
+  const formatBytes = (bytes: number) => {
+    if (bytes >= 1024 ** 4) return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    return `${Math.max(0, bytes / 1024).toFixed(1)} KB`;
+  };
+  const storagePercent = (used: number, total: number) =>
+    `${Math.min(100, Math.max(0, total ? (used / total) * 100 : 0))}%`;
   const addMember = async () => {
     const name = prompt("Nama anggota")?.trim();
     if (!name) return;
@@ -13998,17 +14018,48 @@ function LocalSettings({
           <section className="panel">
             <Database />
             <h3>Storage</h3>
-            <b>{gb(system.disk.free)} free</b>
-            <div className="storage-bar">
-              <i
-                style={{
-                  width: (system.disk.used / system.disk.total) * 100 + "%",
-                }}
-              />
+            <div className="storage-meter">
+              <span>
+                <b>NAS Salnova</b>
+                <small>{formatBytes(system.disk.free)} free</small>
+              </span>
+              <div className="storage-bar" aria-label="NAS storage usage">
+                <i
+                  style={{
+                    width: storagePercent(system.disk.used, system.disk.total),
+                  }}
+                />
+              </div>
+              <small>
+                {formatBytes(system.disk.used)} used of{" "}
+                {formatBytes(system.disk.total)}
+              </small>
             </div>
-            <small>
-              {gb(system.disk.used)} used of {gb(system.disk.total)}
-            </small>
+            <div className="storage-meter device-storage-meter">
+              <span>
+                <b>Perangkat ini</b>
+                <small>
+                  {deviceStorage ? "Browser storage aktif" : "Tidak tersedia"}
+                </small>
+              </span>
+              <div
+                className="storage-bar"
+                aria-label="Current device browser storage usage"
+              >
+                <i
+                  style={{
+                    width: deviceStorage
+                      ? storagePercent(deviceStorage.usage, deviceStorage.quota)
+                      : "0%",
+                  }}
+                />
+              </div>
+              <small>
+                {deviceStorage
+                  ? `${formatBytes(deviceStorage.usage)} used of ${formatBytes(deviceStorage.quota)} browser quota`
+                  : "Browser tidak memberikan akses estimasi penyimpanan"}
+              </small>
+            </div>
           </section>
           <section className="panel">
             <BrainCircuit />

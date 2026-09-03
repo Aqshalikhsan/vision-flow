@@ -1654,7 +1654,9 @@ def member_avatar(member_id: str):
 
 @app.get("/api/system")
 def system_info():
-    total, used, free = shutil.disk_usage(ROOT)
+    # DATA is the persistent mount in production, so this reflects the NAS
+    # volume instead of the container overlay filesystem.
+    total, used, free = shutil.disk_usage(DATA)
     try:
         import torch
         gpu = {"available": torch.cuda.is_available(), "name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None, "count": torch.cuda.device_count()}
@@ -1662,7 +1664,17 @@ def system_info():
         gpu = {"available": False, "name": None, "count": 0}
     with db() as con:
         counts = {table: con.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"] for table in ("projects", "assets", "versions", "models", "workflows")}
-    return {"disk": {"total": total, "used": used, "free": free}, "gpu": gpu, "data": counts, "database": str(DB_PATH)}
+    return {
+        "disk": {
+            "total": total,
+            "used": used,
+            "free": free,
+            "source": "nas-persistent-data",
+        },
+        "gpu": gpu,
+        "data": counts,
+        "database": str(DB_PATH),
+    }
 
 
 @app.get("/api/jobs")

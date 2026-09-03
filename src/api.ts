@@ -1123,7 +1123,12 @@ export const api = {
     }),
   system: () =>
     request<{
-      disk: { total: number; used: number; free: number };
+      disk: {
+        total: number;
+        used: number;
+        free: number;
+        source?: "nas-persistent-data";
+      };
       gpu: { available: boolean; name?: string; count: number };
       data: Record<string, number>;
     }>("/api/system"),
