@@ -624,6 +624,115 @@ function AuthGate({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [activeSlide, setActiveSlide] = useState(0);
+  const [language, setLanguage] = useState<"id" | "en">(() =>
+    localStorage.getItem("salnova-auth-language") === "en" ? "en" : "id",
+  );
+  const english = language === "en";
+  const authCopy = english
+    ? {
+        languageLabel: "Choose language",
+        signupTitle: "Create a new account",
+        signinTitle: "Welcome back",
+        signupDescription:
+          "Register a username, email, and password to start using Salnova.",
+        signinDescription: "Sign in with your registered Salnova account.",
+        username: "Account username",
+        password: "Password",
+        waiting: "Please wait…",
+        signupAction: "Create account & sign in",
+        signinAction: "Sign In",
+        noAccount: "Don't have an account?",
+        hasAccount: "Already have an account?",
+        createAccount: "Create a new account",
+        backToSignin: "Back to Sign In",
+        showcaseLabel: "About Salnova",
+        slideLabel: "Salnova information slides",
+        slides: [
+          {
+            kicker: "ONE WORKSPACE, FROM DATA TO PRODUCTION",
+            title: "Build computer vision that is ready to use.",
+            description:
+              "Salnova helps teams manage datasets, annotation, training, evaluation, and inference in one organized workflow.",
+            tab: "About Salnova",
+          },
+          {
+            kicker: "OBJECT DETECTION · LIVE INFERENCE",
+            title: "Find objects, count them, and make decisions.",
+            description:
+              "Bounding boxes, classes, and confidence scores appear directly in your model's inference results.",
+            tab: "Object detection",
+          },
+          {
+            kicker: "KEYPOINT DETECTION · POSE ESTIMATION",
+            title: "Understand poses through important points.",
+            description:
+              "Keypoint detection identifies joints and pose structures for movement and human-interaction analysis.",
+            tab: "Keypoint detection",
+          },
+          {
+            kicker: "SEGMENTATION · PIXEL-LEVEL RESULT",
+            title: "See important regions down to the pixel.",
+            description:
+              "Segmentation helps models distinguish the shape and boundary of every object precisely.",
+            tab: "Segmentation",
+          },
+        ],
+      }
+    : {
+        languageLabel: "Pilih bahasa",
+        signupTitle: "Buat akun baru",
+        signinTitle: "Selamat datang kembali",
+        signupDescription:
+          "Daftarkan username, email, dan password untuk menggunakan Salnova.",
+        signinDescription:
+          "Masuk memakai akun Salnova yang sudah pernah didaftarkan.",
+        username: "Username akun",
+        password: "Password",
+        waiting: "Mohon tunggu…",
+        signupAction: "Daftar & masuk",
+        signinAction: "Masuk",
+        noAccount: "Belum memiliki akun?",
+        hasAccount: "Sudah memiliki akun?",
+        createAccount: "Buat akun baru",
+        backToSignin: "Kembali ke halaman masuk",
+        showcaseLabel: "Tentang Salnova",
+        slideLabel: "Slide informasi Salnova",
+        slides: [
+          {
+            kicker: "SATU WORKSPACE, DARI DATA KE PRODUKSI",
+            title: "Bangun visi komputer yang siap dipakai.",
+            description:
+              "Salnova membantu tim mengelola dataset, anotasi, training, evaluasi, dan inference dalam satu alur kerja yang rapi.",
+            tab: "Tentang Salnova",
+          },
+          {
+            kicker: "OBJECT DETECTION · LIVE INFERENCE",
+            title: "Temukan objek, hitung, lalu ambil keputusan.",
+            description:
+              "Bounding box, class, dan confidence tampil langsung pada hasil inference model Anda.",
+            tab: "Object detection",
+          },
+          {
+            kicker: "KEYPOINT DETECTION · POSE ESTIMATION",
+            title: "Pahami pose dari titik-titik penting.",
+            description:
+              "Keypoint detection mengenali sendi dan struktur pose untuk analisis gerakan maupun interaksi manusia.",
+            tab: "Keypoint detection",
+          },
+          {
+            kicker: "SEGMENTATION · PIXEL-LEVEL RESULT",
+            title: "Lihat area penting hingga tingkat piksel.",
+            description:
+              "Segmentasi membantu model membedakan bentuk dan batas setiap objek secara presisi.",
+            tab: "Segmentation",
+          },
+        ],
+      };
+  const changeLanguage = (next: "id" | "en") => {
+    setLanguage(next);
+    localStorage.setItem("salnova-auth-language", next);
+    document.documentElement.lang = next;
+  };
   useEffect(() => {
     const timer = window.setInterval(() => {
       setActiveSlide((current) => (current + 1) % 4);
@@ -667,7 +776,13 @@ function AuthGate({
       }
       await onAuthenticated();
     } catch (authError) {
-      setError(authError instanceof Error ? authError.message : "Login gagal");
+      setError(
+        authError instanceof Error
+          ? authError.message
+          : english
+            ? "Sign in failed"
+            : "Login gagal",
+      );
     } finally {
       setBusy(false);
     }
@@ -686,23 +801,45 @@ function AuthGate({
           <i className="auth-led-edge edge-right" aria-hidden="true" />
           <i className="auth-led-edge edge-bottom" aria-hidden="true" />
           <i className="auth-led-edge edge-left" aria-hidden="true" />
+          <div
+            className="auth-language-switch"
+            role="group"
+            aria-label={authCopy.languageLabel}
+          >
+            <button
+              type="button"
+              className={language === "id" ? "active" : ""}
+              aria-pressed={language === "id"}
+              onClick={() => changeLanguage("id")}
+            >
+              ID
+            </button>
+            <button
+              type="button"
+              className={language === "en" ? "active" : ""}
+              aria-pressed={language === "en"}
+              onClick={() => changeLanguage("en")}
+            >
+              EN
+            </button>
+          </div>
           <span className="brand-mark">
             <SupernovaMark />
           </span>
           <span className="eyebrow">SALNOVA SECURE WORKSPACE</span>
           <h1>
             {authMode === "signup"
-              ? "Buat akun baru"
-              : "Selamat datang kembali"}
+              ? authCopy.signupTitle
+              : authCopy.signinTitle}
           </h1>
           <p>
             {authMode === "signup"
-              ? "Daftarkan username, email, dan password untuk menggunakan Salnova."
-              : "Sign In memakai akun yang sudah pernah didaftarkan."}
+              ? authCopy.signupDescription
+              : authCopy.signinDescription}
           </p>
           {authMode === "signup" && (
             <label>
-              Username akun
+              {authCopy.username}
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -800,7 +937,7 @@ function AuthGate({
             </>
           ) : mode === "password" ? (
             <label>
-              Password
+              {authCopy.password}
               <input
                 type="password"
                 minLength={8}
@@ -818,16 +955,14 @@ function AuthGate({
           {error && <p className="auth-error">{error}</p>}
           <button className="primary" disabled={busy}>
             {busy
-              ? "Mohon tunggu…"
+              ? authCopy.waiting
               : authMode === "signup"
-                ? "Daftar & masuk"
-                : "Sign In"}
+                ? authCopy.signupAction
+                : authCopy.signinAction}
           </button>
           {(registrationAllowed || authMode === "signup") && (
             <p className="auth-switch">
-              {authMode === "signin"
-                ? "Belum memiliki akun?"
-                : "Sudah memiliki akun?"}{" "}
+              {authMode === "signin" ? authCopy.noAccount : authCopy.hasAccount}{" "}
               <button
                 type="button"
                 onClick={() => {
@@ -839,13 +974,13 @@ function AuthGate({
                 }}
               >
                 {authMode === "signin"
-                  ? "Buat akun baru"
-                  : "Kembali ke Sign In"}
+                  ? authCopy.createAccount
+                  : authCopy.backToSignin}
               </button>
             </p>
           )}
         </form>
-        <aside className="auth-showcase" aria-label="Tentang Salnova">
+        <aside className="auth-showcase" aria-label={authCopy.showcaseLabel}>
           <div className="auth-showcase-topline">
             <span className="auth-showcase-pulse" />
             <span>COMPUTER VISION WORKSPACE</span>
@@ -855,34 +990,24 @@ function AuthGate({
               className={`auth-slide intro ${activeSlide === 0 ? "active" : ""}`}
               aria-hidden={activeSlide !== 0}
             >
-              <span className="slide-kicker">
-                SATU WORKSPACE, DARI DATA KE PRODUKSI
-              </span>
-              <h2>Bangun visi komputer yang siap dipakai.</h2>
-              <p>
-                Salnova membantu tim mengelola dataset, anotasi, training,
-                evaluasi, dan inference dalam satu alur kerja yang rapi.
-              </p>
+              <span className="slide-kicker">{authCopy.slides[0].kicker}</span>
+              <h2>{authCopy.slides[0].title}</h2>
+              <p>{authCopy.slides[0].description}</p>
               <div className="slide-flow" aria-hidden="true">
                 <span>Dataset</span>
                 <i />
-                <span>Train</span>
+                <span>{english ? "Train" : "Latih"}</span>
                 <i />
-                <span>Deploy</span>
+                <span>{english ? "Deploy" : "Produksi"}</span>
               </div>
             </section>
             <section
               className={`auth-slide detection ${activeSlide === 1 ? "active" : ""}`}
               aria-hidden={activeSlide !== 1}
             >
-              <span className="slide-kicker">
-                OBJECT DETECTION · LIVE INFERENCE
-              </span>
-              <h2>Temukan objek, hitung, lalu ambil keputusan.</h2>
-              <p>
-                Bounding box, class, dan confidence tampil langsung pada hasil
-                inference model Anda.
-              </p>
+              <span className="slide-kicker">{authCopy.slides[1].kicker}</span>
+              <h2>{authCopy.slides[1].title}</h2>
+              <p>{authCopy.slides[1].description}</p>
               <figure className="inference-preview detection-preview">
                 <img
                   src="/assets/login-object-detection.png"
@@ -894,14 +1019,9 @@ function AuthGate({
               className={`auth-slide keypoint ${activeSlide === 2 ? "active" : ""}`}
               aria-hidden={activeSlide !== 2}
             >
-              <span className="slide-kicker">
-                KEYPOINT DETECTION · POSE ESTIMATION
-              </span>
-              <h2>Pahami pose dari titik-titik penting.</h2>
-              <p>
-                Keypoint detection mengenali sendi dan struktur pose untuk
-                analisis gerakan maupun interaksi manusia.
-              </p>
+              <span className="slide-kicker">{authCopy.slides[2].kicker}</span>
+              <h2>{authCopy.slides[2].title}</h2>
+              <p>{authCopy.slides[2].description}</p>
               <figure className="inference-preview keypoint-preview">
                 <img
                   src="/assets/login-keypoint.png"
@@ -913,14 +1033,9 @@ function AuthGate({
               className={`auth-slide segment ${activeSlide === 3 ? "active" : ""}`}
               aria-hidden={activeSlide !== 3}
             >
-              <span className="slide-kicker">
-                SEGMENTATION · PIXEL-LEVEL RESULT
-              </span>
-              <h2>Lihat area penting hingga tingkat piksel.</h2>
-              <p>
-                Segmentasi membantu model membedakan bentuk dan batas setiap
-                objek secara presisi.
-              </p>
+              <span className="slide-kicker">{authCopy.slides[3].kicker}</span>
+              <h2>{authCopy.slides[3].title}</h2>
+              <p>{authCopy.slides[3].description}</p>
               <figure className="inference-preview segment-preview">
                 <img
                   src="/assets/login-segmentation.png"
@@ -932,14 +1047,9 @@ function AuthGate({
           <div
             className="auth-slide-controls"
             role="tablist"
-            aria-label="Slide informasi Salnova"
+            aria-label={authCopy.slideLabel}
           >
-            {[
-              "Tentang Salnova",
-              "Object detection",
-              "Keypoint detection",
-              "Segmentation",
-            ].map((label, index) => (
+            {authCopy.slides.map(({ tab: label }, index) => (
               <button
                 key={label}
                 type="button"
