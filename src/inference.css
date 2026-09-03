@@ -9657,3 +9657,39 @@ main :is(article, section, aside, .panel, .card, .modal),
   background: linear-gradient(135deg, #6c4db4, #49326f);
   box-shadow: 0 4px 12px #02010855;
 }
+
+/* Final contrast overrides load after the legacy component rules above. */
+.app .backend-state.online,
+.app .backend-state.checking,
+.app .backend-state.offline,
+.app .backend-state.online svg,
+.app .backend-state.checking svg,
+.app .backend-state.offline svg {
+  color: #ffffff !important;
+}
+.app .registry-head p,
+.app .registry-page .registry-head p,
+.app .registry-page .registry-head em,
+.app .registry-card .registry-config span,
+.app .registry-card .registry-metrics small,
+.app .registry-card .registry-actions button,
+.app .registry-card .registry-exports button,
+.app .registry-card .registry-exports a,
+.app .training-live,
+.app .online,
+.app .online span {
+  color: #ffffff !important;
+}
+.app .training-live,
+.app .online {
+  border-color: #ffffff42;
+  background: #211a32;
+}
+.app .panel-head p,
+.app .registry-card p,
+.app .registry-card small,
+.app .registry-card label,
+.app .registry-card dt,
+.app .registry-card dd {
+  color: #f1edf8 !important;
+}
