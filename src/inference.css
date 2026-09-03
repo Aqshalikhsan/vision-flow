@@ -9339,3 +9339,19 @@ main :is(article, section, aside, .panel, .card, .modal),
   font-size: 9px;
   font-weight: 650;
 }
+
+/* Keep the native Square resize menu and its size options in dark mode. */
+.versions-page .preprocess-card select {
+  color-scheme: dark;
+  border-color: #b98cff3d !important;
+  color: #fff8f1 !important;
+  background: #171124 !important;
+}
+.versions-page .preprocess-card select option {
+  color: #fff8f1 !important;
+  background: #171124 !important;
+}
+.versions-page .preprocess-card select option:checked {
+  color: #ffffff !important;
+  background: #5d3c7d !important;
+}
