@@ -34,6 +34,7 @@ import {
   Image as ImageIcon,
   Keyboard,
   Layers3,
+  Laptop,
   LayoutDashboard,
   LoaderCircle,
   LogOut,
@@ -14015,9 +14016,9 @@ function LocalSettings({
       </div>
       {system && (
         <div className="system-grid">
-          <section className="panel">
+          <section className="panel storage-panel nas-storage-panel">
             <Database />
-            <h3>Storage</h3>
+            <h3>NAS Storage</h3>
             <div className="storage-meter">
               <span>
                 <b>NAS Salnova</b>
@@ -14035,7 +14036,11 @@ function LocalSettings({
                 {formatBytes(system.disk.total)}
               </small>
             </div>
-            <div className="storage-meter device-storage-meter">
+          </section>
+          <section className="panel storage-panel device-storage-panel">
+            <Laptop />
+            <h3>Device Storage</h3>
+            <div className="storage-meter">
               <span>
                 <b>Perangkat ini</b>
                 <small>
