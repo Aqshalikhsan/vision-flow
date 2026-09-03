@@ -6344,6 +6344,88 @@
     animation: none;
   }
 }
+
+/* Sidebar storage is split by its real source instead of showing a static bar. */
+.sidebar .usage {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #ffffff12;
+  background: #211b31;
+}
+.sidebar .usage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #bdb2cc;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+.sidebar .usage-heading b {
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #aef2d7;
+  background: #2c6b5438;
+  font-size: 8px;
+  letter-spacing: 0;
+}
+.sidebar .usage-source {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #ffffff0f;
+  border-radius: 8px;
+  background: #171124;
+}
+.sidebar .usage-source > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.sidebar .usage-source > div:first-child span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #fff4ed;
+  font-size: 9px;
+  font-weight: 800;
+}
+.sidebar .usage-source svg {
+  width: 12px;
+  height: 12px;
+  color: #b696ff;
+}
+.sidebar .usage-source b {
+  min-width: 0;
+  color: #ded4e8;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.sidebar .usage-source .meter {
+  height: 5px;
+  margin: 1px 0 0;
+  background: #383047;
+}
+.sidebar .usage-source .meter i {
+  width: 0;
+  min-width: 2px;
+  box-shadow: 0 0 8px #9575ee78;
+}
+.sidebar .usage-device .meter i {
+  background: linear-gradient(90deg, #ef7158, #ffb068);
+  box-shadow: 0 0 8px #ff855878;
+}
+.sidebar .usage-source small {
+  margin: 0;
+  color: #aca1b9;
+  font-size: 8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 .gemini-assistant {
   position: fixed;
   right: 24px;

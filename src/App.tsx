@@ -3121,6 +3121,45 @@ function Sidebar({
   onProfile: () => void;
   member?: AuthStatus["member"];
 }) {
+  const [nasStorage, setNasStorage] = useState<{
+    total: number;
+    used: number;
+    free: number;
+  } | null>(null);
+  const [sidebarDeviceStorage, setSidebarDeviceStorage] = useState<{
+    usage: number;
+    quota: number;
+  } | null>(null);
+  useEffect(() => {
+    let active = true;
+    const refreshStorage = () => {
+      api
+        .system()
+        .then((value) => active && setNasStorage(value.disk))
+        .catch(() => {});
+      if (navigator.storage?.estimate) {
+        navigator.storage
+          .estimate()
+          .then(({ usage = 0, quota = 0 }) => {
+            if (active && quota > 0) setSidebarDeviceStorage({ usage, quota });
+          })
+          .catch(() => {});
+      }
+    };
+    refreshStorage();
+    const timer = window.setInterval(refreshStorage, 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  const compactBytes = (bytes: number) => {
+    if (bytes >= 1024 ** 4) return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+    return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  };
+  const usedWidth = (used: number, total: number) =>
+    `${Math.min(100, Math.max(0, total ? (used / total) * 100 : 0))}%`;
   const nav = [
     ["dashboard", LayoutDashboard, "Projects"],
     ["workflows", Workflow, "Workflows"],
@@ -3179,14 +3218,65 @@ function Sidebar({
       </nav>
       <div className="sidebar-bottom">
         <div className="usage">
-          <div>
-            <span>Local storage</span>
-            <b>Private</b>
+          <div className="usage-heading">
+            <span>STORAGE</span>
+            <b>Live</b>
           </div>
-          <div className="meter">
-            <i />
+          <div className="usage-source usage-nas">
+            <div>
+              <span>
+                <Database /> NAS
+              </span>
+              <b>
+                {nasStorage
+                  ? `${compactBytes(nasStorage.free)} free`
+                  : "Loading"}
+              </b>
+            </div>
+            <div className="meter">
+              <i
+                style={{
+                  width: nasStorage
+                    ? usedWidth(nasStorage.used, nasStorage.total)
+                    : "0%",
+                }}
+              />
+            </div>
+            <small>
+              {nasStorage
+                ? `${compactBytes(nasStorage.used)} / ${compactBytes(nasStorage.total)}`
+                : "Menghubungkan ke NAS"}
+            </small>
           </div>
-          <small>Stored in local_data on this machine</small>
+          <div className="usage-source usage-device">
+            <div>
+              <span>
+                <Laptop /> Device
+              </span>
+              <b>
+                {sidebarDeviceStorage
+                  ? `${compactBytes(sidebarDeviceStorage.quota - sidebarDeviceStorage.usage)} free`
+                  : "Unavailable"}
+              </b>
+            </div>
+            <div className="meter">
+              <i
+                style={{
+                  width: sidebarDeviceStorage
+                    ? usedWidth(
+                        sidebarDeviceStorage.usage,
+                        sidebarDeviceStorage.quota,
+                      )
+                    : "0%",
+                }}
+              />
+            </div>
+            <small>
+              {sidebarDeviceStorage
+                ? `${compactBytes(sidebarDeviceStorage.usage)} / ${compactBytes(sidebarDeviceStorage.quota)} browser`
+                : "Kuota browser tidak tersedia"}
+            </small>
+          </div>
         </div>
         <button onClick={onHelp}>
           <CircleHelp size={18} />
