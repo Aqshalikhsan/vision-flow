@@ -338,6 +338,155 @@ function uploadRequest<T>(
   });
 }
 
+type AssetUploadSession = {
+  uploadId: string;
+  offset: number;
+  chunkSize: number;
+};
+
+type AssetUploadStatus = {
+  status: "uploading" | "processing" | "completed" | "failed";
+  offset: number;
+  size: number;
+  error?: string;
+};
+
+function uploadAssetChunk(
+  path: string,
+  chunk: Blob,
+  offset: number,
+  onProgress?: (loaded: number) => void,
+): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", path);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("X-Upload-Offset", String(offset));
+    xhr.setRequestHeader("X-Workspace-Role", "owner");
+    xhr.upload.onprogress = (event) => onProgress?.(event.loaded);
+    xhr.onload = () => {
+      try {
+        const response = JSON.parse(xhr.responseText) as {
+          offset?: number;
+          detail?: string;
+        };
+        if (xhr.status >= 200 && xhr.status < 300 && response.offset != null) {
+          resolve(response.offset);
+        } else {
+          reject(new Error(response.detail || `Upload failed (${xhr.status})`));
+        }
+      } catch {
+        reject(new Error(`Upload failed (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload connection failed"));
+    xhr.onabort = () => reject(new Error("Upload dibatalkan"));
+    xhr.send(chunk);
+  });
+}
+
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
+async function uploadAssetsInChunks(
+  projectId: string,
+  selectedFiles: FileList | File[],
+  frameIntervalSeconds: number,
+  onProgress?: (percent: number) => void,
+  onProcessing?: () => void,
+): Promise<Project> {
+  const files = Array.from(selectedFiles);
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (!files.length || totalBytes <= 0) throw new Error("File upload kosong");
+  const sessions: AssetUploadSession[] = [];
+  let uploadedBytes = 0;
+
+  for (const file of files) {
+    const session = await request<AssetUploadSession>(
+      `/api/projects/${projectId}/asset-uploads`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          content_type: file.type,
+          size: file.size,
+          frame_interval_seconds: frameIntervalSeconds,
+        }),
+      },
+    );
+    sessions.push(session);
+    let offset = session.offset;
+    while (offset < file.size) {
+      const start = offset;
+      const end = Math.min(file.size, start + session.chunkSize);
+      let acceptedOffset: number | undefined;
+      let lastError: unknown;
+      for (
+        let attempt = 0;
+        attempt < 4 && acceptedOffset == null;
+        attempt += 1
+      ) {
+        try {
+          acceptedOffset = await uploadAssetChunk(
+            `/api/projects/${projectId}/asset-uploads/${session.uploadId}`,
+            file.slice(start, end),
+            start,
+            (chunkBytes) =>
+              onProgress?.(
+                Math.min(
+                  99,
+                  Math.round(((uploadedBytes + chunkBytes) / totalBytes) * 100),
+                ),
+              ),
+          );
+        } catch (error) {
+          lastError = error;
+          const status = await request<AssetUploadStatus>(
+            `/api/projects/${projectId}/asset-uploads/${session.uploadId}`,
+          ).catch(() => null);
+          if (status?.offset === end) {
+            acceptedOffset = end;
+            break;
+          }
+          if (attempt < 3) await wait(500 * 2 ** attempt);
+        }
+      }
+      if (acceptedOffset == null) throw lastError;
+      if (acceptedOffset !== end)
+        throw new Error("Server menerima ukuran potongan yang tidak sesuai");
+      offset = acceptedOffset;
+      uploadedBytes += end - start;
+    }
+  }
+
+  onProgress?.(100);
+  onProcessing?.();
+  await Promise.all(
+    sessions.map((session) =>
+      request<{ status: string }>(
+        `/api/projects/${projectId}/asset-uploads/${session.uploadId}/complete`,
+        { method: "POST" },
+      ),
+    ),
+  );
+  await Promise.all(
+    sessions.map(async (session) => {
+      while (true) {
+        const status = await request<AssetUploadStatus>(
+          `/api/projects/${projectId}/asset-uploads/${session.uploadId}`,
+        );
+        if (status.status === "completed") return;
+        if (status.status === "failed") {
+          throw new Error(status.error || "Upload processing failed");
+        }
+        await wait(750);
+      }
+    }),
+  );
+  return request<Project>(`/api/projects/${projectId}`);
+}
+
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   bootstrapAuth: (data: { name: string; email: string; password: string }) =>
@@ -550,13 +699,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
   upload: (id: string, files: FileList | File[], frameIntervalSeconds = 1) => {
-    const body = new FormData();
-    Array.from(files).forEach((file) => body.append("files", file));
-    body.append("frame_interval_seconds", String(frameIntervalSeconds));
-    return request<Project>(`/api/projects/${id}/assets`, {
-      method: "POST",
-      body,
-    });
+    return uploadAssetsInChunks(id, files, frameIntervalSeconds);
   },
   uploadWithProgress: (
     id: string,
@@ -565,12 +708,10 @@ export const api = {
     onProcessing?: () => void,
     frameIntervalSeconds = 1,
   ) => {
-    const body = new FormData();
-    Array.from(files).forEach((file) => body.append("files", file));
-    body.append("frame_interval_seconds", String(frameIntervalSeconds));
-    return uploadRequest<Project>(
-      `/api/projects/${id}/assets`,
-      body,
+    return uploadAssetsInChunks(
+      id,
+      files,
+      frameIntervalSeconds,
       onProgress,
       onProcessing,
     );

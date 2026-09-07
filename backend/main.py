@@ -57,6 +57,7 @@ VERSIONS = DATA / "versions"
 RUNS = DATA / "runs"
 EXPORTS = DATA / "exports"
 AVATARS = DATA / "avatars"
+ASSET_UPLOADS = DATA / "asset-uploads"
 DB_PATH = DATA / "visionflow.db"
 LOGGER = logging.getLogger("visionflow")
 TRAIN_CANCEL: dict[str, threading.Event] = {}
@@ -97,7 +98,7 @@ def _queue_ttl_minutes() -> int:
 
 
 REMOTE_QUEUE_TTL_MINUTES = _queue_ttl_minutes()
-for folder in (DATA, UPLOADS, VERSIONS, RUNS, EXPORTS, AVATARS):
+for folder in (DATA, UPLOADS, VERSIONS, RUNS, EXPORTS, AVATARS, ASSET_UPLOADS):
     folder.mkdir(parents=True, exist_ok=True)
 
 
@@ -854,6 +855,13 @@ class HealthActionPayload(BaseModel):
 
 class AnnotationLockPayload(BaseModel):
     ttl_seconds: int = Field(default=300, ge=30, le=1800)
+
+
+class AssetUploadCreatePayload(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(default="", max_length=120)
+    size: int = Field(gt=0)
+    frame_interval_seconds: float = Field(default=1.0, gt=0, le=86400)
 
 
 # Authentication is on by default. Set VISIONFLOW_REQUIRE_AUTH=0 only for
@@ -2510,6 +2518,215 @@ def extract_uploaded_video(
         temporary.unlink(missing_ok=True)
 
 
+ASSET_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+ASSET_UPLOAD_MAX_CHUNK_SIZE = 16 * 1024 * 1024
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v"}
+
+
+def asset_upload_paths(project_id: str, upload_id: str) -> tuple[Path, Path, Path]:
+    session = (ASSET_UPLOADS / project_id / upload_id).resolve()
+    project_root = (ASSET_UPLOADS / project_id).resolve()
+    if session.parent != project_root:
+        raise HTTPException(400, "Invalid upload id")
+    return session, session / "metadata.json", session / "payload"
+
+
+def read_asset_upload(project_id: str, upload_id: str) -> tuple[dict[str, Any], Path, Path]:
+    _, metadata_path, payload_path = asset_upload_paths(project_id, upload_id)
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "Upload session not found") from exc
+    return metadata, metadata_path, payload_path
+
+
+def write_asset_upload_metadata(metadata_path: Path, metadata: dict[str, Any]) -> None:
+    temporary = metadata_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(metadata), encoding="utf-8")
+    temporary.replace(metadata_path)
+
+
+def clean_stale_asset_uploads(project_id: str) -> None:
+    project_root = (ASSET_UPLOADS / project_id).resolve()
+    if not project_root.is_dir():
+        return
+    cutoff = time.time() - 24 * 60 * 60
+    for session in project_root.iterdir():
+        if session.is_dir() and session.resolve().parent == project_root:
+            try:
+                if session.stat().st_mtime < cutoff:
+                    shutil.rmtree(session)
+            except OSError as error:
+                LOGGER.warning("Could not remove stale asset upload %s: %s", session, error)
+
+
+def process_chunked_asset_upload(project_id: str, upload_id: str) -> None:
+    """Validate and import an assembled upload outside the request lifecycle."""
+    created_paths: list[Path] = []
+    try:
+        metadata, metadata_path, payload_path = read_asset_upload(project_id, upload_id)
+        filename = metadata["filename"]
+        suffix = Path(filename).suffix.lower()
+        project_dir = UPLOADS / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+
+        if metadata["kind"] == "video":
+            video_path = payload_path.with_suffix(suffix or ".mp4")
+            payload_path.replace(video_path)
+            pending = extract_uploaded_video(
+                video_path,
+                project_dir,
+                filename,
+                float(metadata["frameIntervalSeconds"]),
+                created_paths,
+            )
+        else:
+            try:
+                with Image.open(payload_path) as image:
+                    image.verify()
+            except Exception as exc:
+                raise HTTPException(400, f"{filename}: invalid image") from exc
+            asset_id = uid()
+            target = project_dir / f"{asset_id}{suffix or '.jpg'}"
+            payload_path.replace(target)
+            created_paths.append(target)
+            pending = [
+                (asset_id, filename, str(target), "train", "unannotated", "[]", "{}")
+            ]
+
+        with db() as con:
+            row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Project not found")
+            con.executemany(
+                "INSERT INTO assets (id,project_id,name,path,split,status,boxes,metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (asset_id, project_id, name, path, split, status, boxes, details)
+                    for asset_id, name, path, split, status, boxes, details in pending
+                ],
+            )
+            log_activity(con, "assets.uploaded", f"{len(pending)} image(s) added", project_id)
+        metadata.update(status="completed", processedAssets=len(pending), updatedAt=now())
+        write_asset_upload_metadata(metadata_path, metadata)
+    except Exception as exc:
+        project_root = (UPLOADS / project_id).resolve()
+        for target in created_paths:
+            resolved = target.resolve()
+            if resolved.parent == project_root:
+                resolved.unlink(missing_ok=True)
+        try:
+            metadata, metadata_path, failed_payload = read_asset_upload(project_id, upload_id)
+            failed_payload.unlink(missing_ok=True)
+            for leftover in metadata_path.parent.glob("payload.*"):
+                if leftover.resolve().parent == metadata_path.parent.resolve():
+                    leftover.unlink(missing_ok=True)
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            metadata.update(status="failed", error=detail or "Upload processing failed", updatedAt=now())
+            write_asset_upload_metadata(metadata_path, metadata)
+        except Exception:
+            LOGGER.exception("Could not record failed upload %s", upload_id)
+        LOGGER.exception("Asset upload %s failed", upload_id)
+
+
+@app.post("/api/projects/{project_id}/asset-uploads", status_code=201)
+def create_asset_upload(project_id: str, payload: AssetUploadCreatePayload):
+    with db() as con:
+        if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise HTTPException(404, "Project not found")
+    suffix = Path(payload.filename).suffix.lower()
+    media_type = payload.content_type.lower()
+    if media_type.startswith("image/") or suffix in IMAGE_SUFFIXES:
+        kind = "image"
+    elif media_type.startswith("video/") or suffix in VIDEO_SUFFIXES:
+        kind = "video"
+    else:
+        raise HTTPException(400, f"{payload.filename}: unsupported image or video format")
+    clean_stale_asset_uploads(project_id)
+    upload_id = uuid.uuid4().hex
+    session, metadata_path, payload_path = asset_upload_paths(project_id, upload_id)
+    session.mkdir(parents=True, exist_ok=False)
+    payload_path.touch()
+    metadata = {
+        "id": upload_id,
+        "projectId": project_id,
+        "filename": Path(payload.filename).name,
+        "contentType": payload.content_type,
+        "kind": kind,
+        "size": payload.size,
+        "offset": 0,
+        "frameIntervalSeconds": payload.frame_interval_seconds,
+        "status": "uploading",
+        "createdAt": now(),
+        "updatedAt": now(),
+    }
+    write_asset_upload_metadata(metadata_path, metadata)
+    return {"uploadId": upload_id, "offset": 0, "chunkSize": ASSET_UPLOAD_CHUNK_SIZE}
+
+
+@app.put("/api/projects/{project_id}/asset-uploads/{upload_id}")
+async def append_asset_upload_chunk(
+    project_id: str,
+    upload_id: str,
+    request: Request,
+    x_upload_offset: int = Header(ge=0),
+):
+    metadata, metadata_path, payload_path = read_asset_upload(project_id, upload_id)
+    if metadata["status"] != "uploading":
+        raise HTTPException(409, "Upload is no longer accepting chunks")
+    if x_upload_offset != metadata["offset"]:
+        raise HTTPException(409, f"Upload offset mismatch; expected {metadata['offset']}")
+    declared_length = int(request.headers.get("content-length", "0") or 0)
+    if declared_length > ASSET_UPLOAD_MAX_CHUNK_SIZE:
+        raise HTTPException(413, "Upload chunk is too large")
+    chunk = await request.body()
+    if not chunk:
+        raise HTTPException(400, "Upload chunk is empty")
+    if len(chunk) > ASSET_UPLOAD_MAX_CHUNK_SIZE:
+        raise HTTPException(413, "Upload chunk is too large")
+    if metadata["offset"] + len(chunk) > metadata["size"]:
+        raise HTTPException(400, "Upload contains more bytes than declared")
+    with payload_path.open("ab") as destination:
+        destination.write(chunk)
+        destination.flush()
+    metadata["offset"] += len(chunk)
+    metadata["updatedAt"] = now()
+    write_asset_upload_metadata(metadata_path, metadata)
+    return {"offset": metadata["offset"]}
+
+
+@app.post("/api/projects/{project_id}/asset-uploads/{upload_id}/complete", status_code=202)
+def complete_asset_upload(
+    project_id: str,
+    upload_id: str,
+    background_tasks: BackgroundTasks,
+):
+    metadata, metadata_path, payload_path = read_asset_upload(project_id, upload_id)
+    if metadata["status"] in {"processing", "completed"}:
+        return {"status": metadata["status"]}
+    if metadata["status"] == "failed":
+        raise HTTPException(400, metadata.get("error", "Upload processing failed"))
+    actual_size = payload_path.stat().st_size
+    if actual_size != metadata["size"] or metadata["offset"] != metadata["size"]:
+        raise HTTPException(409, f"Upload incomplete: received {actual_size} of {metadata['size']} bytes")
+    metadata.update(status="processing", updatedAt=now())
+    write_asset_upload_metadata(metadata_path, metadata)
+    background_tasks.add_task(process_chunked_asset_upload, project_id, upload_id)
+    return {"status": "processing"}
+
+
+@app.get("/api/projects/{project_id}/asset-uploads/{upload_id}")
+def asset_upload_status(project_id: str, upload_id: str):
+    metadata, _, _ = read_asset_upload(project_id, upload_id)
+    return {
+        "status": metadata["status"],
+        "offset": metadata["offset"],
+        "size": metadata["size"],
+        "error": metadata.get("error"),
+        "processedAssets": metadata.get("processedAssets", 0),
+    }
+
+
 @app.post("/api/projects/{project_id}/assets", status_code=201)
 async def upload_assets(
     project_id: str,
@@ -2535,15 +2752,8 @@ async def upload_assets(
                 suffix = Path(filename).suffix.lower() or ".mp4"
                 temporary = project_dir / f"video-{video_id}{suffix}"
                 try:
-                    uploaded_bytes = 0
                     with temporary.open("wb") as destination:
                         while chunk := await incoming.read(1024 * 1024):
-                            uploaded_bytes += len(chunk)
-                            if uploaded_bytes > 500 * 1024 * 1024:
-                                raise HTTPException(
-                                    413,
-                                    f"{filename}: file exceeds the local size limit",
-                                )
                             destination.write(chunk)
                     pending.extend(
                         await asyncio.to_thread(
@@ -2558,19 +2768,18 @@ async def upload_assets(
                 finally:
                     temporary.unlink(missing_ok=True)
                 continue
-            content = await incoming.read()
-            if len(content) > 20 * 1024 * 1024:
-                raise HTTPException(413, f"{filename}: file exceeds the local size limit")
-            try:
-                with Image.open(io.BytesIO(content)) as image:
-                    image.verify()
-            except Exception as exc:
-                raise HTTPException(400, f"{filename}: invalid image") from exc
             asset_id = uid()
             suffix = Path(filename).suffix.lower() or ".jpg"
             target = project_dir / f"{asset_id}{suffix}"
-            target.write_bytes(content)
+            with target.open("wb") as destination:
+                while chunk := await incoming.read(1024 * 1024):
+                    destination.write(chunk)
             created_paths.append(target)
+            try:
+                with Image.open(target) as image:
+                    image.verify()
+            except Exception as exc:
+                raise HTTPException(400, f"{filename}: invalid image") from exc
             pending.append(
                 (asset_id, filename, str(target), "train", "unannotated", "[]", "{}")
             )
