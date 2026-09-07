@@ -1,6 +1,6 @@
 # Ongoing: RTX 5060 black-screen / CUDA stability investigation
 
-Last updated: 2026-08-31 16:42 Asia/Bangkok
+Last updated: 2026-09-07 13:58 Asia/Bangkok
 
 ## User intent
 
@@ -94,6 +94,24 @@ NVIDIA Automatic Tuning/GCC performance profiles are disabled.
 - Windows scheduled task: `SalnovaGpuDiagnostics` (runs at user logon).
 - The monitor was started successfully on 2026-08-31 and its heartbeat and GPU
   sample files were verified.
+
+## Worker auto-connect recovery (2026-09-07)
+
+- The production UI showed `PC RTX 50/60 Lab` offline even though the PC and
+  internet connection were active. This was not a GPU or network failure: no
+  Salnova worker process, Scheduled Task, or Startup shortcut existed, so the
+  server received no heartbeat.
+- `C:\Users\User\SalnovaWorker\.salnova\worker.json` still contained the
+  production server and a worker token, and the CUDA runtime remained healthy
+  (`torch 2.13.0+cu130`, CUDA available, RTX 5060 detected).
+- A dry run of `worker/run-worker.ps1` passed. The supervisor was started and
+  successfully authenticated to production; its log reports RTX 5060, CUDA
+  13.0, and normal job polling.
+- Creating the boot Scheduled Task still requires Administrator privileges, so
+  the runner installed the per-user fallback shortcut at
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Salnova Training Worker.lnk`.
+  This reconnects automatically after Windows login. The current supervisor
+  log is `C:\Users\User\SalnovaWorker\supervisor.log`.
 
 ## Next checks
 

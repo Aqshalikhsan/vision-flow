@@ -206,7 +206,7 @@ test("dashboard to annotation, versions, training, and deployment", async ({
   });
   await expect(trainingLocation).toBeVisible();
   for (const location of [
-    "PC RTX 5060",
+    "PC RTX 50/60 Lab",
     "Device sendiri",
     "NAS",
     "Google Colab",
@@ -215,7 +215,9 @@ test("dashboard to annotation, versions, training, and deployment", async ({
       trainingLocation.getByRole("radio", { name: new RegExp(`^${location}`) }),
     ).toBeVisible();
   }
-  await trainingLocation.getByRole("radio", { name: /^PC RTX 5060/ }).click();
+  await trainingLocation
+    .getByRole("radio", { name: /^PC RTX 50\/60 Lab/ })
+    .click();
   await expect(page.getByLabel("External worker")).toBeVisible();
   await expect(page.getByLabel("Compute preference")).toHaveValue("auto");
   await page.getByLabel("Compute preference").selectOption("gpu");
@@ -223,7 +225,7 @@ test("dashboard to annotation, versions, training, and deployment", async ({
 
   const setupCenter = page.locator(".laptop-workers");
   for (const heading of [
-    "1. PC RTX 5060",
+    "1. PC RTX 50/60 Lab",
     "2. Device sendiri",
     "3. NAS",
     "4. Google Colab",
@@ -231,18 +233,21 @@ test("dashboard to annotation, versions, training, and deployment", async ({
     await expect(setupCenter.getByText(heading, { exact: true })).toBeVisible();
   }
   const pcCard = setupCenter.locator(".training-setup-grid article").filter({
-    hasText: "1. PC RTX 5060",
+    hasText: "1. PC RTX 50/60 Lab",
   });
+  await pcCard.getByText("Admin lab: daftarkan PC RTX sekali").click();
   page.once("dialog", (dialog) => dialog.accept("E2E PC RTX 5060"));
   const [pcWindowsSetup] = await Promise.all([
     page.waitForEvent("download"),
-    pcCard.getByRole("button", { name: "Windows .ps1" }).click(),
+    pcCard.getByRole("button", { name: /Setup permanen.*Windows/ }).click(),
   ]);
   expect(pcWindowsSetup.suggestedFilename()).toBe("salnova-this-pc-setup.ps1");
   const pcWindowsPath = await pcWindowsSetup.path();
   expect(pcWindowsPath).toBeTruthy();
   const pcWindowsScript = await readFile(pcWindowsPath!, "utf8");
   expect(pcWindowsScript).toContain("$provider = 'local'");
+  expect(pcWindowsScript).toContain("-WorkerId $workerId");
+  expect(pcWindowsScript).toContain("Start Salnova Worker");
   expect(pcWindowsScript).toContain("--provider $provider");
   expect(pcWindowsScript).toContain("--work-dir $deviceRoot --keep-jobs");
   expect(pcWindowsScript).toContain('"devices/$workerId"');

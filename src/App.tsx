@@ -10462,8 +10462,9 @@ if ($LASTEXITCODE -ne 0) { throw "Verifikasi package gagal." }
 Write-Host "Setup lengkap. Worker menghubungkan ke $server ..." -ForegroundColor Green
 Write-Host "Log dan checkpoint device disimpan di $deviceRoot" -ForegroundColor Green
 if ($installAsLabWorker) {
-  Write-Host "PC RTX lab akan aktif otomatis saat PC menyala." -ForegroundColor Green
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $workerRoot "worker/run-worker.ps1") -Token $token -Server $server -Install
+  Write-Host "PC RTX lab akan aktif otomatis sejak Windows boot." -ForegroundColor Green
+  Write-Host "Jika worker berhenti, gunakan shortcut 'Start Salnova Worker' di Desktop atau jalankan setup ini lagi." -ForegroundColor Green
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $workerRoot "worker/run-worker.ps1") -Token $token -Server $server -WorkerId $workerId -WorkerHome $workerRoot -Install
 } else {
   & $venvPython (Join-Path $workerRoot "worker/visionflow_worker.py") --server $server --token $token --provider $provider --work-dir $deviceRoot --keep-jobs
 }
@@ -11399,9 +11400,11 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                   <summary>Admin lab: daftarkan PC RTX sekali</summary>
                   <p>
                     Jalankan ini hanya dari PC RTX lab. Setup menyimpan token
-                    secara lokal dan membuat worker aktif otomatis setiap PC
-                    menyala. Semua user kemudian langsung memakai worker ini;
-                    mereka tidak perlu mengunduh apa pun.
+                    secara lokal, memasang auto-start sejak Windows boot, dan
+                    membuat shortcut manual di Desktop. Jika worker pernah mati,
+                    jalankan shortcut atau file setup yang sama untuk
+                    memperbaikinya tanpa mendaftarkan PC baru. Semua user
+                    kemudian langsung memakai worker ini.
                   </p>
                   <span className="worker-downloads">
                     <button
@@ -11409,7 +11412,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                         void prepareWorkerSetup("this-pc", "windows")
                       }
                     >
-                      <Download /> Daftarkan PC RTX (Windows)
+                      <Download /> Setup permanen PC RTX (Windows)
                     </button>
                     <button
                       onClick={() =>

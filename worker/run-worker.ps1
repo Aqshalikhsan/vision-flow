@@ -42,7 +42,10 @@
 param(
     [string] $Token,
     [string] $Server,
+    [string] $WorkerId,
+    [string] $WorkerHome,
     [switch] $Install,
+    [switch] $InstallTaskOnly,
     [switch] $Uninstall,
     [switch] $DryRun
 )
@@ -62,7 +65,9 @@ $DefaultServers = @(
 # fully loaded, but the runtime directory is already available on this PC.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $KnownRuntimeRoot = Join-Path $env:USERPROFILE "SalnovaWorker"
-$ConfigRoot = if ($env:SALNOVA_WORKER_HOME) {
+$ConfigRoot = if ($WorkerHome) {
+    $WorkerHome
+} elseif ($env:SALNOVA_WORKER_HOME) {
     $env:SALNOVA_WORKER_HOME
 } elseif (Test-Path -LiteralPath $KnownRuntimeRoot) {
     $KnownRuntimeRoot
@@ -85,6 +90,7 @@ function Get-RepoRoot {
 function Find-WorkerPython {
     # setup.ps1 membuat venv di SALNOVA_WORKER_HOME atau .runtime/VisionFlowWorker.
     $roots = @()
+    $roots += $ConfigRoot
     if ($env:SALNOVA_WORKER_HOME) { $roots += $env:SALNOVA_WORKER_HOME }
     $roots += (Get-RepoRoot)
     $roots += (Join-Path $env:USERPROFILE "SalnovaWorker")
@@ -113,6 +119,7 @@ function Find-WorkerPython {
 
 function Find-WorkerScript {
     $roots = @()
+    $roots += $ConfigRoot
     if ($env:SALNOVA_WORKER_HOME) { $roots += $env:SALNOVA_WORKER_HOME }
     $roots += (Join-Path $env:USERPROFILE "SalnovaWorker")
     $roots += (Join-Path (Get-RepoRoot) ".runtime/VisionFlowWorker")
@@ -138,11 +145,15 @@ function Read-Config {
 }
 
 function Write-Config {
-    param([string] $TokenValue, [string] $ServerValue)
+    param([string] $TokenValue, [string] $ServerValue, [string] $WorkerIdValue)
     if (-not (Test-Path -LiteralPath $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
-    $payload = [ordered]@{ token = $TokenValue; server = $ServerValue }
+    $payload = [ordered]@{
+        token = $TokenValue
+        server = $ServerValue
+        workerId = $WorkerIdValue
+    }
     $payload | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding utf8
 
     # Token adalah kredensial: batasi ke pemilik profil saja.
@@ -184,40 +195,72 @@ function Resolve-Server {
     return $null
 }
 
-function Install-AutoStart {
+function New-WorkerShortcut {
+    param([string] $ShortcutPath, [string] $Description)
+    $scriptPath = $PSCommandPath
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($ShortcutPath)
+    $shortcut.TargetPath = "powershell.exe"
+    $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`" -WorkerHome `"$ConfigRoot`""
+    $shortcut.WorkingDirectory = Split-Path -Parent $scriptPath
+    $shortcut.Description = $Description
+    $shortcut.Save()
+}
+
+function Test-Administrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Install-SystemAutoStart {
+    if (-not (Test-Administrator)) {
+        throw "Administrator diperlukan untuk memasang worker saat boot."
+    }
     $scriptPath = $PSCommandPath
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
-    # Start at boot for a dedicated lab PC, and repeat at logon as a fallback
-    # for Windows editions that defer user tasks until an interactive session.
-    $triggers = @(
-        (New-ScheduledTaskTrigger -AtStartup),
-        (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
-    )
-    # Worker berumur panjang: jangan dihentikan otomatis, dan tetap jalan saat baterai.
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`" -WorkerHome `"$ConfigRoot`"" `
+        -WorkingDirectory (Split-Path -Parent $scriptPath)
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" `
+        -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+        -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -StartWhenAvailable -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings `
+        -Description "Menjalankan Salnova training worker sejak Windows boot dan mengulanginya bila berhenti." `
+        -Force | Out-Null
+    Write-Step "Auto-start sistem terpasang sebagai Scheduled Task '$TaskName'."
+}
 
+function Install-AutoStart {
+    $startupShortcut = Join-Path ([Environment]::GetFolderPath("Startup")) "Salnova Training Worker.lnk"
+    $manualShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Start Salnova Worker.lnk"
+    New-WorkerShortcut $startupShortcut "Menjalankan Salnova worker otomatis saat user login."
+    New-WorkerShortcut $manualShortcut "Menyalakan atau memperbaiki koneksi Salnova worker secara manual."
+    Write-Step "Shortcut login otomatis dan shortcut manual di Desktop sudah dibuat."
+
+    if (Test-Administrator) {
+        Install-SystemAutoStart
+        return
+    }
     try {
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
-            -Settings $settings -Description "Menjalankan Salnova training worker otomatis saat PC lab menyala atau user login." `
-            -Force | Out-Null
-        Write-Step "Auto-start terpasang sebagai Scheduled Task '$TaskName'."
+        Write-Step "Meminta izin Administrator satu kali untuk auto-start saat boot..."
+        $arguments = @(
+            "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+            "-File", "`"$PSCommandPath`"", "-InstallTaskOnly",
+            "-WorkerHome", "`"$ConfigRoot`""
+        )
+        $elevated = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
+            -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+        if ($elevated.ExitCode -ne 0) {
+            throw "Installer Administrator berhenti dengan exit code $($elevated.ExitCode)."
+        }
+        Write-Step "Auto-start saat boot berhasil dipasang."
     } catch {
-        # Creating an at-startup task requires an elevated PowerShell. A user
-        # Startup shortcut is still reliable for ordinary lab PCs, does not
-        # request admin rights, and starts the worker as soon as Windows logs in.
-        $startup = [Environment]::GetFolderPath("Startup")
-        $shortcutPath = Join-Path $startup "Salnova Training Worker.lnk"
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = "powershell.exe"
-        $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
-        $shortcut.WorkingDirectory = Split-Path -Parent $scriptPath
-        $shortcut.Description = "Menjalankan Salnova training worker otomatis saat user login."
-        $shortcut.Save()
-        Write-Warn "Task saat boot perlu Administrator; fallback Startup folder terpasang untuk login Windows."
+        Write-Warn "Izin Administrator tidak diberikan. Worker tetap otomatis aktif setelah login Windows."
     }
 }
 
@@ -228,15 +271,33 @@ function Uninstall-AutoStart {
     } else {
         Write-Step "Auto-start '$TaskName' memang belum terpasang."
     }
+    Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath("Startup")) "Salnova Training Worker.lnk") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath("Desktop")) "Start Salnova Worker.lnk") -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------- alur utama
 
+if ($InstallTaskOnly) {
+    $installLog = Join-Path $ConfigRoot "task-install.log"
+    try {
+        Install-SystemAutoStart
+        "$(Get-Date -Format o) Scheduled Task installed successfully." | Set-Content -LiteralPath $installLog
+        exit 0
+    } catch {
+        "$(Get-Date -Format o) $($_ | Out-String)" | Set-Content -LiteralPath $installLog
+        exit 1
+    }
+}
 if ($Uninstall) { Uninstall-AutoStart; return }
 
 $config = Read-Config
 if (-not $Token -and $config) { $Token = $config.token }
 if (-not $Server -and $config) { $Server = $config.server }
+if (-not $WorkerId -and $config) { $WorkerId = $config.workerId }
+if (-not $WorkerId) {
+    $deviceDirectories = @(Get-ChildItem -LiteralPath (Join-Path $ConfigRoot "devices") -Directory -ErrorAction SilentlyContinue)
+    if ($deviceDirectories.Count -eq 1) { $WorkerId = $deviceDirectories[0].Name }
+}
 
 if (-not $Token) {
     throw @"
@@ -268,7 +329,14 @@ if (-not $script) { throw "visionflow_worker.py tidak ditemukan. Jalankan setup.
 Write-Step "Mencari server yang aktif"
 $resolved = Resolve-Server $Server
 if (-not $resolved) {
-    throw "Tidak ada server yang menjawab. Dicoba: $($DefaultServers -join ', '). Periksa koneksi atau status NAS."
+    if ($DryRun) {
+        throw "Tidak ada server yang menjawab. Dicoba: $($DefaultServers -join ', '). Periksa koneksi atau status NAS."
+    }
+    Write-Warn "Server belum tersedia. Worker akan menunggu dan mencoba lagi setiap 30 detik."
+    while (-not $resolved) {
+        Start-Sleep -Seconds 30
+        $resolved = Resolve-Server $Server
+    }
 }
 
 if ($DryRun) {
@@ -280,8 +348,20 @@ if ($DryRun) {
     return
 }
 
-Write-Config -TokenValue $Token -ServerValue $resolved
+Write-Config -TokenValue $Token -ServerValue $resolved -WorkerIdValue $WorkerId
 if ($Install) { Install-AutoStart }
+
+$existingWorker = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.ProcessId -ne $PID -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*visionflow_worker.py*"
+    } |
+    Select-Object -First 1
+if ($existingWorker) {
+    Write-Step "Worker sudah aktif (PID $($existingWorker.ProcessId)); tidak membuat proses duplikat."
+    return
+}
 
 Write-Step "Worker aktif -> $resolved"
 Write-Host "    Ctrl+C untuk berhenti. Worker akan otomatis start ulang bila terputus." -ForegroundColor DarkGray
@@ -299,7 +379,16 @@ while ($true) {
         }
     }
 
-    & $python $script --server $resolved --token $Token
+    $workerArguments = @(
+        $script, "--server", $resolved, "--token", $Token,
+        "--provider", "local", "--keep-jobs"
+    )
+    if ($WorkerId) {
+        $deviceRoot = Join-Path $ConfigRoot "devices/$WorkerId"
+        New-Item -ItemType Directory -Force -Path $deviceRoot | Out-Null
+        $workerArguments += @("--work-dir", $deviceRoot)
+    }
+    & $python @workerArguments
     $code = $LASTEXITCODE
 
     if ($code -eq 0) {
