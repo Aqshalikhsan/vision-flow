@@ -351,6 +351,14 @@ class VisionFlowWorker:
         except requests.RequestException:
             pass
         initial_checkpoint: str = config["architecture"]
+        if config.get("research_yaml"):
+            research_model = job_dir / "research-model.yaml"
+            # The graph was compiled from allow-listed components by Salnova's
+            # server. JSON is accepted by Ultralytics because it is valid YAML.
+            research_model.write_text(
+                json.dumps(config["research_yaml"], indent=2), encoding="utf-8"
+            )
+            initial_checkpoint = str(research_model)
         if resume:
             initial_checkpoint = str(last_checkpoint)
         elif job.get("recoveryUrl"):

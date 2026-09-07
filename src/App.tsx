@@ -104,6 +104,7 @@ type Page =
   | "deploy"
   | "workflows"
   | "advance"
+  | "research"
   | "models"
   | "templates"
   | "settings";
@@ -171,6 +172,7 @@ const parseRoute = (): { page: Page; projectId?: string } => {
       "dashboard",
       "workflows",
       "advance",
+      "research",
       "models",
       "templates",
       "settings",
@@ -2362,6 +2364,22 @@ function App() {
             }
           />
         )}
+        {page === "research" && (
+          <ResearchWorkspace
+            projects={projects}
+            go={go}
+            notify={notify}
+            onProjectCreated={(loaded) => {
+              setProjects((current) => [loaded, ...current]);
+              setSelectedId(loaded.id);
+            }}
+            onProjectUpdated={(loaded) =>
+              setProjects((current) =>
+                current.map((item) => (item.id === loaded.id ? loaded : item)),
+              )
+            }
+          />
+        )}
         {page === "project" && project && (
           <ProjectHome
             project={project}
@@ -2614,6 +2632,1130 @@ function App() {
           finish={finishTour}
         />
       )}
+    </div>
+  );
+}
+
+type ResearchComponent = {
+  id: string;
+  name: string;
+  family: string;
+  note: string;
+  ready?: boolean;
+};
+
+const RESEARCH_BACKBONES: ResearchComponent[] = [
+  {
+    id: "c2f-csp",
+    name: "C2f CSP",
+    family: "YOLOv8",
+    note: "CSP feature extractor ringan",
+    ready: true,
+  },
+  {
+    id: "c3k2-csp",
+    name: "C3k2 CSP",
+    family: "YOLO11",
+    note: "CSP kernel-efficient",
+    ready: true,
+  },
+  {
+    id: "darknet-c3",
+    name: "Darknet C3",
+    family: "YOLOv5",
+    note: "CSPDarknet berbasis C3",
+    ready: true,
+  },
+  {
+    id: "resnet18",
+    name: "ResNet-18",
+    family: "Residual CNN",
+    note: "Ringan, pretrained ImageNet",
+    ready: true,
+  },
+  {
+    id: "resnet34",
+    name: "ResNet-34",
+    family: "Residual CNN",
+    note: "Residual menengah",
+    ready: true,
+  },
+  {
+    id: "resnet50",
+    name: "ResNet-50",
+    family: "Residual CNN",
+    note: "Bottleneck residual",
+    ready: true,
+  },
+  {
+    id: "resnet101",
+    name: "ResNet-101",
+    family: "Residual CNN",
+    note: "Residual dalam",
+    ready: true,
+  },
+  {
+    id: "resnext50",
+    name: "ResNeXt-50",
+    family: "Grouped CNN",
+    note: "Grouped convolution",
+    ready: true,
+  },
+  {
+    id: "wide-resnet50",
+    name: "Wide ResNet-50",
+    family: "Residual CNN",
+    note: "Kanal residual lebih lebar",
+    ready: true,
+  },
+  {
+    id: "convnext-tiny",
+    name: "ConvNeXt Tiny",
+    family: "Modern CNN",
+    note: "CNN modern multi-scale",
+    ready: true,
+  },
+  {
+    id: "convnext-small",
+    name: "ConvNeXt Small",
+    family: "Modern CNN",
+    note: "Kapasitas sedang",
+    ready: true,
+  },
+  {
+    id: "convnext-base",
+    name: "ConvNeXt Base",
+    family: "Modern CNN",
+    note: "Kapasitas besar",
+    ready: true,
+  },
+  {
+    id: "efficientnet-b0",
+    name: "EfficientNet-B0",
+    family: "Efficient CNN",
+    note: "Compound scaling",
+    ready: true,
+  },
+  {
+    id: "mobilenet-v3-small",
+    name: "MobileNetV3 Small",
+    family: "Mobile CNN",
+    note: "Latensi rendah",
+    ready: true,
+  },
+  {
+    id: "densenet121",
+    name: "DenseNet-121",
+    family: "Dense CNN",
+    note: "Dense feature reuse",
+    ready: true,
+  },
+  {
+    id: "cspdarknet53",
+    name: "CSPDarknet-53",
+    family: "YOLO",
+    note: "Adapter stage outputs",
+  },
+  {
+    id: "darknet53",
+    name: "Darknet-53",
+    family: "YOLOv3",
+    note: "Adapter legacy graph",
+  },
+  {
+    id: "gelan",
+    name: "GELAN",
+    family: "YOLOv9",
+    note: "Adapter programmable gradient",
+  },
+  {
+    id: "elan",
+    name: "ELAN / E-ELAN",
+    family: "YOLOv7",
+    note: "Adapter aggregation graph",
+  },
+  {
+    id: "repncspelan",
+    name: "RepNCSPELAN",
+    family: "YOLOv9",
+    note: "Adapter re-parameterization",
+  },
+  {
+    id: "hgnetv2",
+    name: "HGNetV2",
+    family: "RT-DETR",
+    note: "Adapter stage mapping",
+  },
+  {
+    id: "efficientnet-v2",
+    name: "EfficientNetV2",
+    family: "Efficient CNN",
+    note: "Adapter feature taps",
+  },
+  {
+    id: "mobilenet-v2",
+    name: "MobileNetV2",
+    family: "Mobile CNN",
+    note: "Adapter inverted residual",
+  },
+  {
+    id: "shufflenet-v2",
+    name: "ShuffleNetV2",
+    family: "Mobile CNN",
+    note: "Adapter channel shuffle",
+  },
+  {
+    id: "squeezenet",
+    name: "SqueezeNet",
+    family: "Compact CNN",
+    note: "Adapter Fire stages",
+  },
+  {
+    id: "regnet",
+    name: "RegNet X/Y",
+    family: "Designed CNN",
+    note: "Adapter feature taps",
+  },
+  {
+    id: "repvgg",
+    name: "RepVGG",
+    family: "Reparam CNN",
+    note: "Adapter train/deploy graph",
+  },
+  {
+    id: "ghostnet",
+    name: "GhostNet",
+    family: "Efficient CNN",
+    note: "Adapter ghost features",
+  },
+  {
+    id: "hrnet",
+    name: "HRNet",
+    family: "High Resolution",
+    note: "Adapter parallel resolutions",
+  },
+  {
+    id: "swin",
+    name: "Swin Transformer",
+    family: "Transformer",
+    note: "Adapter NHWC feature maps",
+  },
+  {
+    id: "swin-v2",
+    name: "Swin Transformer V2",
+    family: "Transformer",
+    note: "Adapter hierarchical outputs",
+  },
+  {
+    id: "pvt",
+    name: "PVT / PVTv2",
+    family: "Transformer",
+    note: "Adapter pyramid tokens",
+  },
+  {
+    id: "vit",
+    name: "ViT",
+    family: "Transformer",
+    note: "Adapter token pyramid",
+  },
+  {
+    id: "deit",
+    name: "DeiT",
+    family: "Transformer",
+    note: "Adapter token outputs",
+  },
+  {
+    id: "maxvit",
+    name: "MaxViT",
+    family: "Hybrid",
+    note: "Adapter block/grid attention",
+  },
+  {
+    id: "coatnet",
+    name: "CoAtNet",
+    family: "Hybrid",
+    note: "Adapter convolution-attention",
+  },
+  {
+    id: "focalnet",
+    name: "FocalNet",
+    family: "Transformer",
+    note: "Adapter focal modulation",
+  },
+];
+
+const RESEARCH_NECKS: ResearchComponent[] = [
+  {
+    id: "identity",
+    name: "Direct multi-scale",
+    family: "None",
+    note: "P3, P4, P5 langsung ke head",
+    ready: true,
+  },
+  {
+    id: "fpn",
+    name: "FPN",
+    family: "Top-down",
+    note: "Feature Pyramid Network",
+    ready: true,
+  },
+  {
+    id: "pan-fpn",
+    name: "PAN-FPN / PAFPN",
+    family: "Bidirectional",
+    note: "Top-down dan bottom-up",
+    ready: true,
+  },
+  {
+    id: "sppf-fpn",
+    name: "SPPF + FPN",
+    family: "Pooling pyramid",
+    note: "Context pooling lalu FPN",
+    ready: true,
+  },
+  {
+    id: "sppf-pan",
+    name: "SPPF + PAN-FPN",
+    family: "YOLO",
+    note: "Context pooling dan PAN",
+    ready: true,
+  },
+  {
+    id: "bifpn",
+    name: "BiFPN",
+    family: "EfficientDet",
+    note: "Adapter weighted fusion",
+  },
+  {
+    id: "nas-fpn",
+    name: "NAS-FPN",
+    family: "NAS",
+    note: "Adapter searched topology",
+  },
+  {
+    id: "asff",
+    name: "ASFF",
+    family: "Adaptive fusion",
+    note: "Adapter spatial weights",
+  },
+  {
+    id: "afpn",
+    name: "AFPN",
+    family: "Adaptive pyramid",
+    note: "Adapter progressive fusion",
+  },
+  {
+    id: "hrfpn",
+    name: "HRFPN",
+    family: "High Resolution",
+    note: "Adapter HRNet branches",
+  },
+  {
+    id: "rfp",
+    name: "Recursive FPN",
+    family: "Recursive",
+    note: "Adapter feedback features",
+  },
+  {
+    id: "dyhead",
+    name: "DyHead",
+    family: "Attention",
+    note: "Adapter scale/spatial/task attention",
+  },
+  {
+    id: "repgfpn",
+    name: "RepGFPN",
+    family: "Reparam fusion",
+    note: "Adapter generalized FPN",
+  },
+  {
+    id: "gold-yolo",
+    name: "GD / Gold-YOLO",
+    family: "Gather-distribute",
+    note: "Adapter global fusion",
+  },
+  {
+    id: "carafe-fpn",
+    name: "CARAFE-FPN",
+    family: "Upsampling",
+    note: "Adapter content-aware upsample",
+  },
+  {
+    id: "sfam",
+    name: "SFAM",
+    family: "Attention",
+    note: "Adapter scale-wise fusion",
+  },
+  {
+    id: "fpn-carafe",
+    name: "FPN + CARAFE",
+    family: "Upsampling",
+    note: "Adapter learned reassembly",
+  },
+  {
+    id: "bfp",
+    name: "Balanced FPN",
+    family: "Balanced",
+    note: "Adapter refine and redistribute",
+  },
+  {
+    id: "nas-bifpn",
+    name: "NAS-BiFPN",
+    family: "NAS",
+    note: "Adapter searched weighted graph",
+  },
+  {
+    id: "spp",
+    name: "SPP",
+    family: "Pooling",
+    note: "Adapter classic spatial pyramid",
+  },
+  {
+    id: "sppcspc",
+    name: "SPPCSPC",
+    family: "YOLOv7",
+    note: "Adapter CSP pooling",
+  },
+  {
+    id: "sim-sppf",
+    name: "SimSPPF",
+    family: "Pooling",
+    note: "Adapter simplified SPPF",
+  },
+  {
+    id: "rfb",
+    name: "RFB",
+    family: "Receptive field",
+    note: "Adapter dilated branches",
+  },
+  {
+    id: "fpem-ffm",
+    name: "FPEM-FFM",
+    family: "Segmentation",
+    note: "Adapter enhancement and fusion",
+  },
+];
+
+const RESEARCH_HEADS: ResearchComponent[] = [
+  {
+    id: "ultralytics-detect",
+    name: "Ultralytics Detect",
+    family: "YOLOv8 / 11 / 12 / 26",
+    note: "Anchor-free decoupled detection",
+    ready: true,
+  },
+  {
+    id: "yolov3",
+    name: "YOLOv3 Head",
+    family: "Anchor-based",
+    note: "Adapter anchors and loss",
+  },
+  {
+    id: "yolov5",
+    name: "YOLOv5 Head",
+    family: "Anchor-based",
+    note: "Adapter AutoAnchor graph",
+  },
+  {
+    id: "yolov7",
+    name: "YOLOv7 Head",
+    family: "Anchor-based",
+    note: "Adapter auxiliary head",
+  },
+  {
+    id: "yolov9",
+    name: "YOLOv9 Head",
+    family: "PGI",
+    note: "Adapter auxiliary reversible branch",
+  },
+  {
+    id: "yolov10",
+    name: "YOLOv10 Head",
+    family: "End-to-end",
+    note: "Adapter one-to-one and one-to-many",
+  },
+  {
+    id: "yolo26",
+    name: "YOLO26 End-to-End",
+    family: "NMS-free",
+    note: "Adapter version-specific head",
+  },
+  {
+    id: "fcos",
+    name: "FCOS",
+    family: "Anchor-free",
+    note: "Adapter centerness and loss",
+  },
+  {
+    id: "retinanet",
+    name: "RetinaNet",
+    family: "One-stage",
+    note: "Adapter anchors and focal loss",
+  },
+  {
+    id: "ssd",
+    name: "SSD / SSDLite",
+    family: "One-stage",
+    note: "Adapter default boxes",
+  },
+  {
+    id: "atss",
+    name: "ATSS",
+    family: "Adaptive samples",
+    note: "Adapter assignment and loss",
+  },
+  {
+    id: "gfl",
+    name: "GFL / GFLv2",
+    family: "Distribution",
+    note: "Adapter quality distribution",
+  },
+  {
+    id: "dfl",
+    name: "Distribution Focal Head",
+    family: "Distribution",
+    note: "Adapter standalone DFL",
+  },
+  {
+    id: "tood",
+    name: "TOOD",
+    family: "Task aligned",
+    note: "Adapter aligned predictor",
+  },
+  {
+    id: "vfnet",
+    name: "VFNet",
+    family: "IoU-aware",
+    note: "Adapter varifocal loss",
+  },
+  {
+    id: "centernet",
+    name: "CenterNet",
+    family: "Keypoint-based",
+    note: "Adapter heatmap decoder",
+  },
+  {
+    id: "cornernet",
+    name: "CornerNet",
+    family: "Keypoint-based",
+    note: "Adapter paired corners",
+  },
+  {
+    id: "faster-rcnn",
+    name: "Faster R-CNN",
+    family: "Two-stage",
+    note: "Adapter RPN and RoIAlign",
+  },
+  {
+    id: "cascade-rcnn",
+    name: "Cascade R-CNN",
+    family: "Two-stage",
+    note: "Adapter cascade IoU stages",
+  },
+  {
+    id: "mask-rcnn",
+    name: "Mask R-CNN",
+    family: "Instance segmentation",
+    note: "Adapter mask branch",
+  },
+  {
+    id: "detr",
+    name: "DETR",
+    family: "Transformer",
+    note: "Adapter queries and Hungarian loss",
+  },
+  {
+    id: "deformable-detr",
+    name: "Deformable DETR",
+    family: "Transformer",
+    note: "Adapter multi-scale attention",
+  },
+  {
+    id: "conditional-detr",
+    name: "Conditional DETR",
+    family: "Transformer",
+    note: "Adapter conditional queries",
+  },
+  {
+    id: "dino",
+    name: "DINO",
+    family: "Transformer",
+    note: "Adapter denoising queries",
+  },
+  {
+    id: "rt-detr",
+    name: "RT-DETR",
+    family: "Real-time transformer",
+    note: "Adapter hybrid encoder",
+  },
+  {
+    id: "dab-detr",
+    name: "DAB-DETR",
+    family: "Transformer",
+    note: "Adapter dynamic anchors",
+  },
+  {
+    id: "sparse-rcnn",
+    name: "Sparse R-CNN",
+    family: "Learnable proposals",
+    note: "Adapter iterative refinement",
+  },
+  {
+    id: "yolact",
+    name: "YOLACT",
+    family: "Instance segmentation",
+    note: "Adapter prototype masks",
+  },
+  {
+    id: "solo",
+    name: "SOLO / SOLOv2",
+    family: "Instance segmentation",
+    note: "Adapter location categories",
+  },
+  {
+    id: "pose",
+    name: "YOLO Pose",
+    family: "Keypoints",
+    note: "Gunakan project Keypoint setelah adapter",
+  },
+  {
+    id: "obb",
+    name: "YOLO OBB",
+    family: "Rotated boxes",
+    note: "Gunakan project OBB setelah adapter",
+  },
+  {
+    id: "segment",
+    name: "YOLO Segment",
+    family: "Segmentation",
+    note: "Gunakan project Segmentation setelah adapter",
+  },
+];
+
+function ResearchWorkspace({
+  projects,
+  go,
+  notify,
+  onProjectCreated,
+  onProjectUpdated,
+}: {
+  projects: Project[];
+  go: (p: Page, id?: string) => void;
+  notify: (s: string) => void;
+  onProjectCreated: (project: Project) => void;
+  onProjectUpdated: (project: Project) => void;
+}) {
+  const detectionProjects = projects.filter(
+    (item) => !item.archived && item.type === "Object Detection",
+  );
+  const [projectId, setProjectId] = useState(detectionProjects[0]?.id || "");
+  const [project, setProject] = useState<Project | null>(null);
+  const [backbone, setBackbone] = useState("c3k2-csp");
+  const [neck, setNeck] = useState("pan-fpn");
+  const [head] = useState("ultralytics-detect");
+  const [pretrained, setPretrained] = useState(true);
+  const [name, setName] = useState("Research detector 01");
+  const [versionId, setVersionId] = useState("");
+  const [epochs, setEpochs] = useState(50);
+  const [imageSize, setImageSize] = useState(640);
+  const [batchSize, setBatchSize] = useState(16);
+  const [workers, setWorkers] = useState<TrainingWorker[]>([]);
+  const [workerId, setWorkerId] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  useEffect(() => {
+    if (!projectId) return setProject(null);
+    let cancelled = false;
+    api
+      .project(projectId)
+      .then((loaded) => {
+        if (cancelled) return;
+        setProject(loaded);
+        setVersionId((current) =>
+          loaded.versions.some((version) => version.id === current)
+            ? current
+            : loaded.versions.at(-1)?.id || "",
+        );
+        onProjectUpdated(loaded);
+      })
+      .catch(() => notify("Project Research tidak dapat dimuat"));
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+  useEffect(() => {
+    const refresh = () =>
+      api
+        .trainingWorkers()
+        .then(setWorkers)
+        .catch(() => {});
+    refresh();
+    const timer = window.setInterval(refresh, 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const active = project?.models.some((model) =>
+    ["queued", "training"].includes(model.status),
+  );
+  useEffect(() => {
+    if (!active || !projectId) return;
+    const timer = window.setInterval(
+      () =>
+        api
+          .project(projectId)
+          .then((loaded) => {
+            setProject(loaded);
+            onProjectUpdated(loaded);
+          })
+          .catch(() => {}),
+      2500,
+    );
+    return () => window.clearInterval(timer);
+  }, [active, projectId]);
+  const selectedBackbone = RESEARCH_BACKBONES.find(
+    (item) => item.id === backbone,
+  )!;
+  const selectedNeck = RESEARCH_NECKS.find((item) => item.id === neck)!;
+  const selectedHead = RESEARCH_HEADS.find((item) => item.id === head)!;
+  const onlineWorkers = workers.filter(
+    (worker) => !worker.revoked && worker.status !== "offline",
+  );
+  const selectedWorker = onlineWorkers.find((worker) => worker.id === workerId);
+  const canTrain = Boolean(
+    project &&
+    versionId &&
+    !active &&
+    selectedBackbone.ready &&
+    selectedNeck.ready &&
+    selectedHead.ready &&
+    (!workerId || selectedWorker),
+  );
+  const createProject = async () => {
+    const projectName = prompt(
+      "Nama project Object Detection baru",
+      "Research Object Detection",
+    )?.trim();
+    if (!projectName) return;
+    const rawClasses = prompt(
+      "Nama class, pisahkan dengan koma",
+      "object",
+    )?.trim();
+    const classes = (rawClasses || "object")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    try {
+      const loaded = await api.createProject({
+        name: projectName,
+        type: "Object Detection",
+        description: "Dibuat dari Research Architecture Lab",
+        classes,
+      });
+      onProjectCreated(loaded);
+      setProjectId(loaded.id);
+      notify("Project Research baru dibuat. Tambahkan dan labeli dataset.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Project gagal dibuat");
+    }
+  };
+  const start = async () => {
+    if (!project || !versionId)
+      return notify(
+        "Tambahkan, labeli, lalu buat dataset version terlebih dahulu",
+      );
+    if (workerId && !selectedWorker)
+      return notify("Worker yang dipilih belum online");
+    setStarting(true);
+    try {
+      const target = selectedWorker
+        ? selectedWorker.profile === "colab"
+          ? selectedWorker.capabilities.cuda
+            ? "colab-gpu"
+            : "colab-auto"
+          : selectedWorker.capabilities.cuda
+            ? "remote-gpu"
+            : "remote-auto"
+        : "server";
+      const loaded = await api.train(project.id, {
+        architecture: "research.yaml",
+        epochs,
+        image_size: imageSize,
+        version_id: versionId,
+        batch_size: batchSize,
+        optimizer: "auto",
+        execution_target: target,
+        worker_id: selectedWorker?.id,
+        worker_profile: selectedWorker?.profile,
+        research_model: {
+          name,
+          backbone,
+          neck,
+          head: "ultralytics-detect",
+          pretrained,
+        },
+      });
+      setProject(loaded);
+      onProjectUpdated(loaded);
+      notify("Model Research masuk training queue");
+    } catch (error) {
+      notify(
+        error instanceof Error
+          ? error.message
+          : "Training Research gagal dimulai",
+      );
+    } finally {
+      setStarting(false);
+    }
+  };
+  const query = catalogQuery.trim().toLowerCase();
+  const catalog = (items: ResearchComponent[]) =>
+    items.filter(
+      (item) =>
+        !query ||
+        `${item.name} ${item.family} ${item.note}`
+          .toLowerCase()
+          .includes(query),
+    );
+  return (
+    <div className="page research-page">
+      <section className="research-hero">
+        <div>
+          <span className="eyebrow">ARCHITECTURE LAB</span>
+          <h1>Rancang model deteksi sendiri</h1>
+          <p>
+            Kombinasikan Backbone, Neck, dan Head, hubungkan dataset version,
+            lalu train sebagai model baru.
+          </p>
+        </div>
+        <div className="research-flow" aria-label="Architecture flow">
+          <span>
+            <b>Backbone</b>
+            <small>{selectedBackbone.name}</small>
+          </span>
+          <ChevronRight />
+          <span>
+            <b>Neck</b>
+            <small>{selectedNeck.name}</small>
+          </span>
+          <ChevronRight />
+          <span>
+            <b>Head</b>
+            <small>{selectedHead.name}</small>
+          </span>
+        </div>
+      </section>
+
+      <section className="panel research-dataset">
+        <header>
+          <div>
+            <span className="step-number">1</span>
+            <div>
+              <h2>Dataset eksperimen</h2>
+              <p>
+                Research memakai project dan immutable dataset version yang sama
+                dengan alur Train.
+              </p>
+            </div>
+          </div>
+          <button className="secondary" onClick={createProject}>
+            <Plus /> Project baru
+          </button>
+        </header>
+        <div className="research-dataset-grid">
+          <label>
+            <span>Project Object Detection</span>
+            <select
+              value={projectId}
+              onChange={(event) => setProjectId(event.target.value)}
+            >
+              <option value="">Pilih project</option>
+              {detectionProjects.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Dataset version</span>
+            <select
+              value={versionId}
+              onChange={(event) => setVersionId(event.target.value)}
+              disabled={!project?.versions.length}
+            >
+              <option value="">Belum ada version</option>
+              {project?.versions.map((version) => (
+                <option key={version.id} value={version.id}>
+                  v{version.number} |{" "}
+                  {version.generatedImages || version.images} gambar |{" "}
+                  {version.resize}px
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="research-data-stats">
+            <span>
+              <b>{project?.assets.length || project?.assetCount || 0}</b> asset
+            </span>
+            <span>
+              <b>
+                {project?.assets.filter((asset) => asset.boxes.length).length ||
+                  0}
+              </b>{" "}
+              berlabel
+            </span>
+            <span>
+              <b>{project?.versions.length || 0}</b> version
+            </span>
+          </div>
+        </div>
+        {project && (
+          <div className="research-data-actions">
+            <button onClick={() => go("dataset", project.id)}>
+              <Upload /> Tambah dataset
+            </button>
+            <button onClick={() => go("annotate", project.id)}>
+              <PenTool /> Label data
+            </button>
+            <button onClick={() => go("versions", project.id)}>
+              <WandSparkles /> Augmentasi dan version
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="panel research-builder">
+        <header>
+          <div>
+            <span className="step-number">2</span>
+            <div>
+              <h2>Susun arsitektur</h2>
+              <p>
+                Hanya komponen berstatus Siap train yang dapat masuk compiler
+                aman saat ini.
+              </p>
+            </div>
+          </div>
+        </header>
+        <div className="research-builder-grid">
+          <label>
+            <span>Backbone</span>
+            <select
+              value={backbone}
+              onChange={(event) => setBackbone(event.target.value)}
+            >
+              {RESEARCH_BACKBONES.filter((item) => item.ready).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} | {item.family}
+                </option>
+              ))}
+            </select>
+            <small>Mengekstrak feature map P3, P4, P5.</small>
+          </label>
+          <label>
+            <span>Neck</span>
+            <select
+              value={neck}
+              onChange={(event) => setNeck(event.target.value)}
+            >
+              {RESEARCH_NECKS.filter((item) => item.ready).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <small>Menggabungkan fitur antar skala.</small>
+          </label>
+          <label>
+            <span>Head</span>
+            <select value={head} disabled>
+              <option value={head}>{selectedHead.name}</option>
+            </select>
+            <small>Menghasilkan box, class, dan confidence.</small>
+          </label>
+        </div>
+        <div className="compatibility-ok">
+          <Check />
+          <div>
+            <b>Kombinasi kompatibel</b>
+            <small>
+              Stride P3/8, P4/16, P5/32 dipetakan oleh compiler; channel fusion
+              disesuaikan otomatis.
+            </small>
+          </div>
+        </div>
+        {!backbone.startsWith("c2f") &&
+          !backbone.startsWith("c3") &&
+          !backbone.startsWith("darknet") && (
+            <label className="research-check">
+              <input
+                type="checkbox"
+                checked={pretrained}
+                onChange={(event) => setPretrained(event.target.checked)}
+              />
+              <span>
+                <b>Gunakan pretrained ImageNet</b>
+                <small>
+                  Worker mengunduh weight TorchVision saat training pertama bila
+                  cache belum tersedia.
+                </small>
+              </span>
+            </label>
+          )}
+      </section>
+
+      <section className="panel research-train">
+        <header>
+          <div>
+            <span className="step-number">3</span>
+            <div>
+              <h2>Konfigurasi dan train</h2>
+              <p>Hasil tersimpan di Model Registry seperti training biasa.</p>
+            </div>
+          </div>
+        </header>
+        <div className="research-train-grid">
+          <label>
+            <span>Nama model</span>
+            <input
+              value={name}
+              maxLength={100}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Epochs</span>
+            <input
+              type="number"
+              min="1"
+              max="300"
+              value={epochs}
+              onChange={(event) => setEpochs(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            <span>Image size</span>
+            <select
+              value={imageSize}
+              onChange={(event) => setImageSize(Number(event.target.value))}
+            >
+              <option value={416}>416</option>
+              <option value={640}>640</option>
+              <option value={960}>960</option>
+              <option value={1280}>1280</option>
+            </select>
+          </label>
+          <label>
+            <span>Batch</span>
+            <input
+              type="number"
+              min="1"
+              max="128"
+              value={batchSize}
+              onChange={(event) => setBatchSize(Number(event.target.value))}
+            />
+          </label>
+          <label className="research-worker">
+            <span>Lokasi training</span>
+            <select
+              value={workerId}
+              onChange={(event) => setWorkerId(event.target.value)}
+            >
+              <option value="">NAS / server</option>
+              {workers
+                .filter((worker) => !worker.revoked)
+                .map((worker) => (
+                  <option
+                    key={worker.id}
+                    value={worker.id}
+                    disabled={worker.status === "offline"}
+                  >
+                    {worker.name} | {worker.status}
+                    {worker.capabilities.cuda ? " | GPU" : ""}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button
+            className="primary research-start"
+            disabled={!canTrain || starting || !name.trim()}
+            onClick={() => void start()}
+          >
+            {starting ? <LoaderCircle className="spin" /> : <Play />}{" "}
+            {starting
+              ? "Memasukkan antrean"
+              : active
+                ? "Training sedang aktif"
+                : "Train model baru"}
+          </button>
+        </div>
+      </section>
+
+      <section className="panel research-catalog">
+        <header>
+          <div>
+            <span className="step-number">4</span>
+            <div>
+              <h2>Katalog metode</h2>
+              <p>
+                {RESEARCH_BACKBONES.length} backbone, {RESEARCH_NECKS.length}{" "}
+                neck, dan {RESEARCH_HEADS.length} head. Status Adapter berarti
+                algoritma sudah dicatat tetapi memerlukan implementasi module,
+                loss, assignment, atau decoder khusus.
+              </p>
+            </div>
+          </div>
+          <label className="research-search">
+            <Search />
+            <input
+              value={catalogQuery}
+              onChange={(event) => setCatalogQuery(event.target.value)}
+              placeholder="Cari ResNet, BiFPN, DETR..."
+            />
+          </label>
+        </header>
+        <div className="research-catalog-columns">
+          {[
+            ["Backbone", catalog(RESEARCH_BACKBONES)],
+            ["Neck", catalog(RESEARCH_NECKS)],
+            ["Head", catalog(RESEARCH_HEADS)],
+          ].map(([title, rawItems]) => {
+            const items = rawItems as ResearchComponent[];
+            return (
+              <article key={title as string}>
+                <h3>
+                  {title as string}
+                  <em>{items.length}</em>
+                </h3>
+                <div>
+                  {items.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={item.ready ? "ready" : "adapter"}
+                      onClick={() => {
+                        if (!item.ready)
+                          return notify(
+                            `${item.name} tercatat di katalog dan membutuhkan adapter sebelum dapat dilatih`,
+                          );
+                        if (title === "Backbone") setBackbone(item.id);
+                        if (title === "Neck") setNeck(item.id);
+                      }}
+                    >
+                      <span>
+                        <b>{item.name}</b>
+                        <small>
+                          {item.family} | {item.note}
+                        </small>
+                      </span>
+                      <em>{item.ready ? "Siap train" : "Adapter"}</em>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }
@@ -3286,6 +4428,7 @@ function Sidebar({
     ["dashboard", LayoutDashboard, "Projects"],
     ["workflows", Workflow, "Workflows"],
     ["advance", Sparkles, "Advance"],
+    ["research", FlaskConical, "Research"],
     ["deploy", Rocket, "Deployments"],
   ] as const;
   return (
@@ -3459,6 +4602,7 @@ function Topbar({
                   dashboard: "Projects",
                   workflows: "Workflows",
                   advance: "Advance",
+                  research: "Research",
                   models: "Model Library",
                   templates: "Templates",
                   settings: "Settings",

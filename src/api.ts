@@ -1035,6 +1035,13 @@ export const api = {
       cos_lr?: boolean;
       close_mosaic?: number;
       amp?: boolean;
+      research_model?: {
+        name: string;
+        backbone: string;
+        neck: string;
+        head: "ultralytics-detect";
+        pretrained: boolean;
+      };
     },
   ) =>
     request<Project>(`/api/projects/${id}/train`, {

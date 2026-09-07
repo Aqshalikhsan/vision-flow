@@ -629,6 +629,14 @@ class VersionUpdatePayload(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=30)
 
 
+class ResearchModelPayload(BaseModel):
+    name: str = Field(default="Research detector", min_length=1, max_length=100)
+    backbone: str = Field(min_length=1, max_length=60)
+    neck: str = Field(min_length=1, max_length=60)
+    head: str = Field(default="ultralytics-detect", pattern=r"^ultralytics-detect$")
+    pretrained: bool = True
+
+
 class TrainPayload(BaseModel):
     architecture: str = "yolo11n.pt"
     epochs: int = Field(default=10, ge=1, le=300)
@@ -648,6 +656,7 @@ class TrainPayload(BaseModel):
     cos_lr: bool = False
     close_mosaic: int = Field(default=10, ge=0, le=50)
     amp: bool = True
+    research_model: ResearchModelPayload | None = None
 
 
 class TrainingSweepPayload(BaseModel):
@@ -4593,6 +4602,111 @@ def fail_remote_training(model_id: str, payload: WorkerFailurePayload, request: 
     return {"status": "failed", "modelId": model_id}
 
 
+RESEARCH_TORCHVISION_BACKBONES: dict[str, tuple[str, int, tuple[tuple[int, int], ...]]] = {
+    # id: (torchvision model, final output channels, ((split index, channels), P3/P4/P5))
+    "resnet18": ("resnet18", 512, ((6, 128), (7, 256), (8, 512))),
+    "resnet34": ("resnet34", 512, ((6, 128), (7, 256), (8, 512))),
+    "resnet50": ("resnet50", 2048, ((6, 512), (7, 1024), (8, 2048))),
+    "resnet101": ("resnet101", 2048, ((6, 512), (7, 1024), (8, 2048))),
+    "resnext50": ("resnext50_32x4d", 2048, ((6, 512), (7, 1024), (8, 2048))),
+    "wide-resnet50": ("wide_resnet50_2", 2048, ((6, 512), (7, 1024), (8, 2048))),
+    "convnext-tiny": ("convnext_tiny", 768, ((4, 192), (6, 384), (8, 768))),
+    "convnext-small": ("convnext_small", 768, ((4, 192), (6, 384), (8, 768))),
+    "convnext-base": ("convnext_base", 1024, ((4, 256), (6, 512), (8, 1024))),
+    "efficientnet-b0": ("efficientnet_b0", 1280, ((4, 40), (5, 80), (8, 320))),
+    "mobilenet-v3-small": ("mobilenet_v3_small", 576, ((3, 24), (5, 40), (10, 96))),
+    "densenet121": ("densenet121", 1024, ((7, 512), (9, 1024), (11, 1024))),
+}
+RESEARCH_NATIVE_BACKBONES = {
+    "c2f-csp": "C2f",
+    "darknet-c3": "C3",
+    "c3k2-csp": "C3k2",
+}
+RESEARCH_NECKS = {"identity", "fpn", "pan-fpn", "sppf-fpn", "sppf-pan"}
+
+
+def compile_research_model(spec: ResearchModelPayload, class_count: int) -> dict[str, Any]:
+    """Compile allow-listed component IDs into a trusted Ultralytics model graph."""
+    if spec.head != "ultralytics-detect":
+        raise HTTPException(400, "Research head is not trainable in this runtime")
+    if spec.neck not in RESEARCH_NECKS:
+        raise HTTPException(400, "Research neck is not trainable in this runtime")
+    if spec.backbone in RESEARCH_NATIVE_BACKBONES:
+        block = RESEARCH_NATIVE_BACKBONES[spec.backbone]
+        block_args = lambda channels: [channels, False, 0.25] if block == "C3k2" else [channels, True] if block == "C2f" else [channels]
+        backbone: list[list[Any]] = [
+            [-1, 1, "Conv", [32, 3, 2]],
+            [-1, 1, "Conv", [64, 3, 2]],
+            [-1, 2, block, block_args(64)],
+            [-1, 1, "Conv", [128, 3, 2]],
+            [-1, 2, block, block_args(128)],
+            [-1, 1, "Conv", [256, 3, 2]],
+            [-1, 2, block, block_args(256)],
+            [-1, 1, "Conv", [512, 3, 2]],
+            [-1, 2, block, block_args(512)],
+            [-1, 1, "SPPF", [512, 5]],
+        ]
+        pyramid = [4, 6, 9]
+    elif spec.backbone in RESEARCH_TORCHVISION_BACKBONES:
+        model_name, output_channels, outputs = RESEARCH_TORCHVISION_BACKBONES[spec.backbone]
+        weights = "DEFAULT" if spec.pretrained else None
+        backbone = [[-1, 1, "TorchVision", [output_channels, model_name, weights, True, 2, True]]]
+        pyramid = []
+        for split_index, channels in outputs:
+            backbone.append([0, 1, "Index", [channels, split_index]])
+            pyramid.append(len(backbone) - 1)
+    else:
+        raise HTTPException(400, "Research backbone is not trainable in this runtime")
+
+    head: list[list[Any]] = []
+    p3, p4, p5 = pyramid
+
+    def add(source: Any, module: str, args: list[Any], repeats: int = 1) -> int:
+        head.append([source, repeats, module, args])
+        return len(backbone) + len(head) - 1
+
+    if spec.neck.startswith("sppf-"):
+        p5 = add(p5, "SPPF", [512, 5])
+    if spec.neck == "identity":
+        detect_inputs = [p3, p4, p5]
+    else:
+        up5 = add(p5, "nn.Upsample", [None, 2, "nearest"])
+        cat4 = add([up5, p4], "Concat", [1])
+        out4 = add(cat4, "C2f", [256], 2)
+        up4 = add(out4, "nn.Upsample", [None, 2, "nearest"])
+        cat3 = add([up4, p3], "Concat", [1])
+        out3 = add(cat3, "C2f", [128], 2)
+        if spec.neck in {"pan-fpn", "sppf-pan"}:
+            down3 = add(out3, "Conv", [128, 3, 2])
+            pan4 = add([down3, out4], "Concat", [1])
+            pan4 = add(pan4, "C2f", [256], 2)
+            down4 = add(pan4, "Conv", [256, 3, 2])
+            pan5 = add([down4, p5], "Concat", [1])
+            pan5 = add(pan5, "C2f", [512], 2)
+            detect_inputs = [out3, pan4, pan5]
+        else:
+            detect_inputs = [out3, out4, p5]
+    add(detect_inputs, "Detect", ["nc"])
+    return {"nc": class_count, "backbone": backbone, "head": head}
+
+
+def research_model_path(model_id: str, payload: TrainPayload) -> Path | None:
+    if not payload.research_model:
+        return None
+    model_dir = RUNS / model_id
+    model_dir.mkdir(parents=True, exist_ok=True)
+    path = model_dir / "research-model.yaml"
+    with db() as con:
+        row = con.execute(
+            "SELECT p.classes FROM projects p JOIN models m ON m.project_id=p.id WHERE m.id=?",
+            (model_id,),
+        ).fetchone()
+    class_count = len(json.loads(row["classes"] or "[]")) if row else 1
+    # JSON is a valid YAML subset and avoids accepting or interpolating raw YAML.
+    path.write_text(json.dumps(compile_research_model(payload.research_model, max(1, class_count)), indent=2), encoding="utf-8")
+    return path
+
+
 def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
     try:
         from ultralytics import YOLO
@@ -4603,7 +4717,8 @@ def train_worker(model_id: str, version_path: Path, payload: TrainPayload):
             )
         last_checkpoint = RUNS / model_id / "weights" / "last.pt"
         resume = last_checkpoint.is_file()
-        initial_checkpoint = payload.architecture
+        custom_model = research_model_path(model_id, payload)
+        initial_checkpoint = str(custom_model) if custom_model else payload.architecture
         with db() as con:
             model_row = con.execute("SELECT project_id,weights_path FROM models WHERE id=?", (model_id,)).fetchone()
             if payload.base_model_id and model_row:
@@ -4792,10 +4907,16 @@ def start_training(project_id: str, payload: TrainPayload, request: Request):
         }.get(project["type"])
         if project["type"] == "Multi-Label Classification":
             raise HTTPException(400, "Multi-label datasets can be annotated and exported; YOLO softmax checkpoints only support single-label training")
-        architecture_task = "segment" if "-seg" in payload.architecture else "obb" if "-obb" in payload.architecture else "pose" if "-pose" in payload.architecture else "classify" if "-cls" in payload.architecture else "detect"
+        if payload.research_model:
+            if project["type"] != "Object Detection":
+                raise HTTPException(400, "Research architecture training currently supports Object Detection projects")
+            if payload.base_model_id:
+                raise HTTPException(400, "A custom Research graph must start as a new model, not from an unrelated checkpoint")
+            compile_research_model(payload.research_model, max(1, len(json.loads(project["classes"] or "[]"))))
+        architecture_task = "detect" if payload.research_model else "segment" if "-seg" in payload.architecture else "obb" if "-obb" in payload.architecture else "pose" if "-pose" in payload.architecture else "classify" if "-cls" in payload.architecture else "detect"
         if task_suffix != architecture_task:
             raise HTTPException(400, "Selected model task does not match the project type")
-        if not re.match(r"^(yolo(26|12|11)[nslmx](-(seg|pose|obb|cls))?|yolov(10[nsmblx]|9[tsmce](-seg)?|8[nslmx](-(seg|pose|obb|cls))?|5[nslmx]u|3u|3-tinyu))\.pt$", payload.architecture):
+        if not payload.research_model and not re.match(r"^(yolo(26|12|11)[nslmx](-(seg|pose|obb|cls))?|yolov(10[nsmblx]|9[tsmce](-seg)?|8[nslmx](-(seg|pose|obb|cls))?|5[nslmx]u|3u|3-tinyu))\.pt$", payload.architecture):
             raise HTTPException(400, "Unsupported or unsafe model checkpoint name")
         source_model = None
         if payload.base_model_id:
@@ -4834,8 +4955,13 @@ def start_training(project_id: str, payload: TrainPayload, request: Request):
         if not any(json.loads(row["boxes"]) for row in annotated):
             raise HTTPException(400, "Annotate at least one object before training")
         model_id = uid()
-        display = f"{source_model['name']} fine-tune" if source_model else payload.architecture.replace(".pt", "")
+        display = payload.research_model.name.strip() if payload.research_model else f"{source_model['name']} fine-tune" if source_model else payload.architecture.replace(".pt", "")
         saved_config = payload.model_dump()
+        if payload.research_model:
+            saved_config["research_yaml"] = compile_research_model(
+                payload.research_model,
+                max(1, len(json.loads(project["classes"] or "[]"))),
+            )
         if payload.execution_target != "server":
             saved_config["queue_activated_at"] = now()
         con.execute("INSERT INTO models (id,project_id,name,version,status,progress,config,created_at,metrics_history) VALUES (?,?,?,?,?,?,?,?,?)", (model_id, project_id, display, version["number"], "queued", 0, json.dumps(saved_config), now(), "[]"))
