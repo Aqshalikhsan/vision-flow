@@ -16,5 +16,7 @@ test("Research workspace exposes the architecture builder and method catalog", a
   await expect(columns.nth(2).locator("h3")).toContainText("Head32");
   await page.getByPlaceholder("Cari ResNet, BiFPN, DETR...").fill("BiFPN");
   await expect(page.getByRole("button", { name: /^BiFPN / })).toBeVisible();
-  await expect(page.getByText("Adapter", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByText("Adapter", { exact: true }).first(),
+  ).toBeVisible();
 });
