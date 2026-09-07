@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tutorial Penggunaan Salnova</title>
+    <style>
+      @page { size: A4 landscape; margin: 8mm; }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #20192c; font: 9.4px/1.29 Arial, sans-serif; }
+      .page { position: relative; min-height: 194mm; padding: 3mm 4mm 8mm; page-break-after: always; overflow: hidden; }
+      .page:last-child { page-break-after: auto; }
+      header { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #7759e7; padding-bottom:2mm; margin-bottom:3mm; }
+      h1 { margin:0; font-size:25px; line-height:1.05; }
+      h2 { margin:0; font-size:17px; }
+      h3 { margin:1.6mm 0 .8mm; font-size:11px; color:#563a9e; }
+      p { margin:0 0 1.3mm; }
+      ol, ul { margin:1mm 0 1.5mm; padding-left:4.5mm; }
+      li { margin-bottom:.7mm; }
+      .brand { font-weight:800; color:#6444c5; letter-spacing:.05em; }
+      .grid { display:grid; grid-template-columns:1.12fr .88fr; gap:4mm; }
+      .cols { display:grid; grid-template-columns:1fr 1fr; gap:3mm; }
+      .three { display:grid; grid-template-columns:1fr 1fr 1fr; gap:3mm; }
+      .screen { width:100%; object-fit:contain; object-position:top; background:#100a1b; border:1px solid #d7cee7; border-radius:2mm; box-shadow:0 1mm 3mm #24153720; }
+      .half { height:78mm; object-fit:cover; object-position:top; }
+      .mini { height:49mm; object-fit:cover; object-position:top; }
+      .fill { height:170mm; align-items:stretch; }
+      .page:first-of-type .fill { height:166mm; }
+      .page:first-of-type .half { height:73mm; }
+      .fill > div { height:100%; padding:2.5mm; overflow:hidden; border:1px solid #e3dced; border-radius:2.5mm; background:linear-gradient(180deg,#fcfbff,#f7f3ff); display:flex; flex-direction:column; justify-content:space-between; }
+      .fill > div > .cols { flex:1; }
+      .three .mini { height:72mm; }
+      .caption { margin:.8mm 0 1.7mm; color:#6e6475; font-size:8px; }
+      .box { padding:2mm 2.5mm; border-radius:1.5mm; background:#f1edff; border-left:3px solid #7657e8; margin:1.5mm 0; }
+      .ok { background:#eaf8f2; border-left-color:#17996f; }
+      .warn { background:#fff1dc; border-left-color:#df8524; }
+      .critical { background:#ffe9e6; border-left-color:#d64a3a; }
+      .flow { display:flex; align-items:center; gap:1.2mm; margin:2mm 0; font-weight:bold; }
+      .flow span { background:#eee8ff; padding:1.4mm 2mm; border-radius:1.5mm; }
+      .flow b { color:#7657e8; }
+      table { width:100%; border-collapse:collapse; margin:1.5mm 0; font-size:8.6px; }
+      th, td { border:1px solid #d8d0e4; padding:1.1mm 1.4mm; vertical-align:top; }
+      th { background:#eee8ff; text-align:left; }
+      code { font:8.5px Consolas, monospace; color:#4d2da0; }
+      footer { position:absolute; left:4mm; right:4mm; bottom:1.5mm; display:flex; justify-content:space-between; color:#766d7d; font-size:8px; }
+      .domain { display:inline-block; padding:2mm 3mm; border-radius:1.5mm; background:#ffb66d; color:#23162f; font-size:14px; font-weight:bold; margin:2mm 0; }
+      .compact li { margin-bottom:.45mm; }
+      .subtitle { margin:1mm 0 0; color:#6a6073; font-size:10px; }
+    </style>
+  </head>
+  <body>
+    <section class="page">
+      <header><div><h2>Tutorial Penggunaan Salnova</h2><p class="subtitle">Panduan praktis untuk mengelola dataset, melatih model, menjalankan inference, dan melaporkan kendala.</p></div><span class="brand">1 · AKSES & PROJECT</span></header>
+      <div class="grid fill">
+        <div>
+          <img class="screen half" src=".tmp/panduan-screenshots/01-login-domain.png" alt="Login Salnova" />
+          <div class="caption">A. Halaman login pada domain resmi Salnova.</div>
+          <img class="screen half" src=".tmp/panduan-screenshots/02-dashboard.png" alt="Dashboard Salnova" />
+          <div class="caption">B. Dashboard untuk membuat, mencari, membuka, menduplikasi, atau mengarsipkan project.</div>
+        </div>
+        <div>
+          <h1>Tutorial Penggunaan Salnova</h1>
+          <p class="subtitle">Petunjuk singkat penggunaan tools Salnova dari akses akun hingga model siap digunakan.</p>
+          <div class="box critical"><b>Persiapan sebelum mulai:</b> jangan matikan <b>NAS</b> karena NAS berfungsi sebagai server Salnova; pastikan NAS dan koneksi internet tetap aktif. Jika ingin training memakai <b>PC RTX 50/60 Lab</b>, nyalakan PC tersebut terlebih dahulu dan pastikan PC terhubung ke internet sampai worker berstatus <b>Online</b>.</div>
+          <div class="domain">https://salnova-ai.my.id</div>
+          <ol>
+            <li>Buka domain resmi memakai Chrome/Edge. Gunakan HTTPS, terutama untuk webcam.</li>
+            <li>Masukkan email dan password, lalu klik <b>Masuk</b>. Pengguna baru memilih <b>Buat akun baru</b>.</li>
+            <li>Di Dashboard, klik <b>Create New Project</b>; isi nama, deskripsi, jenis project, dan class.</li>
+            <li>Buka kartu project untuk melanjutkan pekerjaan.</li>
+          </ol>
+          <div class="flow"><span>Project</span><b>›</b><span>Dataset</span><b>›</b><span>Annotate</span><b>›</b><span>Version</span><b>›</b><span>Train</span><b>›</b><span>Deploy</span></div>
+          <table>
+            <tr><th>Tujuan</th><th>Jenis project</th></tr>
+            <tr><td>Kotak posisi objek</td><td>Object Detection / Oriented Bounding Box</td></tr>
+            <tr><td>Bentuk objek atau area piksel</td><td>Instance / Semantic Segmentation</td></tr>
+            <tr><td>Titik sendi/landmark</td><td>Keypoint Detection</td></tr>
+            <tr><td>Label untuk seluruh gambar</td><td>Single / Multi-Label Classification</td></tr>
+          </table>
+          <div class="box"><b>Menu utama:</b> Projects untuk eksperimen; Workflows untuk otomasi; Advance untuk alat anotasi pintar; Deployments/Model Library untuk model siap pakai; Settings untuk anggota dan backup.</div>
+          <div class="box warn"><b>Penting:</b> pilih jenis project dengan benar sejak awal karena alat anotasi dan pilihan model akan mengikutinya. Tekan <b>Ctrl+K</b> untuk pencarian cepat.</div>
+        </div>
+      </div>
+      <footer><span></span><span>1 / 4</span></footer>
+    </section>
+
+    <section class="page">
+      <header><h2>Dataset, upload, anotasi, dan versioning</h2><span class="brand">2 · DATASET</span></header>
+      <div class="cols fill">
+        <div>
+          <img class="screen half" src=".tmp/panduan-screenshots/03-project-overview.png" alt="Upload data" />
+          <div class="caption">A. Klik Upload data dari Overview; atur detik per frame untuk video.</div>
+          <img class="screen half" src=".tmp/panduan-screenshots/04-dataset-upload.png" alt="Dataset" />
+          <div class="caption">B. Kelola gambar, status anotasi/review, dan split train-valid-test.</div>
+        </div>
+        <div>
+          <div class="cols">
+            <div>
+              <h3>Upload gambar/video besar</h3>
+              <ol class="compact">
+                <li>Klik <b>Upload data</b>, pilih gambar atau MP4/MOV/WebM.</li>
+                <li>Untuk video, atur <b>Detik per frame</b>; nilai 1 ≈ satu frame per detik.</li>
+                <li>Tunggu upload dan pemrosesan 100%; jangan reload atau tutup tab.</li>
+              </ol>
+              <div class="box ok"><b>File 200 sampai 300 MB didukung.</b> File dikirim bertahap sekitar 8 MB per bagian, lalu server menyusunnya kembali. Video tidak dipotong manual dan isinya tetap satu file utuh.</div>
+              <h3>Kelola dataset</h3>
+              <ul class="compact">
+                <li>Filter status, review, dan split.</li>
+                <li>Import ZIP anotasi: YOLO, COCO, VOC, LabelMe, CVAT.</li>
+                <li>Export annotated ZIP atau jalankan auto-label.</li>
+                <li>Split awal umum: 70% train, 20% valid, 10% test.</li>
+              </ul>
+              <img class="screen mini" src=".tmp/panduan-screenshots/06-health-jobs.png" alt="Health and Jobs" />
+              <div class="caption">E. Health & Jobs memeriksa kualitas dataset dan pekerjaan yang sedang berjalan.</div>
+              <p><b>Rescan dataset</b>, lalu tindak lanjuti file duplikat, blur, resolusi rendah, label kosong, atau class yang tidak seimbang.</p>
+            </div>
+            <div>
+              <img class="screen mini" src=".tmp/panduan-screenshots/05-annotate.png" alt="Annotator" />
+              <div class="caption">C. Annotator: class kiri, area kerja tengah, daftar anotasi kanan.</div>
+              <h3>Anotasi</h3>
+              <ol class="compact">
+                <li>Pilih class dan alat box/polygon/mask/keypoint.</li>
+                <li>Buat label rapat dan konsisten; cek daftar kanan.</li>
+                <li>Pastikan <b>Saved</b> sebelum pindah gambar.</li>
+              </ol>
+              <p><b>Shortcut:</b> Ctrl+Z/Y undo/redo · Ctrl+C/V salin/tempel · arrow menggeser · Delete menghapus.</p>
+              <img class="screen mini" src=".tmp/panduan-screenshots/07-versions.png" alt="Versions" />
+              <div class="caption">D. Buat versi immutable sebelum training.</div>
+              <h3>Quality & version</h3>
+              <p>Di <b>Health & Jobs</b>, cek duplikat, blur, resolusi rendah, label kosong, dan ketidakseimbangan class. Buat <b>Version</b>: pilih split, resize, augmentasi, nama, dan catatan. Perubahan anotasi berikutnya memerlukan versi baru.</p>
+            </div>
+          </div>
+          <div class="box warn"><b>Auto-label hanyalah draft.</b> Review sampel dan Accept/Reject hasilnya sebelum versioning.</div>
+        </div>
+      </div>
+      <footer><span></span><span>2 / 4</span></footer>
+    </section>
+
+    <section class="page">
+      <header><h2>Memilih dan menjalankan training</h2><span class="brand">3 · TRAIN & RTX WORKER</span></header>
+      <div class="grid fill">
+        <div>
+          <img class="screen half" src=".tmp/panduan-screenshots/08-train.png" alt="Arsitektur training" />
+          <div class="caption">A. Pilih arsitektur sesuai jenis project dan kebutuhan kecepatan/akurasi.</div>
+          <img class="screen half" src=".tmp/panduan-screenshots/08b-train-configuration.png" alt="Konfigurasi dan lokasi training" />
+          <div class="caption">B. Konfigurasi training, lokasi eksekusi, compute, dan status worker.</div>
+        </div>
+        <div>
+          <h3>Pilihan model</h3>
+          <table>
+            <tr><th>Kebutuhan</th><th>Titik awal</th></tr>
+            <tr><td>Uji cepat / perangkat ringan</td><td>Varian N (nano)</td></tr>
+            <tr><td>Seimbang speed dan accuracy</td><td>Varian S atau M</td></tr>
+            <tr><td>Akurasi tinggi, GPU kuat</td><td>Varian L atau X</td></tr>
+          </table>
+          <p>Mulai dengan model Recommended, 20 sampai 50 epoch, image size 640, optimizer/LR Auto, dan batch sesuai VRAM. Turunkan batch bila GPU kehabisan memori.</p>
+          <h3>Pilih lokasi training</h3>
+          <table>
+            <tr><th>Lokasi</th><th>Penggunaan</th></tr>
+            <tr><td><b>PC RTX 50/60 Lab</b></td><td>Prioritas GPU bersama; worker wajib Online.</td></tr>
+            <tr><td><b>Device sendiri</b></td><td>Laptop/workstation yang menjalankan worker.</td></tr>
+            <tr><td><b>NAS</b></td><td>Langsung di server/CPU; cocok untuk uji kecil.</td></tr>
+            <tr><td><b>Google Colab</b></td><td>Runtime Colab harus aktif dan terhubung.</td></tr>
+          </table>
+          <ol class="compact">
+            <li>Pilih version, arsitektur, konfigurasi, lokasi, dan compute Automatic/GPU.</li>
+            <li>Pastikan worker online, lalu klik <b>Start training</b>.</li>
+            <li>Pantau epoch, loss, precision, recall, mAP, dan checkpoint.</li>
+            <li>Di <b>Models</b>, pilih hasil Ready berdasarkan metrik dan uji nyata; beri alias/stage production.</li>
+          </ol>
+          <div class="box ok"><b>Auto-connect RTX:</b> setelah user login Windows, shortcut Startup menjalankan supervisor, menunggu server, dan menyambung ulang otomatis.</div>
+          <div class="box warn"><b>Jika offline:</b> pastikan internet dan user Windows sudah login → klik shortcut Desktop <b>Start Salnova Worker</b> → tunggu online/refresh. Agar aktif sejak boot sebelum login, Scheduled Task SYSTEM harus dipasang Administrator satu kali.</div>
+        </div>
+      </div>
+      <footer><span></span><span>3 / 4</span></footer>
+    </section>
+
+    <section class="page">
+      <header><h2>Inference, deployment, workflow, dan laporan bug</h2><span class="brand">4 · OPERASIONAL</span></header>
+      <div class="three fill">
+        <div>
+          <img class="screen mini" src=".tmp/panduan-screenshots/10-inference.png" alt="Inference" />
+          <div class="caption">A. Deploy & test dengan hasil deteksi dan confidence.</div>
+          <h3>Inference</h3>
+          <ol class="compact">
+            <li>Buka <b>Deploy</b> pada project dengan model Ready.</li>
+            <li>Pilih <b>Image, Webcam, Batch,</b> atau <b>Video</b>.</li>
+            <li>Masukkan media, atur confidence, lalu cek hasil.</li>
+            <li>Unduh media beranotasi atau report.</li>
+          </ol>
+          <p>Naikkan threshold untuk mengurangi false positive; turunkan bila objek benar banyak terlewat. Webcam wajib HTTPS. Video diproses dengan sampling dan UI membatasi hingga 300 frame.</p>
+          <div class="box">API key wajib dirahasiakan. Endpoint <code>127.0.0.1</code> hanya berlaku pada host yang sama; integrasi eksternal memakai endpoint/domain dari admin.</div>
+        </div>
+        <div>
+          <img class="screen mini" src=".tmp/panduan-screenshots/11-workflows.png" alt="Workflows" />
+          <div class="caption">B. Workflow menghubungkan input, inference, condition, dan output.</div>
+          <h3>Workflows & Advance</h3>
+          <p>Rangkai node, hubungkan sesuai arah data, simpan, test run, lalu cek run history. Workflow dapat diimpor/diekspor JSON dan dijadwalkan. Advance menyediakan smart segmentation, model-assisted auto-label, batch mask, video propagation, dan quality review.</p>
+          <h3>Checklist produksi</h3>
+          <ul class="compact">
+            <li>Dataset bersih, anotasi direview, version terkunci.</li>
+            <li>Model diuji pada media lapangan dan threshold ditetapkan.</li>
+            <li>Stage production, monitoring, API key, dan rollback siap.</li>
+            <li>Backup sebelum perubahan besar; restore mengganti workspace.</li>
+          </ul>
+          <div class="box warn">Jangan langsung menerima seluruh hasil otomatis. Review sampel dan simpan jejak version/model yang dipakai.</div>
+        </div>
+        <div>
+          <img class="screen mini" src=".tmp/panduan-screenshots/14-bug-report.png" alt="Form aduan bug" />
+          <div class="caption">C. Ikon bantuan/laporan mengambang di kanan bawah aplikasi.</div>
+          <h3>Jika menemukan bug</h3>
+          <ol class="compact">
+            <li>Klik <b>ikon laporan/bantuan</b> di pojok kanan bawah.</li>
+            <li>Pilih fitur <b>Aduan bug</b>.</li>
+            <li>Pilih <b>Area kendala</b> dan tingkat <b>Dampak</b>.</li>
+            <li>Isi ringkasan serta detail, lalu klik <b>Kirim aduan</b>.</li>
+          </ol>
+          <div class="box ok"><b>Sertakan:</b> langkah sebelum bug, hasil yang muncul, hasil yang diharapkan, nama project/model, jenis dan ukuran file, waktu kejadian, browser, serta pesan error. Halaman aktif tercatat otomatis.</div>
+          <p>Untuk worker: sebutkan nama worker, status online/offline, apakah PC baru restart, dan apakah shortcut manual sudah dijalankan.</p>
+          <div class="box"><b>Alur ringkas:</b> domain → project → upload → annotate → version → train → models → inference → production. Jika tersendat, laporkan melalui ikon dan fitur Aduan bug.</div>
+        </div>
+      </div>
+      <footer><span>https://salnova-ai.my.id</span><span>4 / 4</span></footer>
+    </section>
+  </body>
+</html>
