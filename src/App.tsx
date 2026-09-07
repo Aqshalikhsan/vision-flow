@@ -3713,6 +3713,33 @@ function ResearchWorkspace({
             />
           </label>
         </header>
+        <div
+          className="research-status-guide"
+          aria-label="Keterangan status komponen"
+        >
+          <div className="ready">
+            <Check />
+            <span>
+              <b>Siap train</b>
+              <small>
+                Komponen sudah memiliki implementasi runtime, mapping stride dan
+                channel, serta sudah lolos pengujian compiler. Komponen dapat
+                dipilih dan langsung dilatih.
+              </small>
+            </span>
+          </div>
+          <div className="adapter">
+            <Network />
+            <span>
+              <b>Adapter</b>
+              <small>
+                Metode sudah tersedia di katalog, tetapi masih memerlukan kode
+                penghubung khusus seperti module, feature mapping, loss,
+                assignment, atau decoder sebelum aman digabung dan dilatih.
+              </small>
+            </span>
+          </div>
+        </div>
         <div className="research-catalog-columns">
           {[
             ["Backbone", catalog(RESEARCH_BACKBONES)],

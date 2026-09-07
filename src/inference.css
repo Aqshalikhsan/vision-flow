@@ -9879,8 +9879,9 @@ main :is(article, section, aside, .panel, .card, .modal),
   flex: 0 0 34px;
   border-radius: 10px;
   color: #fff;
-  background: #6c58df;
+  background: linear-gradient(145deg, #172b49, #0b1628);
   font-weight: 800;
+  box-shadow: 0 7px 16px rgba(8, 20, 38, 0.24);
 }
 .research-page button svg {
   width: 16px;
@@ -9967,10 +9968,11 @@ main :is(article, section, aside, .panel, .card, .modal),
   gap: 10px;
   margin-top: 15px;
   padding: 12px 14px;
-  border: 1px solid #9be3c8;
+  border: 1px solid #294663;
   border-radius: 12px;
-  background: #effcf7;
-  color: #187557;
+  background: linear-gradient(135deg, #172b45, #0d1c30);
+  color: #f4f8ff;
+  box-shadow: 0 10px 24px rgba(9, 22, 40, 0.16);
 }
 .compatibility-ok svg {
   flex: 0 0 auto;
@@ -9981,7 +9983,50 @@ main :is(article, section, aside, .panel, .card, .modal),
 }
 .compatibility-ok small {
   margin-top: 2px;
-  color: #347963;
+  color: #bed0e4;
+}
+
+.research-status-guide {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.research-status-guide > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+}
+
+.research-status-guide svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.research-status-guide b,
+.research-status-guide small {
+  display: block;
+}
+
+.research-status-guide small {
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.research-status-guide .ready svg {
+  color: #1c9672;
+}
+
+.research-status-guide .adapter svg {
+  color: #b17b1f;
 }
 .research-check {
   display: flex;
@@ -10130,6 +10175,9 @@ main :is(article, section, aside, .panel, .card, .modal),
   .research-builder-grid,
   .research-train-grid,
   .research-catalog-columns {
+    grid-template-columns: 1fr;
+  }
+  .research-status-guide {
     grid-template-columns: 1fr;
   }
   .research-worker {
