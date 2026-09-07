@@ -3045,6 +3045,34 @@ const RESEARCH_HEADS: ResearchComponent[] = [
     ready: true,
   },
   {
+    id: "yolov8-detect",
+    name: "YOLOv8 Detect",
+    family: "Anchor-free",
+    note: "Shared Ultralytics Detect runtime",
+    ready: true,
+  },
+  {
+    id: "yolo11-detect",
+    name: "YOLO11 Detect",
+    family: "Anchor-free",
+    note: "Shared Ultralytics Detect runtime",
+    ready: true,
+  },
+  {
+    id: "yolo12-detect",
+    name: "YOLO12 Detect",
+    family: "Anchor-free",
+    note: "Shared Ultralytics Detect runtime",
+    ready: true,
+  },
+  {
+    id: "yolo26-detect",
+    name: "YOLO26 Detect",
+    family: "Anchor-free",
+    note: "Shared Ultralytics Detect runtime",
+    ready: true,
+  },
+  {
     id: "yolov3",
     name: "YOLOv3 Head",
     family: "Anchor-based",
@@ -3069,10 +3097,11 @@ const RESEARCH_HEADS: ResearchComponent[] = [
     note: "Adapter auxiliary reversible branch",
   },
   {
-    id: "yolov10",
+    id: "yolov10-end2end",
     name: "YOLOv10 Head",
     family: "End-to-end",
-    note: "Adapter one-to-one and one-to-many",
+    note: "One-to-one dan one-to-many branches",
+    ready: true,
   },
   {
     id: "yolo26",
@@ -3252,7 +3281,17 @@ function ResearchWorkspace({
   const [project, setProject] = useState<Project | null>(null);
   const [backbone, setBackbone] = useState("c3k2-csp");
   const [neck, setNeck] = useState("pan-fpn");
-  const [head] = useState("ultralytics-detect");
+  const [head, setHead] = useState("yolo11-detect");
+  const [adapterMode, setAdapterMode] = useState<"auto" | "manual">("auto");
+  const [adapterChannels, setAdapterChannels] = useState<
+    [number, number, number]
+  >([128, 256, 512]);
+  const [adapterResize, setAdapterResize] = useState<"nearest" | "bilinear">(
+    "nearest",
+  );
+  const [adapterProjection, setAdapterProjection] = useState<
+    "conv1x1" | "none"
+  >("conv1x1");
   const [pretrained, setPretrained] = useState(true);
   const [name, setName] = useState("Research detector 01");
   const [versionId, setVersionId] = useState("");
@@ -3293,9 +3332,14 @@ function ResearchWorkspace({
     const timer = window.setInterval(refresh, 10_000);
     return () => window.clearInterval(timer);
   }, []);
-  const active = project?.models.some((model) =>
+  const activeModel = project?.models.find((model) =>
     ["queued", "training"].includes(model.status),
   );
+  const active = Boolean(activeModel);
+  const latestResearchModel = [...(project?.models || [])]
+    .reverse()
+    .find((model) => Boolean(model.config?.research_model));
+  const researchRun = activeModel || latestResearchModel;
   useEffect(() => {
     if (!active || !projectId) return;
     const timer = window.setInterval(
@@ -3316,6 +3360,12 @@ function ResearchWorkspace({
   )!;
   const selectedNeck = RESEARCH_NECKS.find((item) => item.id === neck)!;
   const selectedHead = RESEARCH_HEADS.find((item) => item.id === head)!;
+  const incompatibleComponents = [
+    selectedBackbone.ready ? "" : selectedBackbone.name,
+    selectedNeck.ready ? "" : selectedNeck.name,
+    selectedHead.ready ? "" : selectedHead.name,
+  ].filter(Boolean);
+  const runtimeCompatible = incompatibleComponents.length === 0;
   const onlineWorkers = workers.filter(
     (worker) => !worker.revoked && worker.status !== "offline",
   );
@@ -3324,9 +3374,7 @@ function ResearchWorkspace({
     project &&
     versionId &&
     !active &&
-    selectedBackbone.ready &&
-    selectedNeck.ready &&
-    selectedHead.ready &&
+    runtimeCompatible &&
     (!workerId || selectedWorker),
   );
   const createProject = async () => {
@@ -3389,8 +3437,15 @@ function ResearchWorkspace({
           name,
           backbone,
           neck,
-          head: "ultralytics-detect",
+          head,
           pretrained,
+          adapter: {
+            mode: adapterMode,
+            output_channels: adapterChannels,
+            resize_mode: adapterResize,
+            projection: adapterProjection,
+            validate_shapes: true,
+          },
         },
       });
       setProject(loaded);
@@ -3543,9 +3598,10 @@ function ResearchWorkspace({
               value={backbone}
               onChange={(event) => setBackbone(event.target.value)}
             >
-              {RESEARCH_BACKBONES.filter((item) => item.ready).map((item) => (
+              {RESEARCH_BACKBONES.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name} | {item.family}
+                  {item.name} | {item.family} |{" "}
+                  {item.ready ? "Siap train" : "Adapter"}
                 </option>
               ))}
             </select>
@@ -3557,9 +3613,9 @@ function ResearchWorkspace({
               value={neck}
               onChange={(event) => setNeck(event.target.value)}
             >
-              {RESEARCH_NECKS.filter((item) => item.ready).map((item) => (
+              {RESEARCH_NECKS.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name}
+                  {item.name} | {item.ready ? "Siap train" : "Adapter"}
                 </option>
               ))}
             </select>
@@ -3567,21 +3623,141 @@ function ResearchWorkspace({
           </label>
           <label>
             <span>Head</span>
-            <select value={head} disabled>
-              <option value={head}>{selectedHead.name}</option>
+            <select
+              value={head}
+              onChange={(event) => setHead(event.target.value)}
+            >
+              {RESEARCH_HEADS.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} | {item.ready ? "Siap train" : "Adapter"}
+                </option>
+              ))}
             </select>
             <small>Menghasilkan box, class, dan confidence.</small>
           </label>
         </div>
-        <div className="compatibility-ok">
-          <Check />
+        <div
+          className={
+            runtimeCompatible
+              ? "compatibility-ok"
+              : "compatibility-ok incompatible"
+          }
+        >
+          {runtimeCompatible ? <Check /> : <Network />}
           <div>
-            <b>Kombinasi kompatibel</b>
+            <b>
+              {runtimeCompatible
+                ? "Kombinasi kompatibel"
+                : "Adapter runtime belum tersedia"}
+            </b>
             <small>
-              Stride P3/8, P4/16, P5/32 dipetakan oleh compiler; channel fusion
-              disesuaikan otomatis.
+              {runtimeCompatible
+                ? "Stride P3/8, P4/16, P5/32 dipetakan oleh compiler; channel fusion disesuaikan otomatis."
+                : `${incompatibleComponents.join(", ")} dapat dipilih untuk rancangan, tetapi belum dapat dilatih karena module, loss, assignment, atau decoder khususnya belum terpasang.`}
             </small>
           </div>
+        </div>
+        <div className="research-adapter-studio">
+          <header>
+            <div>
+              <Network />
+              <span>
+                <b>Adapter Studio</b>
+                <small>
+                  Atur penghubung feature map antara Backbone, Neck, dan Head.
+                </small>
+              </span>
+            </div>
+            <em>
+              {runtimeCompatible
+                ? "Shape adapter siap"
+                : "Runtime adapter diperlukan"}
+            </em>
+          </header>
+          <div className="research-adapter-grid">
+            <label>
+              <span>Mode adapter</span>
+              <select
+                value={adapterMode}
+                onChange={(event) =>
+                  setAdapterMode(event.target.value as "auto" | "manual")
+                }
+              >
+                <option value="auto">Otomatis dari compiler</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+            <label>
+              <span>Proyeksi channel</span>
+              <select
+                value={adapterProjection}
+                disabled={adapterMode === "auto"}
+                onChange={(event) =>
+                  setAdapterProjection(event.target.value as "conv1x1" | "none")
+                }
+              >
+                <option value="conv1x1">Conv 1x1</option>
+                <option value="none">Tanpa proyeksi</option>
+              </select>
+            </label>
+            <label>
+              <span>Resize feature</span>
+              <select
+                value={adapterResize}
+                disabled={adapterMode === "auto"}
+                onChange={(event) =>
+                  setAdapterResize(event.target.value as "nearest" | "bilinear")
+                }
+              >
+                <option value="nearest">Nearest</option>
+                <option value="bilinear">Bilinear</option>
+              </select>
+            </label>
+            {(
+              ["P3 / stride 8", "P4 / stride 16", "P5 / stride 32"] as const
+            ).map((label, index) => (
+              <label key={label}>
+                <span>{label} output channel</span>
+                <input
+                  type="number"
+                  min="16"
+                  max="2048"
+                  step="8"
+                  disabled={adapterMode === "auto"}
+                  value={adapterChannels[index]}
+                  onChange={(event) =>
+                    setAdapterChannels(
+                      (current) =>
+                        current.map((value, channelIndex) =>
+                          channelIndex === index
+                            ? Number(event.target.value)
+                            : value,
+                        ) as [number, number, number],
+                    )
+                  }
+                />
+              </label>
+            ))}
+          </div>
+          <label className="research-check">
+            <input type="checkbox" checked disabled />
+            <span>
+              <b>Validasi shape wajib sebelum antrean</b>
+              <small>
+                Compiler selalu memeriksa jumlah level, stride, dan channel
+                sebelum model diteruskan ke worker. Pemeriksaan keamanan ini
+                tidak dapat dimatikan.
+              </small>
+            </span>
+          </label>
+          {!runtimeCompatible && (
+            <p className="research-runtime-note">
+              <b>Yang masih dibutuhkan:</b> Adapter Studio mengatasi perbedaan
+              shape. Metode terpilih juga membutuhkan implementasi algoritmanya
+              di runtime server/worker; pengaturan angka saja tidak dapat
+              menggantikan module atau loss tersebut.
+            </p>
+          )}
         </div>
         {!backbone.startsWith("c2f") &&
           !backbone.startsWith("c3") &&
@@ -3685,9 +3861,91 @@ function ResearchWorkspace({
               ? "Memasukkan antrean"
               : active
                 ? "Training sedang aktif"
-                : "Train model baru"}
+                : !runtimeCompatible
+                  ? "Lengkapi adapter runtime"
+                  : "Train model baru"}
           </button>
         </div>
+        {(starting || researchRun) && (
+          <div
+            className={`research-run-status ${researchRun?.status || "queued"}`}
+            role="status"
+            aria-live="polite"
+          >
+            <header>
+              <div>
+                {["queued", "training"].includes(
+                  researchRun?.status || "queued",
+                ) ? (
+                  <LoaderCircle className="spin" />
+                ) : researchRun?.status === "ready" ? (
+                  <Check />
+                ) : (
+                  <Activity />
+                )}
+                <span>
+                  <b>
+                    {starting
+                      ? "Mengirim konfigurasi ke server"
+                      : researchRun?.name}
+                  </b>
+                  <small>
+                    {starting
+                      ? "Mohon tunggu, model sedang dimasukkan ke antrean."
+                      : researchRun?.status === "queued"
+                        ? `Menunggu ${workerId ? "worker yang dipilih" : "slot training NAS"}`
+                        : researchRun?.trainingDetail?.stage ||
+                          (researchRun?.status === "ready"
+                            ? "Training selesai"
+                            : researchRun?.status)}
+                  </small>
+                </span>
+              </div>
+              <strong>{starting ? 0 : researchRun?.progress || 0}%</strong>
+            </header>
+            <progress
+              max="100"
+              value={starting ? 0 : researchRun?.progress || 0}
+            />
+            <div className="research-run-metrics">
+              <span>
+                Status <b>{starting ? "mengirim" : researchRun?.status}</b>
+              </span>
+              <span>
+                Epoch{" "}
+                <b>
+                  {researchRun?.trainingDetail?.epoch || 0}/
+                  {researchRun?.trainingDetail?.totalEpochs || epochs}
+                </b>
+              </span>
+              <span>
+                Batch{" "}
+                <b>
+                  {researchRun?.trainingDetail?.batch || 0}/
+                  {researchRun?.trainingDetail?.totalBatches || 0}
+                </b>
+              </span>
+              <span>
+                Loss{" "}
+                <b>
+                  {researchRun?.trainingDetail?.loss?.toFixed(4) ||
+                    "belum tersedia"}
+                </b>
+              </span>
+              {project && (
+                <button
+                  type="button"
+                  onClick={() => go("registry", project.id)}
+                >
+                  Buka Model Registry <ChevronRight />
+                </button>
+              )}
+            </div>
+            {researchRun?.error && (
+              <p className="research-run-error">{researchRun.error}</p>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="panel research-catalog">
@@ -3760,12 +4018,14 @@ function ResearchWorkspace({
                       type="button"
                       className={item.ready ? "ready" : "adapter"}
                       onClick={() => {
-                        if (!item.ready)
-                          return notify(
-                            `${item.name} tercatat di katalog dan membutuhkan adapter sebelum dapat dilatih`,
-                          );
                         if (title === "Backbone") setBackbone(item.id);
                         if (title === "Neck") setNeck(item.id);
+                        if (title === "Head") setHead(item.id);
+                        notify(
+                          item.ready
+                            ? `${item.name} dipilih dan siap masuk compiler`
+                            : `${item.name} dipilih untuk rancangan. Atur shape di Adapter Studio; runtime algoritmanya masih diperlukan sebelum Train.`,
+                        );
                       }}
                     >
                       <span>

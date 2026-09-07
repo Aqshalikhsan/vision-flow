@@ -629,12 +629,21 @@ class VersionUpdatePayload(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=30)
 
 
+class ResearchAdapterPayload(BaseModel):
+    mode: str = Field(default="auto", pattern=r"^(auto|manual)$")
+    output_channels: tuple[int, int, int] = (128, 256, 512)
+    resize_mode: str = Field(default="nearest", pattern=r"^(nearest|bilinear)$")
+    projection: str = Field(default="conv1x1", pattern=r"^(conv1x1|none)$")
+    validate_shapes: bool = True
+
+
 class ResearchModelPayload(BaseModel):
     name: str = Field(default="Research detector", min_length=1, max_length=100)
     backbone: str = Field(min_length=1, max_length=60)
     neck: str = Field(min_length=1, max_length=60)
-    head: str = Field(default="ultralytics-detect", pattern=r"^ultralytics-detect$")
+    head: str = Field(default="yolo11-detect", pattern=r"^(ultralytics-detect|yolov8-detect|yolo11-detect|yolo12-detect|yolo26-detect|yolov10-end2end)$")
     pretrained: bool = True
+    adapter: ResearchAdapterPayload = Field(default_factory=ResearchAdapterPayload)
 
 
 class TrainPayload(BaseModel):
@@ -4623,11 +4632,19 @@ RESEARCH_NATIVE_BACKBONES = {
     "c3k2-csp": "C3k2",
 }
 RESEARCH_NECKS = {"identity", "fpn", "pan-fpn", "sppf-fpn", "sppf-pan"}
+RESEARCH_HEADS = {
+    "ultralytics-detect": "Detect",
+    "yolov8-detect": "Detect",
+    "yolo11-detect": "Detect",
+    "yolo12-detect": "Detect",
+    "yolo26-detect": "Detect",
+    "yolov10-end2end": "v10Detect",
+}
 
 
 def compile_research_model(spec: ResearchModelPayload, class_count: int) -> dict[str, Any]:
     """Compile allow-listed component IDs into a trusted Ultralytics model graph."""
-    if spec.head != "ultralytics-detect":
+    if spec.head not in RESEARCH_HEADS:
         raise HTTPException(400, "Research head is not trainable in this runtime")
     if spec.neck not in RESEARCH_NECKS:
         raise HTTPException(400, "Research neck is not trainable in this runtime")
@@ -4658,6 +4675,9 @@ def compile_research_model(spec: ResearchModelPayload, class_count: int) -> dict
     else:
         raise HTTPException(400, "Research backbone is not trainable in this runtime")
 
+    channels = spec.adapter.output_channels
+    if any(value < 16 or value > 2048 or value % 8 for value in channels):
+        raise HTTPException(400, "Adapter channels must be multiples of 8 between 16 and 2048")
     head: list[list[Any]] = []
     p3, p4, p5 = pyramid
 
@@ -4665,28 +4685,32 @@ def compile_research_model(spec: ResearchModelPayload, class_count: int) -> dict
         head.append([source, repeats, module, args])
         return len(backbone) + len(head) - 1
 
+    if spec.adapter.mode == "manual" and spec.adapter.projection == "conv1x1":
+        p3 = add(p3, "Conv", [channels[0], 1, 1])
+        p4 = add(p4, "Conv", [channels[1], 1, 1])
+        p5 = add(p5, "Conv", [channels[2], 1, 1])
     if spec.neck.startswith("sppf-"):
-        p5 = add(p5, "SPPF", [512, 5])
+        p5 = add(p5, "SPPF", [channels[2], 5])
     if spec.neck == "identity":
         detect_inputs = [p3, p4, p5]
     else:
-        up5 = add(p5, "nn.Upsample", [None, 2, "nearest"])
+        up5 = add(p5, "nn.Upsample", [None, 2, spec.adapter.resize_mode])
         cat4 = add([up5, p4], "Concat", [1])
-        out4 = add(cat4, "C2f", [256], 2)
-        up4 = add(out4, "nn.Upsample", [None, 2, "nearest"])
+        out4 = add(cat4, "C2f", [channels[1]], 2)
+        up4 = add(out4, "nn.Upsample", [None, 2, spec.adapter.resize_mode])
         cat3 = add([up4, p3], "Concat", [1])
-        out3 = add(cat3, "C2f", [128], 2)
+        out3 = add(cat3, "C2f", [channels[0]], 2)
         if spec.neck in {"pan-fpn", "sppf-pan"}:
-            down3 = add(out3, "Conv", [128, 3, 2])
+            down3 = add(out3, "Conv", [channels[0], 3, 2])
             pan4 = add([down3, out4], "Concat", [1])
-            pan4 = add(pan4, "C2f", [256], 2)
-            down4 = add(pan4, "Conv", [256, 3, 2])
+            pan4 = add(pan4, "C2f", [channels[1]], 2)
+            down4 = add(pan4, "Conv", [channels[1], 3, 2])
             pan5 = add([down4, p5], "Concat", [1])
-            pan5 = add(pan5, "C2f", [512], 2)
+            pan5 = add(pan5, "C2f", [channels[2]], 2)
             detect_inputs = [out3, pan4, pan5]
         else:
             detect_inputs = [out3, out4, p5]
-    add(detect_inputs, "Detect", ["nc"])
+    add(detect_inputs, RESEARCH_HEADS[spec.head], ["nc"])
     return {"nc": class_count, "backbone": backbone, "head": head}
 
 

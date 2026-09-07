@@ -9986,6 +9986,78 @@ main :is(article, section, aside, .panel, .card, .modal),
   color: #bed0e4;
 }
 
+.compatibility-ok.incompatible {
+  border-color: #725f38;
+  background: linear-gradient(135deg, #312a1c, #201b13);
+  color: #ffe5ad;
+}
+
+.compatibility-ok.incompatible small {
+  color: #dbc99f;
+}
+
+.research-adapter-studio {
+  margin-top: 14px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft);
+}
+
+.research-adapter-studio > header,
+.research-adapter-studio > header > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.research-adapter-studio > header {
+  justify-content: space-between;
+  margin-bottom: 13px;
+}
+
+.research-adapter-studio > header svg {
+  width: 20px;
+  color: #7b66dd;
+}
+
+.research-adapter-studio > header b,
+.research-adapter-studio > header small {
+  display: block;
+}
+
+.research-adapter-studio > header small {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.research-adapter-studio > header em {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #d8e5f7;
+  background: #14273f;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.research-adapter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.research-runtime-note {
+  margin: 12px 0 0 !important;
+  padding: 10px 12px;
+  border-left: 3px solid #c08a2e;
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(192, 138, 46, 0.09);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .research-status-guide {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -10053,6 +10125,83 @@ main :is(article, section, aside, .panel, .card, .modal),
 .research-start {
   min-height: 42px;
   white-space: nowrap;
+}
+
+.research-run-status {
+  margin-top: 16px;
+  padding: 15px;
+  border: 1px solid #385978;
+  border-radius: 14px;
+  color: #edf5ff;
+  background: linear-gradient(135deg, #162b46, #0c1a2d);
+}
+
+.research-run-status > header,
+.research-run-status > header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.research-run-status > header {
+  justify-content: space-between;
+}
+
+.research-run-status > header b,
+.research-run-status > header small {
+  display: block;
+}
+
+.research-run-status > header small {
+  margin-top: 2px;
+  color: #b9cbe0;
+}
+
+.research-run-status > header strong {
+  font-size: 22px;
+}
+
+.research-run-status > progress {
+  width: 100%;
+  height: 9px;
+  margin: 13px 0;
+  accent-color: #68ddc4;
+}
+
+.research-run-metrics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.research-run-metrics > span {
+  padding: 6px 9px;
+  border-radius: 8px;
+  color: #b9cbe0;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+}
+
+.research-run-metrics > span b {
+  margin-left: 4px;
+  color: #fff;
+}
+
+.research-run-metrics button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  border: 0;
+  color: #91efdc;
+  background: transparent;
+  font-weight: 750;
+}
+
+.research-run-error {
+  margin: 11px 0 0 !important;
+  color: #ffb3bd;
 }
 
 .research-search {
@@ -10179,6 +10328,13 @@ main :is(article, section, aside, .panel, .card, .modal),
   }
   .research-status-guide {
     grid-template-columns: 1fr;
+  }
+  .research-adapter-grid {
+    grid-template-columns: 1fr;
+  }
+  .research-adapter-studio > header {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .research-worker {
     grid-column: auto;

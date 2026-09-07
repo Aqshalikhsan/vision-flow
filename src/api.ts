@@ -1039,8 +1039,15 @@ export const api = {
         name: string;
         backbone: string;
         neck: string;
-        head: "ultralytics-detect";
+        head: string;
         pretrained: boolean;
+        adapter: {
+          mode: "auto" | "manual";
+          output_channels: [number, number, number];
+          resize_mode: "nearest" | "bilinear";
+          projection: "conv1x1" | "none";
+          validate_shapes: boolean;
+        };
       };
     },
   ) =>
