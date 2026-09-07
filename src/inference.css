@@ -4,6 +4,92 @@
   pointer-events: none;
 }
 
+/* Guided transfer-learning journey launched from a ready model. */
+.fine-tune-flow {
+  margin: 18px 36px 0;
+  padding: 18px;
+  border: 1px solid rgba(139, 105, 239, 0.44);
+  border-radius: 16px;
+  background:
+    linear-gradient(
+      120deg,
+      rgba(122, 84, 224, 0.18),
+      rgba(245, 105, 168, 0.08)
+    ),
+    var(--panel, #1b1327);
+}
+
+.fine-tune-flow-head,
+.fine-tune-flow-head > div {
+  display: flex;
+  align-items: flex-start;
+}
+
+.fine-tune-flow-head {
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.fine-tune-flow-head > div {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fine-tune-flow-head b {
+  font-size: 17px;
+}
+
+.fine-tune-flow-head small,
+.fine-tune-flow-steps small {
+  color: var(--muted, #aaa0b7);
+}
+
+.fine-tune-flow-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fine-tune-flow-steps button {
+  display: flex;
+  min-height: 70px;
+  padding: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(10, 7, 17, 0.34);
+}
+
+.fine-tune-flow-steps button:hover,
+.fine-tune-flow-steps button.active {
+  border-color: #a482ff;
+  background: rgba(122, 84, 224, 0.22);
+}
+
+@media (max-width: 900px) {
+  .fine-tune-flow {
+    margin: 14px 16px 0;
+  }
+
+  .fine-tune-flow-head {
+    flex-direction: column;
+  }
+
+  .fine-tune-flow-steps {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .fine-tune-flow-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
 .inference-box span {
   position: absolute;
   left: -2px;

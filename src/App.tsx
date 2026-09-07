@@ -4484,6 +4484,98 @@ function ProjectTabs({ active, go }: { active: Page; go: (p: Page) => void }) {
   );
 }
 
+function FineTuneFlow({
+  project,
+  active,
+  go,
+  onUpload,
+}: {
+  project: Project;
+  active: Page;
+  go: (page: Page) => void;
+  onUpload?: () => void;
+}) {
+  const guideKey = `visionflow-finetune-guide-${project.id}`;
+  const baseKey = `visionflow-finetune-${project.id}`;
+  const [guideActive, setGuideActive] = useState(
+    () => sessionStorage.getItem(guideKey) === "active",
+  );
+  if (!guideActive) return null;
+  const baseModelId = sessionStorage.getItem(baseKey) || "";
+  const baseModel = project.models.find((model) => model.id === baseModelId);
+  const steps: Array<{
+    page: Page;
+    label: string;
+    detail: string;
+    action: () => void;
+  }> = [
+    {
+      page: "project",
+      label: "1. Tambah data baru",
+      detail: "Upload gambar atau video tambahan.",
+      action: onUpload || (() => go("project")),
+    },
+    {
+      page: "annotate",
+      label: "2. Label data baru",
+      detail: "Periksa dan simpan anotasi baru.",
+      action: () => go("annotate"),
+    },
+    {
+      page: "versions",
+      label: "3. Augmentasi & version",
+      detail: "Gabungkan data lalu buat version immutable.",
+      action: () => go("versions"),
+    },
+    {
+      page: "train",
+      label: "4. Train ulang",
+      detail: "Pilih checkpoint atau arsitektur YOLO.",
+      action: () => go("train"),
+    },
+  ];
+  return (
+    <section className="fine-tune-flow" aria-label="Alur fine-tune data baru">
+      <div className="fine-tune-flow-head">
+        <div>
+          <span className="eyebrow">FINE-TUNE DENGAN DATA BARU</span>
+          <b>
+            {baseModel?.alias || baseModel?.name || "Checkpoint resmi YOLO"}
+          </b>
+          <small>
+            {baseModel
+              ? "Tambahkan data, label, augmentasi, lalu train ulang tanpa mengubah run model sebelumnya."
+              : "Gunakan gabungan data lama dan baru, lalu pilih arsitektur YOLO untuk run baru."}
+          </small>
+        </div>
+        <button
+          className="secondary"
+          onClick={() => {
+            sessionStorage.removeItem(guideKey);
+            sessionStorage.removeItem(baseKey);
+            setGuideActive(false);
+            window.dispatchEvent(new Event("visionflow-finetune-change"));
+          }}
+        >
+          Batalkan alur
+        </button>
+      </div>
+      <div className="fine-tune-flow-steps">
+        {steps.map((step) => (
+          <button
+            className={active === step.page ? "active" : ""}
+            onClick={step.action}
+            key={step.page}
+          >
+            <b>{step.label}</b>
+            <small>{step.detail}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 type TransferStage = "uploading" | "processing";
 
 function TransferProgress({
@@ -4712,6 +4804,12 @@ function ProjectHome({
   return (
     <div className="content">
       <ProjectTabs active="project" go={go} />
+      <FineTuneFlow
+        project={project}
+        active="project"
+        go={go}
+        onUpload={openFilePicker}
+      />
       <div className="project-title">
         <div>
           <span className="badge">{project.type}</span>
@@ -9502,6 +9600,7 @@ function DatasetVersions({
   return (
     <div className="content versions-page">
       <ProjectTabs active="versions" go={go} />
+      <FineTuneFlow project={project} active="versions" go={go} />
       <div className="project-title">
         <div>
           <span className="eyebrow">REPRODUCIBLE DATASET PIPELINE</span>
@@ -10060,6 +10159,13 @@ function DatasetTrain({
   const fineTuneModels = project.models.filter(
     (model) => model.status === "ready" || model.deployable === true,
   );
+  const selectedFineTuneModel = fineTuneModels.find(
+    (model) => model.id === baseModelId,
+  );
+  const selectedFineTuneArchitecture =
+    typeof selectedFineTuneModel?.config?.architecture === "string"
+      ? selectedFineTuneModel.config.architecture
+      : "";
   const [freezeLayers, setFreezeLayers] = useState(0);
   const [weightDecay, setWeightDecay] = useState(0.0005);
   const [cosLr, setCosLr] = useState(false);
@@ -10168,6 +10274,21 @@ function DatasetTrain({
       sessionStorage.removeItem(`visionflow-finetune-${project.id}`);
     }
   }, [baseModelId, fineTuneModels, project.id]);
+  useEffect(() => {
+    const clearSelection = () => setBaseModelId("");
+    window.addEventListener("visionflow-finetune-change", clearSelection);
+    return () =>
+      window.removeEventListener("visionflow-finetune-change", clearSelection);
+  }, []);
+  useEffect(() => {
+    if (
+      baseModelId &&
+      selectedFineTuneArchitecture &&
+      architecture !== selectedFineTuneArchitecture
+    ) {
+      setArchitecture(selectedFineTuneArchitecture);
+    }
+  }, [architecture, baseModelId, selectedFineTuneArchitecture]);
   useEffect(() => {
     const refresh = () =>
       api
@@ -10661,6 +10782,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
         amp,
       });
       update(() => saved);
+      sessionStorage.removeItem(`visionflow-finetune-guide-${project.id}`);
       notify("Training dimulai menggunakan dataset version yang dipilih");
     } catch (e) {
       notify(e instanceof Error ? e.message : "Training gagal dimulai");
@@ -10721,6 +10843,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
         optimizers,
       });
       update(() => saved);
+      sessionStorage.removeItem(`visionflow-finetune-guide-${project.id}`);
       notify(
         `${rates.length * optimizers.length} eksperimen dimasukkan ke training queue`,
       );
@@ -10807,6 +10930,7 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
   return (
     <div className="content train-page">
       <ProjectTabs active="train" go={go} />
+      <FineTuneFlow project={project} active="train" go={go} />
       <div className="project-title">
         <div>
           <span className="eyebrow">LOCAL MODEL TRAINING</span>
@@ -10832,7 +10956,22 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
                 className={
                   "model-option " + (architecture === item.id ? "active" : "")
                 }
-                onClick={() => setArchitecture(item.id)}
+                onClick={() => {
+                  if (
+                    baseModelId &&
+                    selectedFineTuneArchitecture &&
+                    selectedFineTuneArchitecture !== item.id
+                  ) {
+                    setBaseModelId("");
+                    sessionStorage.removeItem(
+                      `visionflow-finetune-${project.id}`,
+                    );
+                    notify(
+                      `${item.name} dipilih. Initial weights diganti ke checkpoint resmi karena arsitekturnya berbeda dari model lama.`,
+                    );
+                  }
+                  setArchitecture(item.id);
+                }}
                 key={item.id}
               >
                 <span className={item.tone}>
@@ -10870,12 +11009,20 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
               <select
                 value={baseModelId}
                 onChange={(event) => {
-                  setBaseModelId(event.target.value);
-                  if (event.target.value) {
+                  const nextBaseModelId = event.target.value;
+                  setBaseModelId(nextBaseModelId);
+                  if (nextBaseModelId) {
                     sessionStorage.setItem(
                       `visionflow-finetune-${project.id}`,
-                      event.target.value,
+                      nextBaseModelId,
                     );
+                    const selected = fineTuneModels.find(
+                      (model) => model.id === nextBaseModelId,
+                    );
+                    const sourceArchitecture = selected?.config?.architecture;
+                    if (typeof sourceArchitecture === "string") {
+                      setArchitecture(sourceArchitecture);
+                    }
                   } else {
                     sessionStorage.removeItem(
                       `visionflow-finetune-${project.id}`,
@@ -10893,9 +11040,9 @@ Write-Host "Buka halaman Train, pilih NAS, lalu Start training."
               </select>
               <small className="fine-tune-selection-hint">
                 {baseModelId
-                  ? `Fine-tuning dari ${fineTuneModels.find((model) => model.id === baseModelId)?.alias || fineTuneModels.find((model) => model.id === baseModelId)?.name || "model terpilih"}`
+                  ? `Fine-tuning dari ${selectedFineTuneModel?.alias || selectedFineTuneModel?.name || "model terpilih"}. Arsitektur mengikuti checkpoint model sumber.`
                   : fineTuneModels.length
-                    ? "Pilih model hasil training sebelumnya, atau gunakan checkpoint resmi."
+                    ? "Pilih model lama untuk melanjutkan best.pt, atau pilih checkpoint resmi agar bebas memilih arsitektur YOLO."
                     : "Belum ada model siap. Jalankan training pertama dengan checkpoint resmi."}
               </small>
             </label>
@@ -13245,11 +13392,17 @@ function ModelRegistry({
                       `visionflow-finetune-${project.id}`,
                       model.id,
                     );
-                    go("train");
-                    notify(`${model.name} dipilih sebagai base fine-tuning`);
+                    sessionStorage.setItem(
+                      `visionflow-finetune-guide-${project.id}`,
+                      "active",
+                    );
+                    go("project");
+                    notify(
+                      `${model.name} dipilih. Tambahkan dan label data baru untuk fine-tune.`,
+                    );
                   }}
                 >
-                  <BrainCircuit /> Fine-tune
+                  <BrainCircuit /> Fine-tune + data baru
                 </button>
               )}
               <button onClick={() => rename(model.id, model.name)}>
@@ -13475,6 +13628,7 @@ function DatasetManager({
   return (
     <div className="content dataset-page">
       <ProjectTabs active="dataset" go={go} />
+      <FineTuneFlow project={project} active="dataset" go={go} />
       <div className="project-title">
         <div>
           <span className="eyebrow">DATASET MANAGEMENT</span>
