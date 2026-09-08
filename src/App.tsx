@@ -7139,6 +7139,73 @@ function Step({
   );
 }
 
+function AssetIndexNavigation({
+  index,
+  total,
+  onChange,
+}: {
+  index: number;
+  total: number;
+  onChange: (index: number) => void;
+}) {
+  const [requested, setRequested] = useState(String(index + 1));
+  useEffect(() => setRequested(String(index + 1)), [index]);
+  const jump = (event: FormEvent) => {
+    event.preventDefault();
+    const parsed = Number(requested);
+    if (!requested.trim() || !Number.isFinite(parsed)) {
+      setRequested(String(index + 1));
+      return;
+    }
+    const target = Math.max(1, Math.min(total, Math.trunc(parsed)));
+    setRequested(String(target));
+    onChange(target - 1);
+  };
+  return (
+    <div className="image-nav">
+      <button
+        type="button"
+        disabled={index <= 0}
+        onClick={() => onChange(index - 1)}
+        aria-label="Gambar sebelumnya"
+      >
+        ‹
+      </button>
+      <form className="image-jump" noValidate onSubmit={jump}>
+        <input
+          type="number"
+          min={1}
+          max={total}
+          step={1}
+          required
+          value={requested}
+          onChange={(event) => setRequested(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => event.stopPropagation()}
+          aria-label="Nomor dataset"
+          title={`Lompat ke gambar 1–${total}`}
+        />
+        <span>/ {total}</span>
+        <button
+          type="submit"
+          aria-label="Lompat ke nomor dataset"
+          title="Lompat"
+        >
+          <Search size={13} />
+        </button>
+      </form>
+      <button
+        type="button"
+        disabled={index >= total - 1}
+        onClick={() => onChange(index + 1)}
+        aria-label="Gambar berikutnya"
+      >
+        ›
+      </button>
+    </div>
+  );
+}
+
 function Annotate({
   project,
   go,
@@ -7591,20 +7658,11 @@ function Annotate({
                 : "Saved"}
           </span>
         </div>
-        <div className="image-nav">
-          <button disabled={!index} onClick={() => setIndex((i) => i - 1)}>
-            ‹
-          </button>
-          <span>
-            {index + 1} / {project.assets.length}
-          </span>
-          <button
-            disabled={index === project.assets.length - 1}
-            onClick={() => setIndex((i) => i + 1)}
-          >
-            ›
-          </button>
-        </div>
+        <AssetIndexNavigation
+          index={index}
+          total={project.assets.length}
+          onChange={setIndex}
+        />
         <div className="example-auto-label">
           <span>
             <b>{exampleImages}</b> contoh terkunci
@@ -8047,25 +8105,11 @@ function ClassificationAnnotate({
             <span title={asset.name}>{asset.name}</span>
           </div>
         </div>
-        <div className="image-nav">
-          <button
-            disabled={!index}
-            onClick={() => setIndex((value) => value - 1)}
-            aria-label="Gambar sebelumnya"
-          >
-            <ArrowLeft />
-          </button>
-          <span>
-            {index + 1} / {project.assets.length}
-          </span>
-          <button
-            disabled={index === project.assets.length - 1}
-            onClick={() => setIndex((value) => value + 1)}
-            aria-label="Gambar berikutnya"
-          >
-            <ChevronRight />
-          </button>
-        </div>
+        <AssetIndexNavigation
+          index={index}
+          total={project.assets.length}
+          onChange={setIndex}
+        />
         <button className="primary small" onClick={() => go("versions")}>
           <Check />
           Tersimpan. Buat version
@@ -14041,29 +14085,15 @@ function SegmentationAnnotate({
           <b>{project.type}</b>
           <span>{asset.name}</span>
         </div>
-        <div className="image-nav">
-          <button
-            disabled={!index}
-            onClick={() => {
-              setPoints([]);
-              setIndex((value) => value - 1);
-            }}
-          >
-            ‹
-          </button>
-          <span>
-            {index + 1} / {project.assets.length}
-          </span>
-          <button
-            disabled={index === project.assets.length - 1}
-            onClick={() => {
-              setPoints([]);
-              setIndex((value) => value + 1);
-            }}
-          >
-            ›
-          </button>
-        </div>
+        <AssetIndexNavigation
+          index={index}
+          total={project.assets.length}
+          onChange={(target) => {
+            setPoints([]);
+            setSelectedMask(null);
+            setIndex(target);
+          }}
+        />
         <button className="primary small" onClick={() => go("versions")}>
           <Check />
           Saved · Generate Version

@@ -826,9 +826,11 @@ main {
 .image-nav {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 .image-nav button {
+  display: grid;
+  place-items: center;
   background: #292533;
   color: #ddd6ee;
   border: 0;
@@ -836,6 +838,44 @@ main {
   font-size: 20px;
   width: 27px;
   height: 27px;
+}
+.image-nav button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+.image-jump {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid #3b3545;
+  border-radius: 7px;
+  background: #211e2a;
+}
+.image-jump input {
+  width: 48px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 4px;
+  outline: none;
+  color: #f5f2fb;
+  background: #17141e;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+.image-jump input:focus {
+  box-shadow: 0 0 0 2px rgba(112, 82, 228, 0.45);
+}
+.image-jump span {
+  min-width: 28px;
+  color: #aaa3b7;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.image-jump button {
+  width: 24px;
+  height: 23px;
 }
 .small {
   padding: 7px 12px;

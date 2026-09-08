@@ -39,7 +39,7 @@ test("reviewed boxes become examples and uploads expose crop", async ({
   expect(saved.ok()).toBeTruthy();
 
   await page.goto(`${baseUrl}/#/projects/${project.id}/annotate`);
-  await page.getByRole("button", { name: "›" }).click();
+  await page.getByRole("button", { name: "Gambar berikutnya" }).click();
   const autoLabel = page.getByRole("button", {
     name: "Auto-label dari contoh",
   });
