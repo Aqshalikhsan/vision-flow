@@ -79,6 +79,7 @@ import type {
   AnnotationJob,
   AuthStatus,
   BugReport,
+  CropRegion,
   DatasetHealth,
   DatasetHealthProgress,
   EvaluationArtifact,
@@ -6072,6 +6073,16 @@ function ProjectHome({
   } | null>(null);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoPreviewPercent, setVideoPreviewPercent] = useState(0);
+  const [uploadCrop, setUploadCrop] = useState<CropRegion>({
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 100,
+  });
+  const [imageWizard, setImageWizard] = useState<{
+    files: File[];
+    url: string;
+  } | null>(null);
   const videoPreview = useRef<HTMLVideoElement>(null);
   const [deletingProject, setDeletingProject] = useState(false);
   const [deletingAsset, setDeletingAsset] = useState<string | null>(null);
@@ -6134,7 +6145,10 @@ function ProjectHome({
       input.current.click();
     }
   };
-  const upload = async (selectedFiles: FileList | File[] | null) => {
+  const upload = async (
+    selectedFiles: FileList | File[] | null,
+    crop?: CropRegion,
+  ) => {
     if (!selectedFiles?.length) return false;
     if (uploadInFlight.current) {
       notify("Tunggu upload yang sedang berjalan selesai");
@@ -6159,6 +6173,7 @@ function ProjectHome({
         setUploadProgress,
         () => setUploadStage("processing"),
         videoFrameInterval,
+        crop,
       );
       update(() => saved);
       notify(`${files.length} file disimpan ke dataset lokal`);
@@ -6178,6 +6193,12 @@ function ProjectHome({
     setVideoWizard(null);
     setVideoDuration(0);
     setVideoPreviewPercent(0);
+    setUploadCrop({ x: 0, y: 0, w: 100, h: 100 });
+  };
+  const closeImageWizard = () => {
+    if (imageWizard) URL.revokeObjectURL(imageWizard.url);
+    setImageWizard(null);
+    setUploadCrop({ x: 0, y: 0, w: 100, h: 100 });
   };
   const chooseUpload = (selectedFiles: FileList | File[] | null) => {
     if (!selectedFiles?.length) return;
@@ -6188,7 +6209,8 @@ function ProjectHome({
         /\.(mp4|mov|webm|avi)$/i.test(file.name),
     );
     if (!videos.length) {
-      void upload(files);
+      setUploadCrop({ x: 0, y: 0, w: 100, h: 100 });
+      setImageWizard({ files, url: URL.createObjectURL(files[0]) });
       return;
     }
     if (files.length !== 1) {
@@ -6199,6 +6221,7 @@ function ProjectHome({
     }
     setVideoDuration(0);
     setVideoPreviewPercent(0);
+    setUploadCrop({ x: 0, y: 0, w: 100, h: 100 });
     setVideoWizard({
       file: videos[0],
       url: URL.createObjectURL(videos[0]),
@@ -6648,8 +6671,25 @@ function ProjectHome({
           seek={seekVideoPreview}
           setPercent={setVideoPreviewPercent}
           setInterval={setVideoFrameInterval}
+          crop={uploadCrop}
+          setCrop={setUploadCrop}
           extract={async () => {
-            if (await upload([videoWizard.file])) closeVideoWizard();
+            if (await upload([videoWizard.file], uploadCrop))
+              closeVideoWizard();
+          }}
+        />
+      )}
+      {imageWizard && (
+        <ImageCropWizard
+          files={imageWizard.files}
+          url={imageWizard.url}
+          crop={uploadCrop}
+          setCrop={setUploadCrop}
+          progress={uploadProgress}
+          stage={uploadStage}
+          close={closeImageWizard}
+          submit={async () => {
+            if (await upload(imageWizard.files, uploadCrop)) closeImageWizard();
           }}
         />
       )}
@@ -6671,6 +6711,8 @@ function VideoUploadWizard({
   seek,
   setPercent,
   setInterval,
+  crop,
+  setCrop,
   extract,
 }: {
   wizard: { file: File; url: string; step: "settings" | "preview" };
@@ -6692,6 +6734,8 @@ function VideoUploadWizard({
   seek: (percent: number) => void;
   setPercent: (percent: number) => void;
   setInterval: (value: number) => void;
+  crop: CropRegion;
+  setCrop: (value: CropRegion) => void;
   extract: () => Promise<void>;
 }) {
   const [playingSamplePreview, setPlayingSamplePreview] = useState(false);
@@ -6753,29 +6797,36 @@ function VideoUploadWizard({
             seek(percent + (event.deltaY < 0 ? 1 : -1));
           }}
         >
-          <video
-            ref={videoRef}
-            src={wizard.url}
-            controls={false}
-            muted
-            playsInline
-            onLoadedMetadata={(event) => {
-              const nextDuration = event.currentTarget.duration;
-              if (Number.isFinite(nextDuration)) {
-                setDuration(nextDuration);
-                event.currentTarget.currentTime =
-                  (nextDuration * percent) / 100;
-              }
-            }}
-            onTimeUpdate={(event) => {
-              if (duration)
-                setPercent(
-                  Math.round(
-                    (event.currentTarget.currentTime / duration) * 100,
-                  ),
-                );
-            }}
-          />
+          <div className="crop-media-stage">
+            <video
+              ref={videoRef}
+              src={wizard.url}
+              controls={false}
+              muted
+              playsInline
+              onLoadedMetadata={(event) => {
+                const nextDuration = event.currentTarget.duration;
+                if (Number.isFinite(nextDuration)) {
+                  setDuration(nextDuration);
+                  event.currentTarget.currentTime =
+                    (nextDuration * percent) / 100;
+                }
+              }}
+              onTimeUpdate={(event) => {
+                if (duration)
+                  setPercent(
+                    Math.round(
+                      (event.currentTarget.currentTime / duration) * 100,
+                    ),
+                  );
+              }}
+            />
+            <CropSelection
+              crop={crop}
+              setCrop={setCrop}
+              disabled={wizard.step === "preview" || progress !== null}
+            />
+          </div>
           <span>{percent}% posisi video</span>
           {wizard.step === "preview" && (
             <button
@@ -6820,15 +6871,18 @@ function VideoUploadWizard({
             </label>
             <small>
               Geser bar atau scroll mouse untuk mencari bagian video. Interval
-              dipakai saat mengekstrak seluruh video menjadi gambar.
+              dipakai saat mengekstrak seluruh video menjadi gambar. Tarik kotak
+              pada preview untuk memilih area crop seluruh frame.
             </small>
+            <CropSummary crop={crop} reset={() => setCrop(fullCrop())} />
           </div>
         ) : (
           <div className="video-upload-confirm">
             <b>Siap mengekstrak seluruh video</b>
             <small>
               Preview melompat setiap {interval.toLocaleString()} detik, sama
-              seperti frame yang akan diekstrak. Gunakan Back bila belum sesuai.
+              seperti frame yang akan diekstrak. Area di luar kotak crop tidak
+              akan masuk dataset. Gunakan Back bila belum sesuai.
             </small>
           </div>
         )}
@@ -6874,6 +6928,192 @@ function VideoUploadWizard({
               <Upload size={15} /> Extract frames
             </button>
           )}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+const fullCrop = (): CropRegion => ({ x: 0, y: 0, w: 100, h: 100 });
+
+function cropIsFull(crop: CropRegion) {
+  return crop.x === 0 && crop.y === 0 && crop.w === 100 && crop.h === 100;
+}
+
+function CropSelection({
+  crop,
+  setCrop,
+  disabled = false,
+}: {
+  crop: CropRegion;
+  setCrop: (crop: CropRegion) => void;
+  disabled?: boolean;
+}) {
+  const surface = useRef<HTMLDivElement>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const locate = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = surface.current!.getBoundingClientRect();
+    return {
+      x: Math.max(
+        0,
+        Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100),
+      ),
+      y: Math.max(
+        0,
+        Math.min(100, ((event.clientY - bounds.top) / bounds.height) * 100),
+      ),
+    };
+  };
+  return (
+    <div
+      ref={surface}
+      className={"crop-selection-surface " + (disabled ? "disabled" : "")}
+      onPointerDown={(event) => {
+        if (disabled || event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        start.current = locate(event);
+        setCrop({ ...start.current, w: 0.1, h: 0.1 });
+      }}
+      onPointerMove={(event) => {
+        if (disabled || !start.current) return;
+        const point = locate(event);
+        setCrop({
+          x: Math.min(start.current.x, point.x),
+          y: Math.min(start.current.y, point.y),
+          w: Math.max(0.1, Math.abs(point.x - start.current.x)),
+          h: Math.max(0.1, Math.abs(point.y - start.current.y)),
+        });
+      }}
+      onPointerUp={(event) => {
+        if (!start.current) return;
+        event.currentTarget.releasePointerCapture(event.pointerId);
+        start.current = null;
+        if (crop.w < 2 || crop.h < 2) setCrop(fullCrop());
+      }}
+    >
+      <i
+        className="crop-selection-box"
+        style={{
+          left: `${crop.x}%`,
+          top: `${crop.y}%`,
+          width: `${crop.w}%`,
+          height: `${crop.h}%`,
+        }}
+      />
+    </div>
+  );
+}
+
+function CropSummary({ crop, reset }: { crop: CropRegion; reset: () => void }) {
+  return (
+    <div className="crop-summary">
+      <span>
+        <b>{cropIsFull(crop) ? "Full frame" : "Crop aktif"}</b>
+        <small>
+          x {crop.x.toFixed(1)}% · y {crop.y.toFixed(1)}% · {crop.w.toFixed(1)}{" "}
+          × {crop.h.toFixed(1)}%
+        </small>
+      </span>
+      <button
+        className="secondary small"
+        onClick={reset}
+        disabled={cropIsFull(crop)}
+      >
+        Reset crop
+      </button>
+    </div>
+  );
+}
+
+function ImageCropWizard({
+  files,
+  url,
+  crop,
+  setCrop,
+  progress,
+  stage,
+  close,
+  submit,
+}: {
+  files: File[];
+  url: string;
+  crop: CropRegion;
+  setCrop: (crop: CropRegion) => void;
+  progress: number | null;
+  stage: TransferStage;
+  close: () => void;
+  submit: () => Promise<void>;
+}) {
+  return (
+    <div
+      className="modal-bg video-upload-wizard-bg"
+      onMouseDown={() => progress === null && close()}
+    >
+      <section
+        className="video-upload-wizard"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <span className="eyebrow">IMAGE CROP</span>
+            <h2>Atur area dataset</h2>
+            <p>
+              {files[0].name}
+              {files.length > 1
+                ? ` · berlaku untuk ${files.length} gambar`
+                : ""}
+            </p>
+          </div>
+          <button
+            className="icon ghost"
+            aria-label="Close image crop"
+            disabled={progress !== null}
+            onClick={close}
+          >
+            <X />
+          </button>
+        </header>
+        <div className="video-upload-preview image-crop-preview">
+          <div className="crop-media-stage">
+            <img src={url} alt="Crop preview" />
+            <CropSelection
+              crop={crop}
+              setCrop={setCrop}
+              disabled={progress !== null}
+            />
+          </div>
+        </div>
+        <div className="video-upload-controls">
+          <small>
+            Tarik kotak pada gambar. Koordinat persentase yang sama diterapkan
+            ke semua gambar dalam batch.
+          </small>
+          <CropSummary crop={crop} reset={() => setCrop(fullCrop())} />
+        </div>
+        {progress !== null && (
+          <TransferProgress
+            percent={progress}
+            stage={stage}
+            label="Mengunggah gambar"
+            processingLabel="Menerapkan crop"
+          />
+        )}
+        <footer>
+          <button
+            className="secondary"
+            disabled={progress !== null}
+            onClick={close}
+          >
+            Cancel
+          </button>
+          <button
+            className="primary"
+            disabled={progress !== null}
+            onClick={() => void submit()}
+          >
+            <Upload size={15} />{" "}
+            {cropIsFull(crop) ? "Upload full image" : "Crop & upload"}
+          </button>
         </footer>
       </section>
     </div>
@@ -6927,6 +7167,10 @@ function Annotate({
     "saved",
   );
   const [lockedBy, setLockedBy] = useState("");
+  const [autoLabeling, setAutoLabeling] = useState(false);
+  const [suggestions, setSuggestions] = useState<
+    Array<Box & { confidence?: number; exampleSupport?: number }>
+  >([]);
   const copied = useRef<Box | null>(null);
   const [editing, setEditing] = useState<{
     id: string;
@@ -6945,6 +7189,7 @@ function Annotate({
     setHistory([]);
     setFuture([]);
     setSelected(null);
+    setSuggestions([]);
     setZoom(1);
     if (asset) localStorage.setItem(`vf-annotate-${project.id}`, asset.id);
   }, [asset?.id]);
@@ -7201,6 +7446,47 @@ function Annotate({
       notify(e instanceof Error ? e.message : "Interpolasi gagal");
     }
   };
+  const exampleImages = project.assets
+    .slice(0, index)
+    .filter(
+      (item) =>
+        item.boxes.length > 0 && item.metadata?.exampleLocked !== "false",
+    ).length;
+  const runExampleAutoLabel = async () => {
+    if (!asset) return;
+    if (!exampleImages) {
+      notify(
+        "Label dan simpan gambar sebelumnya sebagai contoh terlebih dahulu",
+      );
+      return;
+    }
+    setAutoLabeling(true);
+    try {
+      const result = await api.exampleAutoLabel(project.id, asset.id, {
+        confidence: 0.58,
+        max_examples: 40,
+        max_detections: 50,
+      });
+      setSuggestions(result.boxes);
+      notify(
+        result.boxes.length
+          ? `${result.boxes.length} draft ditemukan dari ${result.exampleImages} contoh`
+          : `Belum ada kecocokan yang cukup kuat dari ${result.exampleImages} contoh`,
+      );
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Auto-label contoh gagal",
+      );
+    } finally {
+      setAutoLabeling(false);
+    }
+  };
+  const acceptSuggestions = () => {
+    if (!suggestions.length) return;
+    commitBoxes([...asset.boxes, ...suggestions]);
+    setSuggestions([]);
+    notify("Draft diterima dan gambar dikunci sebagai contoh berikutnya");
+  };
   const down = (e: any) => {
     if (lockedBy) return;
     if (e.button !== 0) return;
@@ -7318,6 +7604,38 @@ function Annotate({
           >
             ›
           </button>
+        </div>
+        <div className="example-auto-label">
+          <span>
+            <b>{exampleImages}</b> contoh terkunci
+          </span>
+          {suggestions.length ? (
+            <>
+              <button
+                className="secondary small"
+                onClick={() => setSuggestions([])}
+              >
+                <X size={14} /> Tolak
+              </button>
+              <button className="primary small" onClick={acceptSuggestions}>
+                <Check size={14} /> Terima {suggestions.length}
+              </button>
+            </>
+          ) : (
+            <button
+              className="secondary small"
+              disabled={!exampleImages || autoLabeling || Boolean(lockedBy)}
+              onClick={() => void runExampleAutoLabel()}
+              title="Buat draft dari bounding box gambar sebelumnya"
+            >
+              {autoLabeling ? (
+                <LoaderCircle className="delete-spinner" size={14} />
+              ) : (
+                <WandSparkles size={14} />
+              )}
+              {autoLabeling ? "Mencari…" : "Auto-label dari contoh"}
+            </button>
+          )}
         </div>
         <button className="primary small" onClick={() => go("versions")}>
           <Check size={15} />
@@ -7512,6 +7830,30 @@ function Annotate({
                     onMouseDown={(e) => editDown(e, b, "resize")}
                   />
                 )}
+              </div>
+            ))}
+            {suggestions.map((box, suggestionIndex) => (
+              <div
+                key={box.id}
+                className="bbox auto-label-suggestion"
+                style={{
+                  left: box.x + "%",
+                  top: box.y + "%",
+                  width: box.w + "%",
+                  height: box.h + "%",
+                  borderColor: classColor(
+                    project,
+                    box.label,
+                    Math.max(0, project.classes.indexOf(box.label)),
+                  ),
+                }}
+              >
+                <span>
+                  Draft {suggestionIndex + 1} · {box.label}
+                  {box.confidence != null
+                    ? ` · ${Math.round(box.confidence * 100)}%`
+                    : ""}
+                </span>
               </div>
             ))}
             {draft && (

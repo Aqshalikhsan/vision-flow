@@ -803,6 +803,26 @@ main {
   color: #9d97ab;
   font-size: 11px;
 }
+.example-auto-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.example-auto-label > span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #292533;
+  white-space: nowrap;
+}
+.example-auto-label > span b {
+  color: #d9ceff;
+}
+.example-auto-label button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
 .image-nav {
   display: flex;
   align-items: center;
@@ -819,6 +839,31 @@ main {
 }
 .small {
   padding: 7px 12px;
+}
+.bbox.auto-label-suggestion {
+  pointer-events: none;
+  border-style: dashed;
+  background: rgba(112, 82, 228, 0.12);
+  animation: suggestion-pulse 1.5s ease-in-out infinite;
+}
+.bbox.auto-label-suggestion span {
+  background: #6f52d9;
+}
+@keyframes suggestion-pulse {
+  50% {
+    box-shadow: 0 0 0 3px rgba(112, 82, 228, 0.2);
+  }
+}
+@media (max-width: 1050px) {
+  .example-auto-label > span {
+    display: none;
+  }
+  .example-auto-label button {
+    font-size: 0;
+  }
+  .example-auto-label button svg {
+    margin: 0;
+  }
 }
 .annotator-body {
   height: calc(100% - 57px);

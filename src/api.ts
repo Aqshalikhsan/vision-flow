@@ -351,6 +351,15 @@ type AssetUploadStatus = {
   error?: string;
 };
 
+export type CropRegion = { x: number; y: number; w: number; h: number };
+
+export type ExampleAutoLabelResult = {
+  boxes: Array<Box & { confidence?: number; exampleSupport?: number }>;
+  exampleImages: number;
+  exampleBoxes: number;
+  method: string;
+};
+
 function uploadAssetChunk(
   path: string,
   chunk: Blob,
@@ -394,6 +403,7 @@ async function uploadAssetsInChunks(
   frameIntervalSeconds: number,
   onProgress?: (percent: number) => void,
   onProcessing?: () => void,
+  crop?: CropRegion,
 ): Promise<Project> {
   const files = Array.from(selectedFiles);
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -412,6 +422,7 @@ async function uploadAssetsInChunks(
           content_type: file.type,
           size: file.size,
           frame_interval_seconds: frameIntervalSeconds,
+          crop,
         }),
       },
     );
@@ -698,8 +709,20 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
-  upload: (id: string, files: FileList | File[], frameIntervalSeconds = 1) => {
-    return uploadAssetsInChunks(id, files, frameIntervalSeconds);
+  upload: (
+    id: string,
+    files: FileList | File[],
+    frameIntervalSeconds = 1,
+    crop?: CropRegion,
+  ) => {
+    return uploadAssetsInChunks(
+      id,
+      files,
+      frameIntervalSeconds,
+      undefined,
+      undefined,
+      crop,
+    );
   },
   uploadWithProgress: (
     id: string,
@@ -707,6 +730,7 @@ export const api = {
     onProgress: (percent: number) => void,
     onProcessing?: () => void,
     frameIntervalSeconds = 1,
+    crop?: CropRegion,
   ) => {
     return uploadAssetsInChunks(
       id,
@@ -714,6 +738,7 @@ export const api = {
       frameIntervalSeconds,
       onProgress,
       onProcessing,
+      crop,
     );
   },
   deleteAsset: (projectId: string, assetId: string) =>
@@ -799,6 +824,23 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  exampleAutoLabel: (
+    projectId: string,
+    assetId: string,
+    data: {
+      confidence?: number;
+      max_examples?: number;
+      max_detections?: number;
+    },
+  ) =>
+    request<ExampleAutoLabelResult>(
+      `/api/projects/${projectId}/assets/${assetId}/example-auto-label`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      },
+    ),
   smartMask: (
     projectId: string,
     assetId: string,
