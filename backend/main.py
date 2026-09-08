@@ -575,6 +575,12 @@ class AnnotationPayload(BaseModel):
     boxes: list[BoxPayload]
 
 
+class ExampleAutoLabelPayload(BaseModel):
+    confidence: float = Field(default=0.58, ge=0.2, le=0.95)
+    max_examples: int = Field(default=40, ge=1, le=200)
+    max_detections: int = Field(default=50, ge=1, le=200)
+
+
 class SplitPayload(BaseModel):
     split: str = Field(pattern=r"^(train|valid|test)$")
 
@@ -875,11 +881,19 @@ class AnnotationLockPayload(BaseModel):
     ttl_seconds: int = Field(default=300, ge=30, le=1800)
 
 
+class CropPayload(BaseModel):
+    x: float = Field(default=0, ge=0, le=100)
+    y: float = Field(default=0, ge=0, le=100)
+    w: float = Field(default=100, gt=0, le=100)
+    h: float = Field(default=100, gt=0, le=100)
+
+
 class AssetUploadCreatePayload(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     content_type: str = Field(default="", max_length=120)
     size: int = Field(gt=0)
     frame_interval_seconds: float = Field(default=1.0, gt=0, le=86400)
+    crop: CropPayload | None = None
 
 
 # Authentication is on by default. Set VISIONFLOW_REQUIRE_AUTH=0 only for
@@ -2464,6 +2478,7 @@ def extract_uploaded_video(
     filename: str,
     frame_interval_seconds: float,
     created_paths: list[Path],
+    crop: dict[str, float] | None = None,
 ) -> list[tuple[Any, ...]]:
     """Extract a video without blocking the API event loop or holding SQLite open."""
     import cv2
@@ -2498,6 +2513,7 @@ def extract_uploaded_video(
             if not ok:
                 break
             if frame_index % frame_stride == 0:
+                frame = crop_image_array(frame, crop)
                 asset_id = uid()
                 target = project_dir / f"{asset_id}.jpg"
                 if not cv2.imwrite(
@@ -2515,6 +2531,7 @@ def extract_uploaded_video(
                     "sourceFps": fps,
                     "frameIntervalSeconds": frame_interval_seconds,
                     "frameStride": frame_stride,
+                    "crop": crop or {"x": 0, "y": 0, "w": 100, "h": 100},
                 }
                 pending.append(
                     (
@@ -2534,6 +2551,49 @@ def extract_uploaded_video(
     finally:
         capture.release()
         temporary.unlink(missing_ok=True)
+
+
+def validate_crop(crop: dict[str, float] | None) -> dict[str, float] | None:
+    if crop is None:
+        return None
+    normalized = {key: float(crop[key]) for key in ("x", "y", "w", "h")}
+    if (
+        normalized["w"] <= 0
+        or normalized["h"] <= 0
+        or normalized["x"] < 0
+        or normalized["y"] < 0
+        or normalized["x"] + normalized["w"] > 100.0001
+        or normalized["y"] + normalized["h"] > 100.0001
+    ):
+        raise HTTPException(400, "Crop harus berada di dalam media dan memiliki ukuran positif")
+    if normalized == {"x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0}:
+        return None
+    return normalized
+
+
+def crop_image_array(image: Any, crop: dict[str, float] | None) -> Any:
+    """Crop an OpenCV image using normalized percentages."""
+    crop = validate_crop(crop)
+    if crop is None:
+        return image
+    height, width = image.shape[:2]
+    left = max(0, min(width - 1, round(width * crop["x"] / 100)))
+    top = max(0, min(height - 1, round(height * crop["y"] / 100)))
+    right = max(left + 1, min(width, round(width * (crop["x"] + crop["w"]) / 100)))
+    bottom = max(top + 1, min(height, round(height * (crop["y"] + crop["h"]) / 100)))
+    return image[top:bottom, left:right]
+
+
+def crop_pil_image(image: Image.Image, crop: dict[str, float] | None) -> Image.Image:
+    crop = validate_crop(crop)
+    if crop is None:
+        return image.copy()
+    width, height = image.size
+    left = max(0, min(width - 1, round(width * crop["x"] / 100)))
+    top = max(0, min(height - 1, round(height * crop["y"] / 100)))
+    right = max(left + 1, min(width, round(width * (crop["x"] + crop["w"]) / 100)))
+    bottom = max(top + 1, min(height, round(height * (crop["y"] + crop["h"]) / 100)))
+    return image.crop((left, top, right, bottom))
 
 
 ASSET_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
@@ -2598,6 +2658,7 @@ def process_chunked_asset_upload(project_id: str, upload_id: str) -> None:
                 filename,
                 float(metadata["frameIntervalSeconds"]),
                 created_paths,
+                metadata.get("crop"),
             )
         else:
             try:
@@ -2607,10 +2668,28 @@ def process_chunked_asset_upload(project_id: str, upload_id: str) -> None:
                 raise HTTPException(400, f"{filename}: invalid image") from exc
             asset_id = uid()
             target = project_dir / f"{asset_id}{suffix or '.jpg'}"
-            payload_path.replace(target)
+            crop = validate_crop(metadata.get("crop"))
+            if crop:
+                with Image.open(payload_path) as source:
+                    oriented = ImageOps.exif_transpose(source)
+                    cropped = crop_pil_image(oriented, crop)
+                    if target.suffix.lower() in {".jpg", ".jpeg"} and cropped.mode not in {"RGB", "L"}:
+                        cropped = cropped.convert("RGB")
+                    cropped.save(target)
+                payload_path.unlink(missing_ok=True)
+            else:
+                payload_path.replace(target)
             created_paths.append(target)
             pending = [
-                (asset_id, filename, str(target), "train", "unannotated", "[]", "{}")
+                (
+                    asset_id,
+                    filename,
+                    str(target),
+                    "train",
+                    "unannotated",
+                    "[]",
+                    json.dumps({"crop": crop}) if crop else "{}",
+                )
             ]
 
         with db() as con:
@@ -2652,6 +2731,7 @@ def create_asset_upload(project_id: str, payload: AssetUploadCreatePayload):
     with db() as con:
         if not con.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
             raise HTTPException(404, "Project not found")
+    crop = validate_crop(payload.crop.model_dump() if payload.crop else None)
     suffix = Path(payload.filename).suffix.lower()
     media_type = payload.content_type.lower()
     if media_type.startswith("image/") or suffix in IMAGE_SUFFIXES:
@@ -2674,6 +2754,7 @@ def create_asset_upload(project_id: str, payload: AssetUploadCreatePayload):
         "size": payload.size,
         "offset": 0,
         "frameIntervalSeconds": payload.frame_interval_seconds,
+        "crop": crop,
         "status": "uploading",
         "createdAt": now(),
         "updatedAt": now(),
@@ -3107,7 +3188,21 @@ def save_annotations(project_id: str, asset_id: str, payload: AnnotationPayload,
             if item["type"] == "keypoint" and not points:
                 raise HTTPException(400, "Keypoint annotations require at least one point")
             boxes.append(item)
-        result = con.execute("UPDATE assets SET boxes=?, status=? WHERE id=? AND project_id=?", (json.dumps(boxes), "annotated" if boxes else "unannotated", asset_id, project_id))
+        asset = con.execute("SELECT metadata FROM assets WHERE id=? AND project_id=?", (asset_id, project_id)).fetchone()
+        if not asset:
+            raise HTTPException(404, "Asset not found")
+        asset_metadata = json.loads(asset["metadata"] or "{}")
+        asset_metadata.update(
+            {
+                "exampleLocked": "true" if boxes else "false",
+                "exampleLockedAt": now() if boxes else "",
+                "annotationSource": "reviewed",
+            }
+        )
+        result = con.execute(
+            "UPDATE assets SET boxes=?, status=?, metadata=? WHERE id=? AND project_id=?",
+            (json.dumps(boxes), "annotated" if boxes else "unannotated", json.dumps(asset_metadata), asset_id, project_id),
+        )
         if not result.rowcount:
             raise HTTPException(404, "Asset not found")
         con.execute(
@@ -6151,6 +6246,176 @@ def review_advance_job(job_id: str, payload: AdvanceBulkReviewPayload):
     for draft_id in ids:
         review_advance_draft(draft_id, payload.action)
     return {"reviewed": len(ids), "action": payload.action}
+
+
+def _rect_iou(first: dict[str, float], second: dict[str, float]) -> float:
+    left = max(first["x"], second["x"])
+    top = max(first["y"], second["y"])
+    right = min(first["x"] + first["w"], second["x"] + second["w"])
+    bottom = min(first["y"] + first["h"], second["y"] + second["h"])
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    union = first["w"] * first["h"] + second["w"] * second["h"] - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def example_based_detections(
+    target_path: str,
+    references: list[sqlite3.Row],
+    confidence: float,
+    max_detections: int,
+) -> list[dict[str, Any]]:
+    """Find class-aware instances using crops from reviewed annotations.
+
+    This deliberately uses deterministic OpenCV template evidence rather than
+    pretending a generic pretrained YOLO has learned a user's custom class.
+    Multiple exemplars add appearance coverage and independent support. Results
+    remain drafts until the annotator accepts them.
+    """
+    import cv2
+    import numpy as np
+
+    target = cv2.imread(target_path, cv2.IMREAD_COLOR)
+    if target is None:
+        raise HTTPException(400, "Gambar target tidak dapat dibaca")
+    target_height, target_width = target.shape[:2]
+    target_gray = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
+    target_gray = cv2.GaussianBlur(target_gray, (3, 3), 0)
+    candidates: list[dict[str, Any]] = []
+    scales = (0.72, 0.86, 1.0, 1.16, 1.35)
+
+    for reference in references:
+        source = cv2.imread(reference["path"], cv2.IMREAD_COLOR)
+        if source is None:
+            continue
+        source_height, source_width = source.shape[:2]
+        source_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+        source_gray = cv2.GaussianBlur(source_gray, (3, 3), 0)
+        for box in json.loads(reference["boxes"] or "[]"):
+            if box.get("type", "box") not in {"box", "obb"}:
+                continue
+            try:
+                left = max(0, min(source_width - 1, round(source_width * float(box["x"]) / 100)))
+                top = max(0, min(source_height - 1, round(source_height * float(box["y"]) / 100)))
+                right = max(left + 1, min(source_width, round(source_width * (float(box["x"]) + float(box["w"])) / 100)))
+                bottom = max(top + 1, min(source_height, round(source_height * (float(box["y"]) + float(box["h"])) / 100)))
+            except (KeyError, TypeError, ValueError):
+                continue
+            source_crop = source_gray[top:bottom, left:right]
+            if source_crop.shape[0] < 6 or source_crop.shape[1] < 6 or float(source_crop.std()) < 4:
+                continue
+            expected_width = max(6, round(target_width * float(box["w"]) / 100))
+            expected_height = max(6, round(target_height * float(box["h"]) / 100))
+            for scale in scales:
+                template_width = round(expected_width * scale)
+                template_height = round(expected_height * scale)
+                if (
+                    template_width < 6
+                    or template_height < 6
+                    or template_width > target_width
+                    or template_height > target_height
+                ):
+                    continue
+                interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+                template = cv2.resize(source_crop, (template_width, template_height), interpolation=interpolation)
+                if float(template.std()) < 4:
+                    continue
+                response = cv2.matchTemplate(target_gray, template, cv2.TM_CCOEFF_NORMED)
+                response = np.nan_to_num(response, nan=-1.0, posinf=-1.0, neginf=-1.0)
+                for _ in range(3):
+                    _, score, _, location = cv2.minMaxLoc(response)
+                    if score < confidence:
+                        break
+                    x, y = location
+                    candidates.append(
+                        {
+                            "x": x / target_width * 100,
+                            "y": y / target_height * 100,
+                            "w": template_width / target_width * 100,
+                            "h": template_height / target_height * 100,
+                            "label": str(box.get("label", "object")),
+                            "score": float(score),
+                            "source": reference["id"],
+                        }
+                    )
+                    suppress_left = max(0, x - template_width // 2)
+                    suppress_top = max(0, y - template_height // 2)
+                    suppress_right = min(response.shape[1], x + template_width // 2 + 1)
+                    suppress_bottom = min(response.shape[0], y + template_height // 2 + 1)
+                    response[suppress_top:suppress_bottom, suppress_left:suppress_right] = -1
+
+    groups: list[dict[str, Any]] = []
+    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+        overlap = next(
+            (
+                group
+                for group in groups
+                if group["label"] == candidate["label"] and _rect_iou(group, candidate) >= 0.38
+            ),
+            None,
+        )
+        if overlap:
+            overlap["sources"].add(candidate["source"])
+            overlap["score"] = max(overlap["score"], candidate["score"])
+            continue
+        groups.append({**candidate, "sources": {candidate["source"]}})
+
+    detections = []
+    for group in sorted(
+        groups,
+        key=lambda item: (item["score"] + min(0.12, 0.04 * (len(item["sources"]) - 1))),
+        reverse=True,
+    )[:max_detections]:
+        support = len(group.pop("sources"))
+        group.pop("source", None)
+        score = min(0.99, group.pop("score") + min(0.12, 0.04 * (support - 1)))
+        detections.append(
+            {
+                "id": uid(),
+                "type": "box",
+                "x": round(group["x"], 5),
+                "y": round(group["y"], 5),
+                "w": round(group["w"], 5),
+                "h": round(group["h"], 5),
+                "label": group["label"],
+                "confidence": round(score, 4),
+                "exampleSupport": support,
+            }
+        )
+    return detections
+
+
+@app.post("/api/projects/{project_id}/assets/{asset_id}/example-auto-label")
+def example_auto_label(project_id: str, asset_id: str, payload: ExampleAutoLabelPayload):
+    with db() as con:
+        target = con.execute(
+            "SELECT rowid,* FROM assets WHERE id=? AND project_id=?",
+            (asset_id, project_id),
+        ).fetchone()
+        if not target:
+            raise HTTPException(404, "Image not found")
+        references = list(
+            con.execute(
+                "SELECT rowid,* FROM assets WHERE project_id=? AND rowid<? AND boxes!='[]' ORDER BY rowid DESC LIMIT ?",
+                (project_id, target["rowid"], payload.max_examples),
+            )
+        )
+    eligible = []
+    for reference in references:
+        metadata = json.loads(reference["metadata"] or "{}")
+        if metadata.get("exampleLocked") == "false" or metadata.get("annotationSource") == "auto-draft":
+            continue
+        eligible.append(reference)
+    if not eligible:
+        raise HTTPException(409, "Label gambar sebelumnya terlebih dahulu untuk membuat contoh")
+    suggestions = example_based_detections(
+        target["path"], eligible, payload.confidence, payload.max_detections
+    )
+    return {
+        "boxes": suggestions,
+        "exampleImages": len(eligible),
+        "exampleBoxes": sum(len(json.loads(item["boxes"] or "[]")) for item in eligible),
+        "method": "multi-scale-template-consensus-v1",
+    }
 
 
 @app.post("/api/projects/{project_id}/auto-label")
