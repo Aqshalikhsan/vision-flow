@@ -6277,13 +6277,28 @@ def example_based_detections(
     target = cv2.imread(target_path, cv2.IMREAD_COLOR)
     if target is None:
         raise HTTPException(400, "Gambar target tidak dapat dibaca")
+    # Template matching grows with image area. Percent coordinates remain the
+    # same after this working-resolution resize, while NAS CPU/RAM use stays
+    # bounded for phone and 4K camera uploads.
+    working_limit = 960
+    if max(target.shape[:2]) > working_limit:
+        scale = working_limit / max(target.shape[:2])
+        target = cv2.resize(
+            target,
+            (max(1, round(target.shape[1] * scale)), max(1, round(target.shape[0] * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
     target_height, target_width = target.shape[:2]
     target_gray = cv2.cvtColor(target, cv2.COLOR_BGR2GRAY)
     target_gray = cv2.GaussianBlur(target_gray, (3, 3), 0)
     candidates: list[dict[str, Any]] = []
     scales = (0.72, 0.86, 1.0, 1.16, 1.35)
+    template_budget = 160
+    processed_templates = 0
 
     for reference in references:
+        if processed_templates >= template_budget:
+            break
         source = cv2.imread(reference["path"], cv2.IMREAD_COLOR)
         if source is None:
             continue
@@ -6291,6 +6306,8 @@ def example_based_detections(
         source_gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         source_gray = cv2.GaussianBlur(source_gray, (3, 3), 0)
         for box in json.loads(reference["boxes"] or "[]"):
+            if processed_templates >= template_budget:
+                break
             if box.get("type", "box") not in {"box", "obb"}:
                 continue
             try:
@@ -6303,6 +6320,7 @@ def example_based_detections(
             source_crop = source_gray[top:bottom, left:right]
             if source_crop.shape[0] < 6 or source_crop.shape[1] < 6 or float(source_crop.std()) < 4:
                 continue
+            processed_templates += 1
             expected_width = max(6, round(target_width * float(box["w"]) / 100))
             expected_height = max(6, round(target_height * float(box["h"]) / 100))
             for scale in scales:
